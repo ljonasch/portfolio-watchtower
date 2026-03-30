@@ -198,7 +198,8 @@ export async function generatePortfolioReport(
   profile: UserProfileData,
   settings: Record<string, any>,
   onProgress?: (step: number) => void,
-  priorRecommendations?: import('@prisma/client').HoldingRecommendation[]
+  priorRecommendations?: import('@prisma/client').HoldingRecommendation[],
+  customPrompt?: string
 ): Promise<PortfolioReportData> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -268,9 +269,20 @@ ONLY deviate from these prior targets if there is a massive breaking event in th
 `
     : '';
 
+  const customConstraintsSection = customPrompt && customPrompt.trim() !== ""
+    ? `
+=== 🚨 ABSOLUTE USER OVERRIDE INSTRUCTIONS 🚨 ===
+The user has requested the following custom instructions for this specific analysis run.
+YOU MUST OBEY THIS RULE AS ABSOLUTE LAW, OVERRIDING ALL OTHER LOGIC OUTLINED IN THIS PROMPT.
+If they ask you to sell a stock, sell it. If they ask you to leave a stock alone, leave it alone.
+User Directive: "${customPrompt}"
+===================================================
+`
+    : '';
+
   const prompt = `
 You are an expert portfolio manager and market analyst. Today's date is ${today}.
-
+${customConstraintsSection}
 === USER PROFILE ===
 Age: ${age} | Target retirement age: ${profile.targetRetirementAge}
 Employment: ${profile.employmentStatus || 'Not specified'} — ${profile.profession || 'Not specified'}

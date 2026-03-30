@@ -32,21 +32,22 @@ const STEPS = [
 ];
 
 export function AutoRunner({ snapshotId }: { snapshotId: string }) {
-  // stepIndex: which step is currently ACTIVE (in progress)
-  // completedSteps: set of step indices that have finished
+  const [status, setStatus] = useState<"idle" | "running">("idle");
+  const [customPrompt, setCustomPrompt] = useState("");
   const [stepIndex, setStepIndex] = useState(0);
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
-  useEffect(() => {
-    let cancelled = false;
+  async function handleStart() {
+    setStatus("running");
+    setError(null);
 
-    async function run() {
+    try {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ snapshotId }),
+        body: JSON.stringify({ snapshotId, customPrompt: customPrompt.trim() }),
       });
 
       if (!res.body) return;
@@ -56,7 +57,7 @@ export function AutoRunner({ snapshotId }: { snapshotId: string }) {
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done || cancelled) break;
+        if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n\n");
@@ -69,6 +70,7 @@ export function AutoRunner({ snapshotId }: { snapshotId: string }) {
 
             if (payload.error) {
               setError(payload.error);
+              setStatus("idle");
               return;
             }
 
@@ -95,11 +97,11 @@ export function AutoRunner({ snapshotId }: { snapshotId: string }) {
           }
         }
       }
+    } catch (err: any) {
+      setError(err.message);
+      setStatus("idle");
     }
-
-    run().catch(err => setError(err.message));
-    return () => { cancelled = true; };
-  }, [snapshotId, router]);
+  }
 
   if (error) {
     return (
@@ -110,12 +112,42 @@ export function AutoRunner({ snapshotId }: { snapshotId: string }) {
   }
 
   const currentStep = STEPS[stepIndex];
-  const Icon = currentStep.icon;
+  const Icon = currentStep?.icon ?? Globe;
+
+  if (status === "idle") {
+    return (
+      <div className="flex flex-col gap-6 w-full max-w-lg mx-auto mt-4 px-4 sm:px-0">
+        <div className="space-y-3">
+          <label htmlFor="custom-instructions" className="text-sm font-semibold text-slate-300">
+            Custom Analysis Instructions (Optional)
+          </label>
+          <textarea
+            id="custom-instructions"
+            value={customPrompt}
+            onChange={(e) => setCustomPrompt(e.target.value)}
+            placeholder="e.g. 'Sell from my entire portfolio by 20%' or 'Keep TSLA at exactly its current allocation, do not sell'."
+            className="w-full bg-slate-900/60 border border-slate-700/80 rounded-xl px-4 py-3 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/80 transition-all resize-none h-28"
+          />
+          <p className="text-xs text-slate-500 leading-relaxed px-1">
+            Anything entered here will be treated as an absolute constraint by the AI during portfolio analysis.
+          </p>
+        </div>
+        
+        <button
+          onClick={handleStart}
+          className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold rounded-xl py-3.5 shadow-[0_0_20px_rgba(59,130,246,0.2)] hover:shadow-[0_0_25px_rgba(59,130,246,0.3)] transition-all flex items-center justify-center gap-2"
+        >
+          <Brain className="w-5 h-5" />
+          Start Deep Analysis
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col items-center gap-6 py-6">
+    <div className="flex flex-col items-center gap-6 py-6 fade-in duration-500">
       {/* Spinner */}
-      <div className="w-16 h-16 rounded-full border border-slate-700 bg-slate-900 flex items-center justify-center">
+      <div className="w-16 h-16 rounded-full border border-slate-700 bg-slate-900 flex items-center justify-center flex-shrink-0">
         <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
       </div>
 

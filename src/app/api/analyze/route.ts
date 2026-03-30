@@ -4,7 +4,7 @@ import { generatePortfolioReport } from "@/lib/analyzer";
 export const maxDuration = 120; // allow up to 2 minutes for long analyses
 
 export async function POST(req: Request) {
-  const { snapshotId } = await req.json();
+  const { snapshotId, customPrompt } = await req.json();
 
   const snapshot = await prisma.portfolioSnapshot.findUnique({
     where: { id: snapshotId },
@@ -39,7 +39,9 @@ export async function POST(req: Request) {
           snapshot.holdings,
           profile,
           settings,
-          onProgress
+          onProgress,
+          undefined,
+          customPrompt
         );
 
         // Deduplicate recommendations by ticker (LLM occasionally emits same ticker twice)
