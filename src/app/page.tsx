@@ -238,6 +238,30 @@ export default async function Dashboard() {
         </div>
       )}
 
+      {/* Profile status + Why this fits */}
+      <div className={`rounded-xl border p-5 flex items-start gap-4 ${isProfileComplete ? "border-slate-800 bg-slate-900/30" : "border-amber-700/30 bg-amber-900/10"}`}>
+        <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${isProfileComplete ? "bg-green-600/20 border border-green-600/30" : "bg-amber-600/20 border border-amber-600/30"}`}>
+          {isProfileComplete ? <BadgeCheck className="w-5 h-5 text-green-400" /> : <Settings className="w-5 h-5 text-amber-400" />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-sm">{isProfileComplete ? "Profile configured" : "Profile not set up"}</p>
+          <p className="text-xs text-slate-400 mt-0.5">
+            {isProfileComplete
+              ? `Age ${age} · ${profile?.trackedAccountRiskTolerance} risk · ${profile?.trackedAccountObjective} · ${profile?.trackedAccountTaxStatus ?? "Tax status not set"}`
+              : "Fill in your profile so the AI can tailor recommendations to your goals, tax situation, and risk tolerance."}
+          </p>
+          {latestReport?.reasoning && isProfileComplete && (
+            <details className="mt-2">
+              <summary className="text-xs text-blue-400 cursor-pointer hover:text-blue-300 select-none">Why this fits your profile ▾</summary>
+              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">{latestReport.reasoning}</p>
+            </details>
+          )}
+        </div>
+        <Link href="/settings" className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 transition-colors flex-shrink-0">
+          {isProfileComplete ? "Edit" : "Set up"} <ArrowRight className="w-3 h-3" />
+        </Link>
+      </div>
+
       {/* Recent Activity */}
       {recentRuns.length > 0 && (
         <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-5 space-y-3">
@@ -307,30 +331,6 @@ export default async function Dashboard() {
           </div>
         </div>
       )}
-
-      {/* Profile status + Why this fits */}
-      <div className={`rounded-xl border p-5 flex items-start gap-4 ${isProfileComplete ? "border-slate-800 bg-slate-900/30" : "border-amber-700/30 bg-amber-900/10"}`}>
-        <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${isProfileComplete ? "bg-green-600/20 border border-green-600/30" : "bg-amber-600/20 border border-amber-600/30"}`}>
-          {isProfileComplete ? <BadgeCheck className="w-5 h-5 text-green-400" /> : <Settings className="w-5 h-5 text-amber-400" />}
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="font-semibold text-sm">{isProfileComplete ? "Profile configured" : "Profile not set up"}</p>
-          <p className="text-xs text-slate-400 mt-0.5">
-            {isProfileComplete
-              ? `Age ${age} · ${profile?.trackedAccountRiskTolerance} risk · ${profile?.trackedAccountObjective} · ${profile?.trackedAccountTaxStatus ?? "Tax status not set"}`
-              : "Fill in your profile so the AI can tailor recommendations to your goals, tax situation, and risk tolerance."}
-          </p>
-          {latestReport?.reasoning && isProfileComplete && (
-            <details className="mt-2">
-              <summary className="text-xs text-blue-400 cursor-pointer hover:text-blue-300 select-none">Why this fits your profile ▾</summary>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">{latestReport.reasoning}</p>
-            </details>
-          )}
-        </div>
-        <Link href="/settings" className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 transition-colors flex-shrink-0">
-          {isProfileComplete ? "Edit" : "Set up"} <ArrowRight className="w-3 h-3" />
-        </Link>
-      </div>
 
       {/* Footer links */}
       <div className="flex items-center gap-6 text-xs text-slate-500 pt-1">
