@@ -1,0 +1,300 @@
+2026-03-29T12:02:49: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:49: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:49:           ^^^^^^^
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: SyntaxError: missing ) after argument list
+2026-03-29T12:02:49:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:49:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:49:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:49:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:49:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:49:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:49:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:49:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: Node.js v24.14.1
+2026-03-29T12:02:49: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:49: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:49:           ^^^^^^^
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: SyntaxError: missing ) after argument list
+2026-03-29T12:02:49:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:49:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:49:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:49:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:49:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:49:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:49:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:49:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: Node.js v24.14.1
+2026-03-29T12:02:49: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:49: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:49:           ^^^^^^^
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: SyntaxError: missing ) after argument list
+2026-03-29T12:02:49:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:49:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:49:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:49:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:49:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:49:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:49:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:49:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: Node.js v24.14.1
+2026-03-29T12:02:49: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:49: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:49:           ^^^^^^^
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: SyntaxError: missing ) after argument list
+2026-03-29T12:02:49:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:49:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:49:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:49:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:49:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:49:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:49:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:49:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: Node.js v24.14.1
+2026-03-29T12:02:49: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:49: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:49:           ^^^^^^^
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: SyntaxError: missing ) after argument list
+2026-03-29T12:02:49:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:49:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:49:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:49:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:49:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:49:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:49:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:49:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: Node.js v24.14.1
+2026-03-29T12:02:49: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:49: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:49:           ^^^^^^^
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: SyntaxError: missing ) after argument list
+2026-03-29T12:02:49:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:49:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:49:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:49:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:49:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:49:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:49:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:49:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: Node.js v24.14.1
+2026-03-29T12:02:49: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:49: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:49:           ^^^^^^^
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: SyntaxError: missing ) after argument list
+2026-03-29T12:02:49:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:49:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:49:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:49:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:49:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:49:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:49:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:49:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: Node.js v24.14.1
+2026-03-29T12:02:49: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:49: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:49:           ^^^^^^^
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: SyntaxError: missing ) after argument list
+2026-03-29T12:02:49:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:49:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:49:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:49:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:49:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:49:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:49:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:49:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:49: 
+2026-03-29T12:02:49: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-29T12:02:50: C:\Users\Lucas Jonasch\Documents\portfolio-watchtower\node_modules\.bin\tsx:2
+2026-03-29T12:02:50: basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+2026-03-29T12:02:50:           ^^^^^^^
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: SyntaxError: missing ) after argument list
+2026-03-29T12:02:50:     at wrapSafe (node:internal/modules/cjs/loader:1743:18)
+2026-03-29T12:02:50:     at Module._compile (node:internal/modules/cjs/loader:1786:20)
+2026-03-29T12:02:50:     at Object..js (node:internal/modules/cjs/loader:1943:10)
+2026-03-29T12:02:50:     at Module.load (node:internal/modules/cjs/loader:1533:32)
+2026-03-29T12:02:50:     at Module._load (node:internal/modules/cjs/loader:1335:12)
+2026-03-29T12:02:50:     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+2026-03-29T12:02:50:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
+2026-03-29T12:02:50: 
+2026-03-29T12:02:50: Node.js v24.14.1

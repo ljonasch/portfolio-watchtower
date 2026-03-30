@@ -1,0 +1,219 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  profile              UserProfile?
+  snapshots            PortfolioSnapshot[]
+  reports              PortfolioReport[]
+  extractions          RawExtraction[]
+  analysisRuns         AnalysisRun[]
+  notificationEvents   NotificationEvent[]
+  notificationRecipients NotificationRecipient[]
+  watchlistIdeas       WatchlistIdea[]
+}
+
+model UserProfile {
+  id                                    String   @id @default(cuid())
+  userId                                String   @unique
+  user                                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  birthYear                             Int
+  targetRetirementAge                   Int      @default(65)
+  employmentStatus                      String?
+  profession                            String?
+  annualIncomeRange                     String?
+  jobStabilityVolatility                String?
+  emergencyFundMonths                   Float?
+  separateRetirementAssetsAmount        Float?
+  separateRetirementAccountsDescription String?
+  retirementAccountAssetMix             String?
+  trackedAccountObjective               String
+  trackedAccountRiskTolerance           String
+  trackedAccountStyle                   String?
+  trackedAccountTimeHorizon             String?
+  trackedAccountTaxStatus               String?
+  maxDrawdownTolerancePct               Float?
+  leverageOptionsPermitted              String?
+  targetNumberOfHoldings                Int?
+  maxPositionSizePct                    Float?
+  sectorsToEmphasize                    String?
+  sectorsToAvoid                        String?
+  notes                                 String?
+  createdAt                             DateTime @default(now())
+  updatedAt                             DateTime @updatedAt
+}
+
+model PortfolioSnapshot {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  notes     String?
+  
+  holdings     Holding[]
+  reports      PortfolioReport[]
+  analysisRuns AnalysisRun[]
+}
+
+model Holding {
+  id          String            @id @default(cuid())
+  snapshotId  String
+  snapshot    PortfolioSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  ticker      String
+  companyName String?
+  shares      Float
+  currentPrice Float?
+  currentValue Float?
+  isCash      Boolean           @default(false)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+}
+
+model RawExtraction {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rawText   String
+  imageUrl  String?
+  createdAt DateTime @default(now())
+}
+
+model PortfolioReport {
+  id            String            @id @default(cuid())
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  snapshotId    String
+  snapshot      PortfolioSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  analysisRunId String?           // null for legacy reports created before MVP2
+  analysisRun   AnalysisRun?      @relation(fields: [analysisRunId], references: [id])
+  summary       String?
+  reasoning     String?
+  marketContext String?           // JSON
+  createdAt     DateTime          @default(now())
+  
+  recommendations HoldingRecommendation[]
+}
+
+model HoldingRecommendation {
+  id                String          @id @default(cuid())
+  reportId          String
+  report            PortfolioReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  ticker            String
+  companyName       String?
+  role              String?
+  currentShares     Float
+  targetShares      Float
+  shareDelta        Float
+  currentWeight     Float
+  targetWeight      Float
+  valueDelta        Float
+  action            String
+  confidence        String?
+  thesisSummary     String?
+  detailedReasoning String?
+  reasoningSources  String?         // JSON
+}
+
+// ─── MVP2 NEW MODELS ──────────────────────────────────────────────────────────
+
+// Audit record for every automated/manual run
+model AnalysisRun {
+  id              String            @id @default(cuid())
+  userId          String
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  snapshotId      String
+  snapshot        PortfolioSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  triggerType     String            // "scheduled" | "manual" | "debug"
+  triggeredBy     String?           // label e.g. "Lucas (manual)" or "cron"
+  status          String            @default("pending") // "pending" | "running" | "complete" | "failed"
+  errorMessage    String?
+  alertLevel      String?           // "none" | "low" | "medium" | "high" | "urgent"
+  alertReason     String?
+  profileSnapshot String?           // JSON snapshot of UserProfile at time of run
+  startedAt       DateTime          @default(now())
+  completedAt     DateTime?
+  
+  reports              PortfolioReport[]
+  changeLogs           RecommendationChangeLog[]
+  notificationEvents   NotificationEvent[]
+  watchlistIdeas       WatchlistIdea[]
+}
+
+// Per-ticker diff between consecutive runs
+model RecommendationChangeLog {
+  id             String      @id @default(cuid())
+  runId          String
+  run            AnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  ticker         String
+  companyName    String?
+  priorAction    String?
+  newAction      String
+  priorTargetShares Float?
+  newTargetShares   Float
+  sharesDelta    Float       // newTargetShares - priorTargetShares
+  priorWeight    Float?
+  newWeight      Float
+  changed        Boolean     @default(false)
+  changeReason   String?     // brief explanation
+  createdAt      DateTime    @default(now())
+}
+
+// Every notification attempt (email or in-app)
+model NotificationEvent {
+  id           String      @id @default(cuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runId        String?     // null for standalone test sends
+  run          AnalysisRun? @relation(fields: [runId], references: [id])
+  type         String      // "daily_alert" | "weekly_summary" | "test" | "manual"
+  channel      String      // "email" | "browser"
+  recipient    String?     // email address or "browser"
+  subject      String?
+  status       String      @default("pending") // "pending" | "sent" | "failed"
+  errorMessage String?
+  isDebug      Boolean     @default(false)
+  createdAt    DateTime    @default(now())
+}
+
+// Email addresses enrolled for notifications
+model NotificationRecipient {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email     String
+  label     String?  // e.g. "Primary", "Work"
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+// AI-suggested tickers not currently held
+model WatchlistIdea {
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runId       String
+  run         AnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  ticker      String
+  companyName String?
+  rationale   String?
+  confidence  String?
+  createdAt   DateTime    @default(now())
+}
+
+model AppSettings {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   // JSON string
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
