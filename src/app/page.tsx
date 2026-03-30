@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
-import { Upload, Play, ShieldAlert, BadgeCheck, Settings, ArrowRight, BookOpen, Bell, Download, Clock, TrendingUp, TrendingDown, Minus, AlertCircle } from "lucide-react";
+import { Upload, Play, ShieldAlert, BadgeCheck, Settings, ArrowRight, BookOpen, Bell, Download, Clock, TrendingUp, TrendingDown, Minus, AlertCircle, History } from "lucide-react";
 import { MissingInfoGate } from "@/components/MissingInfoGate";
 import { DebugPanel } from "@/components/DebugPanel";
 import { WeightChart } from "@/components/WeightChart";
@@ -100,6 +100,9 @@ export default async function Dashboard() {
           </p>
         </div>
         <div className="flex gap-3 flex-wrap">
+          <Link href="/history" className="inline-flex items-center gap-2 rounded-lg text-sm font-medium border border-slate-700 bg-transparent hover:bg-slate-800 text-slate-100 h-9 px-4 transition-colors">
+            <History className="h-4 w-4" /> History
+          </Link>
           {latestSnapshot && (
             <Link href="/report/generate" className="inline-flex items-center gap-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 h-9 px-4 transition-colors">
               <Play className="h-4 w-4" /> Run Analysis
