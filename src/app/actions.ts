@@ -301,7 +301,9 @@ export async function updateAndConfirmSnapshot(
           currentPrice: h.currentPrice,
           currentValue: h.currentValue,
           dailyChangePct: dailyChanges[h.ticker.toUpperCase()] ?? null,
-          lastBoughtAt: h.lastBoughtAt ? new Date(h.lastBoughtAt) : null,
+          lastBoughtAt: h.lastBoughtAt && h.lastBoughtAt.trim() !== "" 
+            ? new Date(h.lastBoughtAt) 
+            : new Date(),
           isCash: h.isCash
         }))
       }

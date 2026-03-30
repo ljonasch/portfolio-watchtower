@@ -8,19 +8,8 @@ import { WeightChart } from "@/components/WeightChart";
 export const dynamic = "force-dynamic";
 
 import { ALERT_COLORS, ALERT_LABELS, type AlertLevel } from "@/lib/alerts";
-import { SortableRecommendationsTable } from "@/components/SortableRecommendationsTable";
+import { SortableRecommendationsTable, ActionBadge } from "@/components/SortableRecommendationsTable";
 import { SortableHoldingsTable } from "@/components/SortableHoldingsTable";
-
-function ActionBadge({ action }: { action: string }) {
-  const isAdd = action === "Buy" || action === "Add" || action.startsWith("Buy");
-  const isSell = action === "Sell" || action === "Exit";
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${isAdd ? "bg-green-900/40 text-green-400" : isSell ? "bg-red-900/40 text-red-400" : "bg-slate-800 text-slate-400"}`}>
-      {isAdd ? <TrendingUp className="w-3 h-3" /> : isSell ? <TrendingDown className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
-      {action}
-    </span>
-  );
-}
 
 export default async function Dashboard() {
   const profile = await prisma.userProfile.findFirst({ include: { user: true } });
@@ -183,7 +172,9 @@ export default async function Dashboard() {
               <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-green-500/60 inline-block" />Target</span>
             </div>
           </div>
-          <WeightChart data={weightChartData} />
+          <div className="h-64 w-full">
+            <WeightChart data={weightChartData} />
+          </div>
         </div>
       )}
 
@@ -219,7 +210,6 @@ export default async function Dashboard() {
           </div>
           <SortableRecommendationsTable 
             recommendations={latestReport.recommendations} 
-            ActionBadge={ActionBadge} 
           />
         </div>
       ) : (

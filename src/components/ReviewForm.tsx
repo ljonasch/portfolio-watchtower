@@ -210,7 +210,12 @@ export function ReviewForm({ snapshotId, initialHoldings, warnings }: { snapshot
                     <input type="number" value={h.currentValue} onChange={e => updateHolding(i, 'currentValue', parseFloat(e.target.value) || 0)} className={`bg-slate-950 border rounded px-2 py-1 w-28 text-slate-200 ${hasMathIssue ? 'border-amber-500 bg-amber-950/30' : 'border-slate-700'}`} />
                   </td>
                   <td className="px-4 py-2 relative">
-                    <input type="date" value={h.lastBoughtAt ? new Date(h.lastBoughtAt).toISOString().split('T')[0] : ''} onChange={e => updateHolding(i, 'lastBoughtAt', e.target.value)} className="bg-slate-950 border border-slate-700 rounded px-2 py-1 w-32 text-slate-400 focus:text-slate-200" />
+                    <input 
+                      type="date" 
+                      value={h.lastBoughtAt ? new Date(h.lastBoughtAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]} 
+                      onChange={e => updateHolding(i, 'lastBoughtAt', e.target.value)} 
+                      className="bg-slate-950 border border-slate-700 rounded px-2 py-1 w-32 text-slate-400 focus:text-slate-200" 
+                    />
                   </td>
                   <td className="px-4 py-2 text-center">
                     <input type="checkbox" checked={h.isCash} onChange={e => updateHolding(i, 'isCash', e.target.checked)} className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-blue-600" />

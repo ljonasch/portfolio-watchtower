@@ -1,7 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowUpDown, ArrowUp, ArrowDown, ExternalLink } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, ExternalLink, TrendingUp, TrendingDown, Minus } from "lucide-react";
+
+export function ActionBadge({ action }: { action: string }) {
+  const isAdd = action === "Buy" || action === "Add" || action.startsWith("Buy");
+  const isSell = action === "Sell" || action === "Exit";
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${isAdd ? "bg-green-900/40 text-green-400" : isSell ? "bg-red-900/40 text-red-400" : "bg-slate-800 text-slate-400"}`}>
+      {isAdd ? <TrendingUp className="w-3 h-3" /> : isSell ? <TrendingDown className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
+      {action}
+    </span>
+  );
+}
 
 type RecommendationInfo = {
   id: string;
@@ -18,11 +29,9 @@ type RecommendationInfo = {
 type SortKey = "ticker" | "role" | "targetWeight" | "targetShares" | "currentWeight" | "action";
 
 export function SortableRecommendationsTable({ 
-  recommendations,
-  ActionBadge
+  recommendations
 }: { 
   recommendations: RecommendationInfo[];
-  ActionBadge: React.FC<{ action: string }>;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("targetWeight");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
