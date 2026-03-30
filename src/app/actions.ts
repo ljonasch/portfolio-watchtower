@@ -284,7 +284,8 @@ export async function fetchDailyChanges(tickers: string[]): Promise<Record<strin
 
 export async function updateAndConfirmSnapshot(
   snapshotId: string, 
-  holdings: { ticker: string; shares: number; currentPrice?: number; currentValue?: number; isCash?: boolean; lastBoughtAt?: string | null }[]
+  holdings: { ticker: string; shares: number; currentPrice?: number; currentValue?: number; isCash?: boolean; lastBoughtAt?: string | null }[],
+  isQueueOnly: boolean = false
 ) {
   const tickers = holdings.filter(h => !h.isCash && h.ticker).map(h => h.ticker);
   const dailyChanges = await fetchDailyChanges(tickers);
@@ -311,7 +312,12 @@ export async function updateAndConfirmSnapshot(
   });
 
   revalidatePath("/");
-  redirect(`/report/generate`);
+  
+  if (isQueueOnly) {
+    redirect("/");
+  } else {
+    redirect(`/report/generate`);
+  }
 }
 
 export async function updateProfile(formData: FormData) {

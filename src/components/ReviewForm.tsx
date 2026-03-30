@@ -97,10 +97,10 @@ export function ReviewForm({ snapshotId, initialHoldings, warnings }: { snapshot
     }
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (isQueueOnly: boolean = false) => {
     setIsSubmitting(true);
     try {
-      await updateAndConfirmSnapshot(snapshotId, holdings);
+      await updateAndConfirmSnapshot(snapshotId, holdings, isQueueOnly);
     } catch (e) {
       console.error(e);
       setIsSubmitting(false);
@@ -235,16 +235,22 @@ export function ReviewForm({ snapshotId, initialHoldings, warnings }: { snapshot
         </div>
       </div>
 
-      <div className="flex justify-end gap-4">
+      <div className="flex justify-end gap-3 flex-wrap">
         <button
-          onClick={handleSubmit}
+          onClick={() => handleSubmit(true)}
           disabled={isSubmitting || (autoCorrectionsApplied && !acceptedCorrections)}
-          className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-blue-600 text-white hover:bg-blue-700 h-10 px-8 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center justify-center rounded-md border border-slate-700 bg-slate-900/50 hover:bg-slate-800 text-sm font-medium transition-colors text-slate-300 h-10 px-6 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Save this snapshot but do not run the AI analysis yet. It will run automatically on the next daily schedule."
+        >
+          {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : 'Save & Queue for Daily Run'}
+        </button>
+        <button
+          onClick={() => handleSubmit(false)}
+          disabled={isSubmitting || (autoCorrectionsApplied && !acceptedCorrections)}
+          className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-blue-600 text-white hover:bg-blue-700 h-10 px-8 py-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(37,99,235,0.2)] hover:shadow-[0_0_25px_rgba(37,99,235,0.4)]"
           title={autoCorrectionsApplied && !acceptedCorrections ? "Please accept corrections first" : ""}
         >
-          {isSubmitting ? (
-            <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving & Analyzing...</>
-          ) : 'Save & Run Portfolio Check'}
+          {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : 'Save & Run Portfolio Check Now'}
         </button>
       </div>
     </div>

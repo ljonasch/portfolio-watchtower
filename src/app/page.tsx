@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
-import { Upload, Play, ShieldAlert, BadgeCheck, Settings, ArrowRight, BookOpen, Bell, Download, Clock, TrendingUp, TrendingDown, Minus, AlertCircle, History } from "lucide-react";
+import { Upload, Play, ShieldAlert, BadgeCheck, Settings, ArrowRight, BookOpen, Bell, Download, Clock, TrendingUp, TrendingDown, Minus, AlertCircle, History, AlertTriangle } from "lucide-react";
 import { MissingInfoGate } from "@/components/MissingInfoGate";
 import { DebugPanel } from "@/components/DebugPanel";
 import { WeightChart } from "@/components/WeightChart";
@@ -68,6 +68,8 @@ export default async function Dashboard() {
 
   // Changes from latest run
   const latestChanges = (latestRun?.changeLogs ?? []).filter(c => c.changed);
+
+  const isOutdated = latestSnapshot && latestReport && latestSnapshot.id !== latestReport.snapshotId;
   const adds = latestChanges.filter(c => c.newAction === "Add" || c.newAction === "Buy" || c.newAction?.startsWith("Buy")).slice(0, 3);
   const sells = latestChanges.filter(c => c.newAction === "Sell" || c.newAction === "Exit").slice(0, 3);
 
@@ -124,9 +126,27 @@ export default async function Dashboard() {
         </div>
       </div>
 
+      {/* Outdated Analysis Warning */}
+      {isOutdated && (
+        <div className="bg-amber-950/40 border border-amber-600/50 rounded-xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-in fade-in duration-500">
+          <div className="flex gap-3">
+            <AlertTriangle className="text-amber-500 w-5 h-5 flex-shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-sm font-bold text-amber-500">Analysis Pending</h3>
+              <p className="text-xs text-amber-400/80 mt-1 max-w-xl leading-relaxed">
+                The snapshot you recently uploaded has been queued. The recommendations and charts below belong to an older portfolio snapshot. The new analysis will run automatically on the next scheduled run.
+              </p>
+            </div>
+          </div>
+          <Link href="/report/generate" className="whitespace-nowrap inline-flex items-center gap-2 bg-amber-600 hover:bg-amber-500 text-amber-50 hover:text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors shadow-sm">
+            <Play className="w-4 h-4 fill-current" /> Run Manual Analysis Now
+          </Link>
+        </div>
+      )}
+
       {/* What Changed + Adds/Sells */}
       {latestChanges.length > 0 && (
-        <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-5 space-y-3">
+        <div className={`rounded-xl border border-slate-800 bg-slate-900/30 p-5 space-y-3 transition-all ${isOutdated ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold">What Changed Since Last Run</h2>
             <Link href={`/report/${latestReport?.id}`} className="text-xs text-blue-400 hover:text-blue-300">View full report →</Link>
@@ -164,7 +184,7 @@ export default async function Dashboard() {
 
       {/* Weight chart */}
       {weightChartData.length > 0 && (
-        <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-5 space-y-3">
+        <div className={`rounded-xl border border-slate-800 bg-slate-900/30 p-5 space-y-3 transition-opacity ${isOutdated ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold">Holdings Weight: Current vs Target</h2>
             <div className="flex items-center gap-4 text-xs text-slate-500">
@@ -196,7 +216,8 @@ export default async function Dashboard() {
 
       {/* Latest Recommendations */}
       {latestReport ? (
-        <div className="space-y-3">
+        <div className={`space-y-3 transition-opacity ${isOutdated ? 'opacity-40 grayscale pointer-events-none relative' : ''}`}>
+          {isOutdated && <div className="absolute inset-0 z-10" title="Analysis is out of date"></div>}
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold">Latest Recommendations</h2>
             <div className="flex items-center gap-3">
