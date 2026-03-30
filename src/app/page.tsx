@@ -49,6 +49,7 @@ export default async function Dashboard() {
 
   const recentRuns = await prisma.analysisRun.findMany({
     orderBy: { startedAt: "desc" },
+    include: { reports: true },
     take: 5,
   });
 
@@ -250,14 +251,23 @@ export default async function Dashboard() {
         </div>
       )}
 
-      {/* Run History */}
+      {/* Recent Activity */}
       {recentRuns.length > 0 && (
         <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-5 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-bold flex items-center gap-2"><Clock className="w-4 h-4 text-slate-400" />Run History</h2>
-            <a href="/api/export/runs" className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors">
-              <Download className="w-3 h-3" /> CSV
-            </a>
+            <h2 className="text-base font-bold flex items-center gap-2">
+              <History className="w-4 h-4 text-slate-400" />
+              Recent Activity
+            </h2>
+            <div className="flex items-center gap-4">
+              <Link href="/history" className="text-xs font-semibold text-blue-400 hover:text-blue-300 transition-colors">
+                View Full History →
+              </Link>
+              <div className="h-3 w-px bg-slate-800" />
+              <a href="/api/export/runs" className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors">
+                <Download className="w-3 h-3" /> CSV
+              </a>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -266,27 +276,30 @@ export default async function Dashboard() {
                   <th className="text-left py-1.5 pr-4 font-medium">Date</th>
                   <th className="text-left py-1.5 pr-4 font-medium">Trigger</th>
                   <th className="text-left py-1.5 pr-4 font-medium">Alert</th>
-                  <th className="text-left py-1.5 font-medium">Status</th>
+                  <th className="text-left py-1.5 pr-4 font-medium text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50">
-                {recentRuns.map(run => {
+                {recentRuns.slice(0, 5).map(run => {
                   const level = (run.alertLevel ?? "none") as AlertLevel;
+                  const report = run.reports?.[0];
                   return (
-                    <tr key={run.id} className="hover:bg-slate-800/20">
+                    <tr key={run.id} className="hover:bg-slate-800/20 group">
                       <td className="py-2 pr-4 text-slate-300">{run.startedAt.toLocaleDateString()}</td>
                       <td className="py-2 pr-4">
-                        <span className={`px-1.5 py-0.5 rounded text-xs ${run.triggerType === "manual" || run.triggerType === "debug" ? "bg-purple-900/40 text-purple-400" : "bg-slate-800 text-slate-400"}`}>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${run.triggerType === "manual" || run.triggerType === "debug" ? "bg-purple-900/40 text-purple-300 border border-purple-500/20" : "bg-slate-800 text-slate-400 border border-slate-700"}`}>
                           {run.triggerType}
                         </span>
                       </td>
                       <td className="py-2 pr-4">
                         <span className="font-medium" style={{ color: ALERT_COLORS[level] }}>{ALERT_LABELS[level]}</span>
                       </td>
-                      <td className="py-2">
-                        <span className={`px-1.5 py-0.5 rounded text-xs ${run.status === "complete" ? "bg-green-900/40 text-green-400" : run.status === "failed" ? "bg-red-900/40 text-red-400" : "bg-blue-900/40 text-blue-400"}`}>
-                          {run.status}
-                        </span>
+                      <td className="py-2 text-right">
+                        {report && (
+                          <Link href={`/report/${report.id}`} className="text-blue-400 hover:text-blue-300 font-medium opacity-0 group-hover:opacity-100 transition-opacity">
+                            View Report
+                          </Link>
+                        )}
                       </td>
                     </tr>
                   );
