@@ -93,15 +93,17 @@ export function renderDailyAlertEmail(opts: {
 
   ${changed.length > 0 ? `
   <div class="card">
-    <h3>What Changed (${changed.length} position${changed.length > 1 ? "s" : ""})</h3>
+    <h3>AI Strategy Updates Since Yesterday (${changed.length} position${changed.length > 1 ? "s" : ""})</h3>
+    <p style="margin:0 0 10px;font-size:12px;color:#94a3b8">Highlights when the AI changes its underlying thesis or target conviction compared to the prior run.</p>
     <table>
-      <thead><tr><th>Ticker</th><th>Was</th><th>Now</th><th>Target Shares</th><th>Reason</th></tr></thead>
+      <thead><tr><th>Ticker</th><th>Previous Advice</th><th>New Advice</th><th>Target Shares</th><th>Reason</th></tr></thead>
       <tbody>${changesRows}</tbody>
     </table>
-  </div>` : `<div class="card"><p class="muted" style="margin:0">No changes from prior run.</p></div>`}
+  </div>` : `<div class="card"><p class="muted" style="margin:0">No changes in AI strategy from prior run.</p></div>`}
 
   <div class="card">
-    <h3>Recommended Final Holdings</h3>
+    <h3>Active Trade Recommendations</h3>
+    <p style="margin:0 0 10px;font-size:12px;color:#94a3b8">Your current target allocations. Execute these trades in your brokerage to align with the AI's strategy.</p>
     <table>
       <thead><tr><th>Ticker</th><th>Target Shares</th><th>Target Weight</th><th>Action</th></tr></thead>
       <tbody>${recRows}</tbody>

@@ -45,7 +45,9 @@ export function compareRecommendations(
 
     const priorAction = p?.action ?? null;
     const sharesDelta = (c.targetShares ?? 0) - (p?.targetShares ?? 0);
-    const actionChanged = p ? p.action !== c.action : true;
+    const normalizedPriorAction = p?.action?.trim().toLowerCase() || "";
+    const normalizedCurrentAction = c.action?.trim().toLowerCase() || "";
+    const actionChanged = p ? normalizedPriorAction !== normalizedCurrentAction : true;
     const sharesChangedMaterially = Math.abs(sharesDelta) >= 1;
     const changed = actionChanged || sharesChangedMaterially;
 
