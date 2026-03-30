@@ -1,16 +1,19 @@
 import { prisma } from "@/lib/prisma";
-import { ALERT_COLORS, ALERT_LABELS } from "@/lib/alerts";
+import { ALERT_COLORS, ALERT_LABELS, evaluateAlert } from "@/lib/alerts";
+import { compareRecommendations } from "@/lib/comparator";
 import Link from "next/link";
 import { ArrowLeft, Clock, Activity, FileText } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function HistoryPage() {
+  const profile = await prisma.userProfile.findFirst();
   const reports = await prisma.portfolioReport.findMany({
     orderBy: { createdAt: "desc" },
     take: 50,
     include: {
       analysisRun: true,
+      recommendations: true,
       snapshot: {
         include: {
           holdings: true,
@@ -41,7 +44,7 @@ export default async function HistoryPage() {
             <p className="text-sm text-slate-500">Run an analysis to generate your first report.</p>
           </div>
         ) : (
-          reports.map((report) => {
+          reports.map((report, i) => {
             const dateStr = report.createdAt.toLocaleDateString(undefined, {
               weekday: "short",
               month: "short",
@@ -51,7 +54,16 @@ export default async function HistoryPage() {
               minute: "2-digit",
             });
             const holdingsCount = report.snapshot?.holdings?.length ?? 0;
-            const alertLevel = report.analysisRun?.alertLevel ?? "none";
+            
+            // Recalculate level if missing (for legacy or manual runs)
+            let alertLevel = (report.analysisRun?.alertLevel ?? "none") as any;
+            if (!report.analysisRun && profile) {
+              const nextReport = reports[i + 1]; // chronologically prior report in this list
+              const changes = compareRecommendations(nextReport?.recommendations || [], report.recommendations);
+              const alert = evaluateAlert(changes, report.recommendations, profile, null);
+              alertLevel = alert.level;
+            }
+
             const color = ALERT_COLORS[alertLevel as keyof typeof ALERT_COLORS] || "#64748b";
             const label = ALERT_LABELS[alertLevel as keyof typeof ALERT_LABELS] || "Unknown";
 
