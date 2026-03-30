@@ -39,23 +39,25 @@ export function GlobalWorkflowNav({ latestReportId }: { latestReportId?: string 
           : step.href;
 
         return (
-          <div key={i} className="flex items-center gap-1 flex-1 min-w-0 max-w-[160px]">
+          <div key={i} className="flex items-center gap-2 flex-1 min-w-0 max-w-[150px]">
             <Link
               href={finalHref}
-              className={`group flex items-center justify-center gap-2 px-2.5 py-2 rounded-lg text-[11px] font-bold transition-all border flex-1 min-w-0
+              className={`group flex items-center justify-center gap-2.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border flex-1 min-w-0
                 ${isActive 
-                  ? "bg-blue-600 border-blue-400 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)]" 
+                  ? "bg-slate-800 border-slate-700 text-blue-400 shadow-sm" 
                   : isDone
-                    ? "bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700/80 hover:border-slate-600"
-                    : "bg-slate-900 border-slate-800 text-slate-500 hover:bg-slate-800 hover:border-slate-700 hover:text-slate-400"
+                    ? "bg-transparent border-transparent text-slate-300 hover:bg-slate-800/50 hover:text-white"
+                    : "bg-transparent border-transparent text-slate-500 hover:bg-slate-800/30 hover:text-slate-400"
                 }
               `}
             >
-              <span className="opacity-60 text-[10px] sm:inline hidden">({i + 1})</span>
-              <div className={`flex items-center justify-center rounded p-1 transition-colors
-                ${isActive ? "bg-white/20" : isDone ? "bg-slate-700/50" : "bg-slate-800/80"}
+              <span className="text-slate-500 text-xs font-bold leading-none">
+                {i + 1}
+              </span>
+              <div className={`flex items-center justify-center rounded transition-colors
+                ${isActive ? "text-blue-400" : isDone ? "text-green-500" : "text-slate-600"}
               `}>
-                {isDone ? <Check className="w-3 h-3 text-green-400" /> : <StepIcon className={`w-3 h-3 ${isActive ? "text-white" : "text-slate-500"}`} />}
+                {isDone ? <Check className="w-4 h-4" /> : <StepIcon className="w-4 h-4" />}
               </div>
               <span className="hidden leading-none sm:inline truncate">
                 {step.label}
@@ -63,7 +65,7 @@ export function GlobalWorkflowNav({ latestReportId }: { latestReportId?: string 
             </Link>
             
             {i < STEPS.length - 1 && (
-              <ChevronRight className="w-3 h-3 text-slate-700 flex-shrink-0" />
+              <ChevronRight className="w-3.5 h-3.5 text-slate-800 flex-shrink-0" />
             )}
           </div>
         );
