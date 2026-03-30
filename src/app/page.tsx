@@ -95,23 +95,10 @@ export default async function Dashboard() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Step 1 · Dashboard</h1>
+          <h1 className="text-2xl font-bold">Dashboard</h1>
           <p className="text-slate-400 mt-1 text-sm">
             {latestRun ? `Last run: ${latestRun.startedAt.toLocaleString()} · Next: ${nextRun.toLocaleString()}` : "No runs yet — run your first analysis"}
           </p>
-        </div>
-        <div className="flex gap-3 flex-wrap">
-          <Link href="/history" className="inline-flex items-center gap-2 rounded-lg text-sm font-medium border border-slate-700 bg-transparent hover:bg-slate-800 text-slate-100 h-9 px-4 transition-colors">
-            <History className="h-4 w-4" /> History
-          </Link>
-          {latestSnapshot && (
-            <Link href="/report/generate" className="inline-flex items-center gap-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 h-9 px-4 transition-colors">
-              <Play className="h-4 w-4" /> Run Analysis
-            </Link>
-          )}
-          <Link href="/upload" className="inline-flex items-center gap-2 rounded-lg text-sm font-medium border border-slate-700 bg-transparent hover:bg-slate-800 text-slate-100 h-9 px-4 transition-colors">
-            <Upload className="h-4 w-4" /> Upload Holdings
-          </Link>
         </div>
       </div>
 
