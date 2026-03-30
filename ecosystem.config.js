@@ -4,9 +4,9 @@ module.exports = {
   apps: [
     {
       name: "Portfolio-Watchtower-Scheduler",
-      script: path.join(__dirname, "scripts", "watchtower-scheduler.ts"),
+      script: "node_modules/tsx/dist/cli.mjs",
+      args: "scripts/watchtower-scheduler.ts",
       interpreter: "node",
-      interpreter_args: "--import tsx/esm",
       cwd: __dirname,
       env: {
         NODE_ENV: "development",

@@ -298,3 +298,20 @@
 2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
 2026-03-29T12:02:50: 
 2026-03-29T12:02:50: Node.js v24.14.1
+2026-03-30T08:03:26: [dotenv@17.3.1] injecting env (0) from .env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+2026-03-30T08:03:26: [Watchtower Scheduler] Starting up. Schedule: "0 8 * * *"
+2026-03-30T08:03:26: [Watchtower Scheduler] Process title set to "Portfolio Watchtower Scheduler" — visible in Task Manager.
+2026-03-30T08:03:26: [Watchtower Scheduler] Checking if today's run is needed...
+2026-03-30T08:03:26: [Watchtower Scheduler] Running. Press Ctrl+C to stop (or let PM2 manage it).
+2026-03-30T08:04:44: [Watchtower Scheduler] Startup check complete.
+2026-03-30T08:05:10: [dotenv@17.3.1] injecting env (0) from .env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+2026-03-30T08:05:10: [Watchtower Scheduler] Starting up. Schedule: "0 8 * * *"
+2026-03-30T08:05:10: [Watchtower Scheduler] Process title set to "Portfolio Watchtower Scheduler" — visible in Task Manager.
+2026-03-30T08:05:10: [Watchtower Scheduler] Checking if today's run is needed...
+2026-03-30T08:05:10: [Watchtower Scheduler] Running. Press Ctrl+C to stop (or let PM2 manage it).
+2026-03-30T08:05:12: [dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+2026-03-30T08:05:12: [Watchtower Scheduler] Starting up. Schedule: "0 8 * * *"
+2026-03-30T08:05:12: [Watchtower Scheduler] Process title set to "Portfolio Watchtower Scheduler" — visible in Task Manager.
+2026-03-30T08:05:12: [Watchtower Scheduler] Checking if today's run is needed...
+2026-03-30T08:05:12: [Watchtower Scheduler] Running. Press Ctrl+C to stop (or let PM2 manage it).
+2026-03-30T08:06:20: [Watchtower Scheduler] Startup check complete.
