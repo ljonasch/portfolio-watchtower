@@ -49,6 +49,49 @@ interface LiveNewsResult {
 }
 
 /**
+ * Direct HTTP fallback to Yahoo Finance API
+ */
+async function fetchFallbackYahooNews(tickers: string[]): Promise<LiveNewsResult> {
+  try {
+    const nonCash = tickers.filter(t => t !== 'CASH');
+    if (nonCash.length === 0) return { summary: "", sources: [] };
+    
+    // Pick the top major holdings to prevent massive request spam if portfolio is huge
+    const targetTickers = nonCash.slice(0, 10);
+    const allTitles: string[] = [];
+    const sources: Source[] = [];
+
+    await Promise.all(targetTickers.map(async (ticker) => {
+      try {
+        const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${ticker}&newsCount=3`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) return;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const json: any = await res.json();
+        const news = json?.news ?? [];
+        for (const item of news) {
+          if (item?.title && item?.link) {
+            allTitles.push(`- [${ticker}] ${item.title}`);
+            sources.push({ title: item.title, url: item.link });
+          }
+        }
+      } catch (err) {
+        /* Ignore individual ticker failures */
+      }
+    }));
+
+    if (allTitles.length === 0) return { summary: "", sources: [] };
+
+    return {
+      summary: `Recent unformatted fallback headlines from Yahoo Finance:\n${allTitles.join("\n")}`,
+      sources
+    };
+  } catch (err) {
+    return { summary: "", sources: [] };
+  }
+}
+
+/**
  * Runs 3 separate targeted gpt-4o-search-preview calls in parallel:
  *   1. Macro / Fed / geopolitics
  *   2. Company-specific earnings, analyst updates per ticker
@@ -174,16 +217,21 @@ export async function generatePortfolioReport(
   const tickers = holdings.map(h => h.ticker);
 
   // Step 1: Fetch real, verified current news — fires onProgress(0/1/2) as each search completes
-  // Ensure this doesn't hang forever
-  const liveNews = await Promise.race([
+  // Ensure this doesn't hang forever. Increased timeout to 45s for primary AI web search.
+  let liveNews = await Promise.race([
     fetchLiveNewsForTickers(openai, tickers, today, onProgress),
-    new Promise<{summary: string, sources: any[]}>((resolve) => setTimeout(() => resolve({ summary: "", sources: [] }), 10000))
+    new Promise<{summary: string, sources: any[]}>((resolve) => setTimeout(() => resolve({ summary: "", sources: [] }), 45000))
   ]);
+
+  if (!liveNews.summary || liveNews.summary.trim() === "") {
+    console.log("[Analyzer] Primary news fetch failed or timed out. Switching to Yahoo Finance fallback...");
+    liveNews = await fetchFallbackYahooNews(tickers);
+  }
 
   // Step 2 begins — notify that we're now running the AI analysis
   onProgress?.(3);
 
-  const liveNewsSection = liveNews.summary
+  const liveNewsSection = liveNews.summary && liveNews.summary.trim() !== ""
     ? `
 === VERIFIED CURRENT NEWS (from live web search, ${today}) ===
 The following is real, current news retrieved via web search. Use these facts to ground your analysis.
@@ -196,7 +244,9 @@ ${liveNews.sources.map(s => `- ${s.title}: ${s.url}`).join('\n')}
 
 === END CURRENT NEWS ===
 `
-    : `Note: Live news unavailable. Use your best training knowledge, but only cite sources you are confident exist. Prefer search URLs (e.g. https://www.reuters.com/search/news?blob=TICKER) over specific article URLs you are not certain about.`;
+    : `[ERROR: Live news fetch failed due to timeouts or API unavailability. Please inform the user in your opening summary that real-time live news was unavailable for this analysis run and you are relying entirely on offline/cached knowledge.]
+
+Note: Live news completely unavailable. Use your best training knowledge, but only cite sources you are confident exist. Prefer search URLs (e.g. https://www.reuters.com/search/news?blob=TICKER) over specific article URLs you are not certain about.`;
 
   // Pre-compute the actual current weights so the AI has exact, stable input
   const holdingsWithWeights = holdings.map(h => {
