@@ -178,12 +178,15 @@ export async function runDailyCheck(opts: {
 
       for (const recipient of recipients) {
         const { subject, html } = renderDailyAlertEmail({
+          reportId: report.id,
           alertLevel: alert.level as any,
           alertReason: alert.reason,
           changes,
           recommendations: report.recommendations,
           profile: user.profile,
           runDate: today,
+          reportSummary: report.summary ?? undefined,
+          reportReasoning: report.reasoning ?? undefined,
           appUrl,
         });
 

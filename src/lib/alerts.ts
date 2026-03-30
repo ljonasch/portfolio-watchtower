@@ -29,46 +29,26 @@ export function evaluateAlert(
     if (order.indexOf(level) > order.indexOf(maxLevel)) maxLevel = level;
   };
 
-  // 1. Multiple holdings moved to Sell/Exit/Trim
-  const downgrades = changes.filter(
-    (c) =>
-      c.changed &&
-      DOWNGRADE_ACTIONS.has(c.newAction) &&
-      !DOWNGRADE_ACTIONS.has(c.priorAction ?? "")
-  );
-  if (downgrades.length >= 2) {
-    bump("urgent", `${downgrades.length} positions moved to Sell/Exit: ${downgrades.map((d) => d.ticker).join(", ")}`);
-  } else if (downgrades.length === 1) {
-    bump("high", `${downgrades[0].ticker} moved to ${downgrades[0].newAction}`);
+  const activeTrades = currentRecs.filter(r => r.action !== "Hold" && r.action !== "hold" && Math.abs(r.shareDelta) > 0);
+  
+  if (activeTrades.length >= 3) {
+    bump("high", `Action Required: ${activeTrades.length} trades recommended to align with target allocations`);
+  } else if (activeTrades.length > 0) {
+    const buys = activeTrades.filter(r => r.action.toLowerCase() === "buy" || r.action.toLowerCase() === "add").length;
+    const sells = activeTrades.filter(r => r.action.toLowerCase() === "sell" || r.action.toLowerCase() === "exit" || r.action.toLowerCase() === "trim").length;
+    bump("medium", `Execute ${buys} buy(s) and ${sells} sell(s) to align with targets`);
   }
 
-  // 2. New high-conviction buy
-  const newBuys = changes.filter(
-    (c) => c.changed && c.priorAction === null && UPGRADE_ACTIONS.has(c.newAction)
-  );
-  if (newBuys.length > 0) {
-    bump("medium", `New position(s) recommended: ${newBuys.map((b) => b.ticker).join(", ")}`);
-  }
-
-  // 3. Concentration risk — any single position > maxPositionSizePct
+  // Concentration risk — any single position > maxPositionSizePct
   const maxPct = profile.maxPositionSizePct ?? 30;
   const overweight = currentRecs.filter((r) => r.targetWeight > maxPct && r.ticker !== "CASH");
   if (overweight.length > 0) {
     bump("high", `Concentration warning: ${overweight.map((r) => `${r.ticker} at ${r.targetWeight.toFixed(1)}%`).join(", ")} exceeds ${maxPct}% limit`);
   }
 
-  // 4. Material weight changes across multiple holdings
-  const materialChanges = changes.filter(
-    (c) => c.changed && Math.abs((c.newWeight ?? 0) - (c.priorWeight ?? c.newWeight ?? 0)) > 4
-  );
-  if (materialChanges.length >= 3) {
-    bump("medium", `${materialChanges.length} positions had material weight changes (>4%)`);
-  }
-
-  // 5. Any change at all → at minimum low
-  const anyChange = changes.some((c) => c.changed);
-  if (anyChange && maxLevel === "none") {
-    bump("low", "Minor portfolio adjustments recommended");
+  if (maxLevel === "none") {
+    // If the strategy changed but there are no trades (unlikely, but possible)
+    if (changes.some(c => c.changed)) bump("low", "AI target strategy adjusted, but no immediate trades required");
   }
 
   // Weekly summary always notified (caller handles day-of-week check)

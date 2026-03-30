@@ -40,6 +40,7 @@ export async function POST(req: Request) {
       if (!latestReport) return NextResponse.json({ error: "No report found" }, { status: 404 });
 
       ({ subject, html } = renderDailyAlertEmail({
+        reportId: latestReport.id,
         alertLevel: (latestReport.analysisRun?.alertLevel ?? "none") as any,
         alertReason: latestReport.analysisRun?.alertReason ?? "Manual send",
         changes: (latestReport.analysisRun?.changeLogs ?? []).map((c) => ({
@@ -58,6 +59,8 @@ export async function POST(req: Request) {
         recommendations: latestReport.recommendations,
         profile: user.profile!,
         runDate: latestReport.createdAt.toISOString().split("T")[0],
+        reportSummary: latestReport.summary ?? undefined,
+        reportReasoning: latestReport.reasoning ?? undefined,
         appUrl,
       }));
     } else {

@@ -37,15 +37,18 @@ function baseStyles() {
 }
 
 export function renderDailyAlertEmail(opts: {
+  reportId: string;
   alertLevel: AlertLevel;
   alertReason: string;
   changes: ChangeLog[];
   recommendations: HoldingRecommendation[];
   profile: UserProfile;
   runDate: string;
+  reportSummary?: string;
+  reportReasoning?: string;
   appUrl?: string;
 }): { subject: string; html: string } {
-  const { alertLevel, alertReason, changes, recommendations, profile, runDate, appUrl = "http://localhost:3000" } = opts;
+  const { reportId, alertLevel, alertReason, changes, recommendations, profile, runDate, reportSummary, reportReasoning, appUrl = "http://localhost:3000" } = opts;
   const color = ALERT_COLORS[alertLevel];
   const label = ALERT_LABELS[alertLevel];
   const changed = changes.filter((c) => c.changed);
@@ -62,11 +65,11 @@ export function renderDailyAlertEmail(opts: {
       <td class="muted">${c.changeReason}</td>
     </tr>`).join("");
 
-  const recRows = recommendations.slice(0, 10).map((r) => `
+  const recRows = recommendations.map((r) => `
     <tr>
       <td><strong>${r.ticker}</strong></td>
-      <td>${r.targetShares}</td>
-      <td>${r.targetWeight.toFixed(1)}%</td>
+      <td class="muted">${r.currentShares ?? 0} → </td><td>${r.targetShares}</td>
+      <td class="muted">${(r.currentWeight ?? 0).toFixed(1)}% → </td><td>${r.targetWeight.toFixed(1)}%</td>
       <td style="color:${r.action==="Sell"||r.action==="Exit"?"#ef4444":"#22c55e"}">${r.action}</td>
     </tr>`).join("");
 
@@ -82,6 +85,14 @@ export function renderDailyAlertEmail(opts: {
     <h3>Alert Summary</h3>
     <p style="margin:0;font-size:14px">${alertReason}</p>
   </div>
+
+  ${reportSummary ? `
+  <div class="card">
+    <h3>AI Analysis & Reasoning</h3>
+    <p style="margin:0 0 12px;font-size:14px;line-height:1.5">${reportSummary}</p>
+    ${reportReasoning ? `<p style="margin:0;font-size:13px;color:#94a3b8;line-height:1.4">${reportReasoning}</p>` : ""}
+  </div>
+  ` : ""}
 
   <div class="card">
     <h3>Profile Context</h3>
@@ -105,13 +116,13 @@ export function renderDailyAlertEmail(opts: {
     <h3>Active Trade Recommendations</h3>
     <p style="margin:0 0 10px;font-size:12px;color:#94a3b8">Your current target allocations. Execute these trades in your brokerage to align with the AI's strategy.</p>
     <table>
-      <thead><tr><th>Ticker</th><th>Target Shares</th><th>Target Weight</th><th>Action</th></tr></thead>
+      <thead><tr><th>Ticker</th><th colspan="2">Shares (Current → Target)</th><th colspan="2">Weight (Current → Target)</th><th>Action</th></tr></thead>
       <tbody>${recRows}</tbody>
     </table>
   </div>
 
   <p style="text-align:center;margin-top:20px">
-    <a href="${appUrl}/report" style="background:#3b82f6;color:white;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:600">View Full Report →</a>
+    <a href="${appUrl}/report/${reportId}" style="background:#3b82f6;color:white;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:600">View Full Report →</a>
   </p>
 
   <div class="footer">
