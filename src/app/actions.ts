@@ -248,10 +248,47 @@ export async function runAnalysis(snapshotId: string) {
   redirect(`/report/${report.id}`);
 }
 
+export async function fetchDailyChanges(tickers: string[]): Promise<Record<string, number | null>> {
+  const results: Record<string, number | null> = {};
+  if (!tickers || tickers.length === 0) return results;
+
+  const upperTickers = tickers.map(t => t.toUpperCase());
+  try {
+    const url = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${upperTickers.join(",")}&range=1d&interval=1d&t=${Date.now()}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (res.ok) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const json: any = await res.json();
+      const sparkResults = json?.spark?.result ?? [];
+      
+      for (const item of sparkResults) {
+        const ticker = item?.symbol?.toUpperCase();
+        if (!ticker) continue;
+        
+        const meta = item?.response?.[0]?.meta;
+        const price = meta?.regularMarketPrice ?? null;
+        const prev = meta?.previousClose ?? null;
+        
+        if (price && prev && prev > 0 && price !== prev) {
+          results[ticker] = Math.round(((price - prev) / prev) * 10000) / 100;
+        } else {
+          results[ticker] = null;
+        }
+      }
+    }
+  } catch (e) {
+    // Fail silently, daily change is a secondary enhancement
+  }
+  return results;
+}
+
 export async function updateAndConfirmSnapshot(
   snapshotId: string, 
-  holdings: { ticker: string; shares: number; currentPrice?: number; currentValue?: number; isCash?: boolean }[]
+  holdings: { ticker: string; shares: number; currentPrice?: number; currentValue?: number; isCash?: boolean; lastBoughtAt?: string | null }[]
 ) {
+  const tickers = holdings.filter(h => !h.isCash && h.ticker).map(h => h.ticker);
+  const dailyChanges = await fetchDailyChanges(tickers);
+
   await prisma.holding.deleteMany({ where: { snapshotId } });
   
   await prisma.portfolioSnapshot.update({
@@ -263,6 +300,8 @@ export async function updateAndConfirmSnapshot(
           shares: h.shares,
           currentPrice: h.currentPrice,
           currentValue: h.currentValue,
+          dailyChangePct: dailyChanges[h.ticker.toUpperCase()] ?? null,
+          lastBoughtAt: h.lastBoughtAt ? new Date(h.lastBoughtAt) : null,
           isCash: h.isCash
         }))
       }

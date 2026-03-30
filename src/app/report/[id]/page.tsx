@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Target, TrendingUp, AlertTriangle, ExternalLink, Zap, Clock, Landmark, Upload } from "lucide-react";
+import { SortableHoldingsTable } from "@/components/SortableHoldingsTable";
 import type { MarketContext, Source } from "@/lib/analyzer";
 
 function SourceChip({ source }: { source: Source }) {
@@ -159,6 +160,17 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Current Holdings Table */}
+      {report.snapshot.holdings.length > 0 && (
+        <div className="space-y-4">
+          <h2 className="text-xl font-bold border-b border-slate-800 pb-2">Starting Portfolio</h2>
+          <SortableHoldingsTable 
+            holdings={report.snapshot.holdings} 
+            totalValue={totalValue} 
+          />
         </div>
       )}
 

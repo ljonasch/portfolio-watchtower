@@ -8,6 +8,8 @@ import { WeightChart } from "@/components/WeightChart";
 export const dynamic = "force-dynamic";
 
 import { ALERT_COLORS, ALERT_LABELS, type AlertLevel } from "@/lib/alerts";
+import { SortableRecommendationsTable } from "@/components/SortableRecommendationsTable";
+import { SortableHoldingsTable } from "@/components/SortableHoldingsTable";
 
 function ActionBadge({ action }: { action: string }) {
   const isAdd = action === "Buy" || action === "Add" || action.startsWith("Buy");
@@ -185,6 +187,22 @@ export default async function Dashboard() {
         </div>
       )}
 
+      {/* Current Holdings Table */}
+      {latestSnapshot && latestSnapshot.holdings.length > 0 && (
+        <div className="space-y-3 pb-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-bold">Current Portfolio Holdings</h2>
+            <Link href="/upload" className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors bg-slate-800/50 hover:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700">
+              <Upload className="w-3.5 h-3.5" /> Upload New Snapshot
+            </Link>
+          </div>
+          <SortableHoldingsTable 
+            holdings={latestSnapshot.holdings} 
+            totalValue={latestSnapshot.holdings.reduce((sum, h) => sum + (h.currentValue || (h.shares * (h.currentPrice || 0))), 0)} 
+          />
+        </div>
+      )}
+
       {/* Latest Recommendations */}
       {latestReport ? (
         <div className="space-y-3">
@@ -199,30 +217,10 @@ export default async function Dashboard() {
               </Link>
             </div>
           </div>
-          <div className="rounded-lg border border-slate-800 overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-slate-900 text-slate-400 text-xs uppercase tracking-wide">
-                <tr>
-                  <th className="px-4 py-2.5 font-medium">Ticker</th>
-                  <th className="px-4 py-2.5 font-medium">Role</th>
-                  <th className="px-4 py-2.5 font-medium text-right">Target Wgt</th>
-                  <th className="px-4 py-2.5 font-medium text-right">Target Shares</th>
-                  <th className="px-4 py-2.5 font-medium">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800 bg-slate-900/20">
-                {latestReport.recommendations.map(rec => (
-                  <tr key={rec.id} className="hover:bg-slate-800/40 transition-colors">
-                    <td className="px-4 py-2.5 font-bold">{rec.ticker}</td>
-                    <td className="px-4 py-2.5 text-slate-400 text-xs">{rec.role}</td>
-                    <td className="px-4 py-2.5 text-right">{rec.targetWeight.toFixed(1)}%</td>
-                    <td className="px-4 py-2.5 text-right">{rec.targetShares}</td>
-                    <td className="px-4 py-2.5"><ActionBadge action={rec.action} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SortableRecommendationsTable 
+            recommendations={latestReport.recommendations} 
+            ActionBadge={ActionBadge} 
+          />
         </div>
       ) : (
         <div className="flex flex-col items-center justify-center p-12 border border-dashed border-slate-800 rounded-2xl bg-slate-900/20 text-center">

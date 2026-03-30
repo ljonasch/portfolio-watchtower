@@ -74,6 +74,8 @@ model Holding {
   shares      Float
   currentPrice Float?
   currentValue Float?
+  dailyChangePct Float?
+  lastBoughtAt   DateTime?
   isCash      Boolean           @default(false)
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
