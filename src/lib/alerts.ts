@@ -3,6 +3,22 @@ import type { ChangeLog } from "./comparator";
 
 export type AlertLevel = "none" | "low" | "medium" | "high" | "urgent";
 
+export const ALERT_COLORS: Record<AlertLevel, string> = {
+  none: "#22c55e",
+  low: "#84cc16",
+  medium: "#f59e0b",
+  high: "#f97316",
+  urgent: "#ef4444",
+};
+
+export const ALERT_LABELS: Record<AlertLevel, string> = {
+  none: "✅ Stable",
+  low: "🟡 Minor Changes",
+  medium: "🟠 Attention Needed",
+  high: "🔴 Action Required",
+  urgent: "🚨 Urgent",
+};
+
 export type AlertResult = {
   level: AlertLevel;
   reason: string;

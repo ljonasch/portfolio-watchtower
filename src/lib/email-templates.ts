@@ -1,22 +1,6 @@
 import type { HoldingRecommendation, UserProfile } from "@prisma/client";
 import type { ChangeLog } from "./comparator";
-import type { AlertLevel } from "./alerts";
-
-const ALERT_COLORS: Record<AlertLevel, string> = {
-  none: "#22c55e",
-  low: "#84cc16",
-  medium: "#f59e0b",
-  high: "#f97316",
-  urgent: "#ef4444",
-};
-
-const ALERT_LABELS: Record<AlertLevel, string> = {
-  none: "✅ Stable",
-  low: "🟡 Minor Changes",
-  medium: "🟠 Attention Needed",
-  high: "🔴 Action Required",
-  urgent: "🚨 Urgent",
-};
+import { ALERT_COLORS, ALERT_LABELS, type AlertLevel } from "./alerts";
 
 function baseStyles() {
   return `

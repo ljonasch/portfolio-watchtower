@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/prisma";
-const ALERT_COLORS = { none: "#22c55e", low: "#84cc16", medium: "#f59e0b", high: "#f97316", urgent: "#ef4444" } as const;
-const ALERT_LABELS = { none: "Stable", low: "Minor Changes", medium: "Attention Needed", high: "Action Required", urgent: "Urgent" } as const;
+import { ALERT_COLORS, ALERT_LABELS } from "@/lib/alerts";
 import Link from "next/link";
 import { ArrowLeft, Clock, Activity, FileText } from "lucide-react";
 

@@ -5,6 +5,8 @@ import { parsePortfolioScreenshot } from "@/lib/parser";
 import { generatePortfolioReport } from "@/lib/analyzer";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { evaluateAlert } from "@/lib/alerts";
+import { compareRecommendations } from "@/lib/comparator";
 import OpenAI from "openai";
 
 export async function enrichPricesWithLLM(
@@ -176,10 +178,48 @@ export async function runAnalysis(snapshotId: string) {
     latestReport?.recommendations
   );
 
+  // --- NEW: MVP2 AnalysisRun Tracing ---
+  const changes = compareRecommendations(
+    latestReport?.recommendations || [],
+    reportData.recommendations as any
+  );
+  const alert = evaluateAlert(changes, reportData.recommendations as any, user!.profile!, null);
+
+  const run = await prisma.analysisRun.create({
+    data: {
+      userId: snapshot.userId,
+      snapshotId: snapshot.id,
+      triggerType: "manual",
+      triggeredBy: user?.name || "User",
+      status: "complete",
+      alertLevel: alert.level,
+      alertReason: alert.reason,
+      profileSnapshot: JSON.stringify(user!.profile!),
+      startedAt: new Date(),
+      completedAt: new Date(),
+      changeLogs: {
+        create: changes.map(c => ({
+          ticker: c.ticker,
+          companyName: c.companyName,
+          priorAction: c.priorAction,
+          newAction: c.newAction,
+          priorTargetShares: c.priorTargetShares,
+          newTargetShares: c.newTargetShares,
+          sharesDelta: c.sharesDelta,
+          priorWeight: c.priorWeight,
+          newWeight: c.newWeight,
+          changed: c.changed,
+          changeReason: c.changeReason,
+        }))
+      }
+    }
+  });
+
   const report = await prisma.portfolioReport.create({
     data: {
       userId: snapshot.userId,
       snapshotId: snapshot.id,
+      analysisRunId: run.id, // LINK TO RUN
       summary: reportData.summary,
       reasoning: reportData.reasoning,
       marketContext: JSON.stringify(reportData.marketContext ?? { shortTerm: [], mediumTerm: [], longTerm: [] }),

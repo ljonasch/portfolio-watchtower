@@ -2,6 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { sendMail } from "@/lib/mailer";
 import { renderTestEmail, renderDailyAlertEmail, renderWeeklySummaryEmail } from "@/lib/email-templates";
 import { NextResponse } from "next/server";
+import { evaluateAlert, AlertLevel } from "@/lib/alerts";
+import { compareRecommendations } from "@/lib/comparator";
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -39,9 +41,21 @@ export async function POST(req: Request) {
       });
       if (!latestReport) return NextResponse.json({ error: "No report found" }, { status: 404 });
 
+      let alertLevel = (latestReport.analysisRun?.alertLevel ?? "none") as AlertLevel;
+      if (!latestReport.analysisRun) {
+        const priorReport = await prisma.portfolioReport.findFirst({
+          where: { userId: user.id, id: { not: latestReport.id } },
+          orderBy: { createdAt: "desc" },
+          include: { recommendations: true },
+        });
+        const changes = compareRecommendations(priorReport?.recommendations || [], latestReport.recommendations);
+        const alert = evaluateAlert(changes, latestReport.recommendations, user.profile, null);
+        alertLevel = alert.level;
+      }
+
       ({ subject, html } = renderDailyAlertEmail({
         reportId: latestReport.id,
-        alertLevel: (latestReport.analysisRun?.alertLevel ?? "none") as any,
+        alertLevel,
         alertReason: latestReport.analysisRun?.alertReason ?? "Manual send",
         changes: (latestReport.analysisRun?.changeLogs ?? []).map((c) => ({
           ticker: c.ticker,

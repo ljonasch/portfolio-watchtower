@@ -7,10 +7,7 @@ import { WeightChart } from "@/components/WeightChart";
 
 export const dynamic = "force-dynamic";
 
-const ALERT_COLORS = { none: "#22c55e", low: "#84cc16", medium: "#f59e0b", high: "#f97316", urgent: "#ef4444" } as const;
-const ALERT_LABELS = { none: "Stable", low: "Minor Changes", medium: "Attention Needed", high: "Action Required", urgent: "Urgent" } as const;
-
-type AlertLevel = keyof typeof ALERT_COLORS;
+import { ALERT_COLORS, ALERT_LABELS, type AlertLevel } from "@/lib/alerts";
 
 function ActionBadge({ action }: { action: string }) {
   const isAdd = action === "Buy" || action === "Add" || action.startsWith("Buy");
