@@ -22,14 +22,14 @@ function baseStyles() {
   return `
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 0; }
     .container { max-width: 640px; margin: 0 auto; padding: 24px 16px; }
-    .header { background: #1e293b; border-radius: 12px; padding: 24px; margin-bottom: 20px; border-left: 4px solid #3b82f6; }
-    .card { background: #1e293b; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .header { background: #1e293b; border-radius: 12px; padding: 24px; margin-bottom: 20px; border-left: 4px solid #3b82f6; color: #e2e8f0; }
+    .card { background: #1e293b; border-radius: 8px; padding: 16px; margin-bottom: 16px; color: #e2e8f0; }
     .badge { display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th { text-align: left; padding: 8px 10px; background: #0f172a; color: #64748b; font-weight: 500; }
-    td { padding: 8px 10px; border-bottom: 1px solid #334155; }
+    td { padding: 8px 10px; border-bottom: 1px solid #334155; color: #e2e8f0; }
     .green { color: #22c55e; } .red { color: #ef4444; } .amber { color: #f59e0b; } .muted { color: #64748b; }
-    h1 { margin: 0 0 4px; font-size: 22px; } h2 { font-size: 16px; color: #94a3b8; margin: 0 0 12px; }
+    h1 { margin: 0 0 4px; font-size: 22px; color: #f8fafc; } h2 { font-size: 16px; color: #94a3b8; margin: 0 0 12px; }
     h3 { font-size: 14px; color: #94a3b8; margin: 0 0 10px; }
     .footer { text-align: center; color: #475569; font-size: 12px; margin-top: 24px; }
     a { color: #60a5fa; text-decoration: none; }
