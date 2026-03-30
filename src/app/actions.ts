@@ -340,6 +340,7 @@ export async function updateProfile(formData: FormData) {
       separateRetirementAccountsDescription: String(formData.get('separateRetirementAccountsDescription') || '') || undefined,
       retirementAccountAssetMix: String(formData.get('retirementAccountAssetMix') || '') || undefined,
       trackedAccountStyle: String(formData.get('trackedAccountStyle') || '') || undefined,
+      permittedAssetClasses: formData.getAll('permittedAssetClasses').length > 0 ? formData.getAll('permittedAssetClasses').join(', ') : "",
       trackedAccountTimeHorizon: String(formData.get('trackedAccountTimeHorizon') || '') || undefined,
       trackedAccountTaxStatus: String(formData.get('trackedAccountTaxStatus') || '') || undefined,
       maxDrawdownTolerancePct: formData.get('maxDrawdownTolerancePct') ? parseFloat(formData.get('maxDrawdownTolerancePct') as string) || undefined : undefined,

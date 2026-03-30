@@ -280,9 +280,22 @@ User Directive: "${customPrompt}"
 `
     : '';
 
+  const permittedAssetsSection = profile.permittedAssetClasses && profile.permittedAssetClasses.trim() !== ""
+    ? `
+=== 🚨 STRICT ASSET CLASS CONSTRAINTS 🚨 ===
+The user has EXPLICITLY PERMITTED ONLY the following asset classes:
+[ ${profile.permittedAssetClasses} ]
+CRITICAL RULE: You MUST ONLY recommend assets spanning the allowed classes above. 
+If a suggested trade, hold, or new position violates this constraint, DO NOT RECOMMEND IT.
+If the user currently holds an asset that violates these permitted classes, you MUST recommend selling it entirely.
+============================================
+`
+    : '';
+
   const prompt = `
 You are an expert portfolio manager and market analyst. Today's date is ${today}.
 ${customConstraintsSection}
+${permittedAssetsSection}
 === USER PROFILE ===
 Age: ${age} | Target retirement age: ${profile.targetRetirementAge}
 Employment: ${profile.employmentStatus || 'Not specified'} — ${profile.profession || 'Not specified'}

@@ -161,6 +161,41 @@ export function SettingsForm({ profile, appSettings }: { profile: any; appSettin
             <input name="trackedAccountTimeHorizon" type="text" defaultValue={profile.trackedAccountTimeHorizon || ""}
               className={inputCls} placeholder="e.g. 10+ years, 5 years, Short-term" />
           </Field>
+          
+          <div className="md:col-span-2 mt-2 space-y-2 border-t border-slate-800 pt-4">
+            <label className="text-sm font-medium text-slate-300 block mb-1">
+              Permitted Asset Classes <span className="text-slate-500 text-xs font-normal">(AI will strictly only recommend these)</span>
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                "Stocks (Individual)",
+                "ETFs / Index Funds",
+                "Mutual Funds",
+                "Bonds / Fixed Income",
+                "Cash / Money Market",
+                "Real Estate (REITs)",
+                "Commodities (Gold/Silver)",
+                "Cryptocurrency"
+              ].map(asset => {
+                const isSelected = (profile.permittedAssetClasses || "").includes(asset);
+                return (
+                  <label key={asset} className="flex items-start gap-2 cursor-pointer group">
+                    <input 
+                      type="checkbox" 
+                      name="permittedAssetClasses" 
+                      value={asset} 
+                      defaultChecked={isSelected}
+                      className="mt-0.5 rounded border-slate-700 bg-slate-950 text-blue-600 focus:ring-blue-600 focus:ring-offset-slate-900"
+                    />
+                    <span className="text-xs text-slate-400 group-hover:text-slate-200 transition-colors leading-tight">{asset}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          
+          <div className="md:col-span-2 border-t border-slate-800 pt-4" />
+
           <Field label="Leverage / Options Permissions">
             <select name="leverageOptionsPermitted" defaultValue={profile.leverageOptionsPermitted || ""} className={selectCls}>
               <option value="">— Select —</option>
