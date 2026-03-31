@@ -8,105 +8,13 @@ import { revalidatePath } from "next/cache";
 import { evaluateAlert } from "@/lib/alerts";
 import { compareRecommendations } from "@/lib/comparator";
 import OpenAI from "openai";
+import { enrichPricesCore } from "@/lib/price-fetcher";
 
+// Server action wrapper — delegates to the crypto-aware price fetcher
 export async function enrichPricesWithLLM(
   tickers: string[]
 ): Promise<Record<string, number>> {
-  const results: Record<string, number> = {};
-  const failedTickers: string[] = [];
-
-  // --- Stage 1: Direct Yahoo Finance HTTP fetch (live, real-time prices) ---
-  const upperTickers = tickers.map(t => t.toUpperCase());
-  try {
-    const url = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${upperTickers.join(",")}&range=1d&interval=1d&t=${Date.now()}`;
-    const res = await fetch(url, {
-      cache: "no-store",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)",
-        "Accept": "application/json",
-      },
-      signal: AbortSignal.timeout(8000),
-    });
-
-    if (res.ok) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const json: any = await res.json();
-      const sparkResults = json?.spark?.result ?? [];
-      
-      for (const item of sparkResults) {
-        const ticker = item?.symbol?.toUpperCase();
-        if (!ticker) continue;
-        
-        const meta = item?.response?.[0]?.meta;
-        const price = meta?.regularMarketPrice ?? meta?.previousClose ?? null;
-        
-        if (price && price > 0) {
-          results[ticker] = Math.round(price * 100) / 100;
-        } else {
-          failedTickers.push(ticker);
-        }
-      }
-      
-      for (const t of upperTickers) {
-        if (!results[t] && !failedTickers.includes(t)) {
-          failedTickers.push(t);
-        }
-      }
-    } else {
-      upperTickers.forEach(t => failedTickers.push(t));
-    }
-  } catch (err: any) {
-    upperTickers.forEach(t => failedTickers.push(t));
-  }
-
-  // --- Stage 2: OpenAI fallback (approximate — model knowledge may be months old) ---
-  // Only used when live data is unavailable. Prices returned here are estimates.
-  const openAIResolved: string[] = [];
-  if (failedTickers.length > 0 && process.env.OPENAI_API_KEY) {
-    try {
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-      const prompt =
-        `You are a financial data tool. Return ONLY a valid JSON object mapping each ticker to its most recent known stock price in USD (numbers only, no strings). No markdown, no explanation.\n` +
-        `Tickers: ${failedTickers.join(", ")}\n` +
-        `Example: {"AAPL": 215.50, "MSFT": 420.00}`;
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0,
-        max_tokens: 200,
-      });
-      const raw = response.choices[0]?.message?.content?.trim() ?? "{}";
-      // Strip any accidental markdown fences
-      const cleaned = raw.replace(/```[a-z]*\n?/gi, "").trim();
-      const parsed = JSON.parse(cleaned);
-      for (const [ticker, price] of Object.entries(parsed)) {
-        const numPrice = Number(price);
-        if (numPrice > 0 && !results[ticker.toUpperCase()]) {
-          results[ticker.toUpperCase()] = Math.round(numPrice * 100) / 100;
-          openAIResolved.push(ticker.toUpperCase());
-        }
-      }
-    } catch {
-      // OpenAI fallback also failed — nothing more we can do
-    }
-  }
-
-  if (Object.keys(results).length === 0) {
-    throw new Error(
-      `Could not fetch live prices for: ${tickers.join(", ")}. ` +
-      `Yahoo Finance appears to be unavailable${process.env.OPENAI_API_KEY ? " and the AI fallback also failed" : " and no OPENAI_API_KEY is set"}. ` +
-      `Please enter prices manually.`
-    );
-  }
-
-  // If some prices came from OpenAI's stale training data, warn the caller
-  if (openAIResolved.length > 0 && openAIResolved.length === Object.keys(results).length) {
-    throw new Error(
-      `⚠️ Live price fetch failed. Prices for ${openAIResolved.join(", ")} were estimated by AI and may be inaccurate — please verify and correct them manually.`
-    );
-  }
-
-  return results;
+  return enrichPricesCore(tickers, process.env.OPENAI_API_KEY);
 }
 
 export async function processUpload(formData: FormData) {
@@ -295,6 +203,7 @@ export async function updateAndConfirmSnapshot(
   await prisma.portfolioSnapshot.update({
     where: { id: snapshotId },
     data: {
+      confirmed: true, // user has reviewed and saved
       holdings: {
         create: holdings.map(h => ({
           ticker: h.ticker,
@@ -302,9 +211,10 @@ export async function updateAndConfirmSnapshot(
           currentPrice: h.currentPrice,
           currentValue: h.currentValue,
           dailyChangePct: dailyChanges[h.ticker.toUpperCase()] ?? null,
-          lastBoughtAt: h.lastBoughtAt && h.lastBoughtAt.trim() !== "" 
-            ? new Date(h.lastBoughtAt) 
-            : new Date(),
+          // Null when blank — never default to today; that was misleading
+          lastBoughtAt: h.lastBoughtAt && h.lastBoughtAt.trim() !== ""
+            ? new Date(h.lastBoughtAt)
+            : null,
           isCash: h.isCash
         }))
       }
