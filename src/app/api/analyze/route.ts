@@ -20,8 +20,18 @@ export async function POST(req: Request) {
     return new Response(JSON.stringify({ error: "No profile found" }), { status: 404 });
   }
 
-  const settingsObj = await prisma.appSettings.findFirst({ where: { key: "portfolio_config" } });
+  const [settingsObj, convictions] = await Promise.all([
+    prisma.appSettings.findFirst({ where: { key: "portfolio_config" } }),
+    prisma.userConviction.findMany({ where: { userId: user.id, active: true } }),
+  ]);
   const settings = settingsObj ? JSON.parse(settingsObj.value) : {};
+  const convictionInputs = convictions.map(c => ({ ticker: c.ticker, rationale: c.rationale }));
+
+  // Load prior recommendations for convergence anchor
+  const latestReport = await prisma.portfolioReport.findFirst({
+    orderBy: { createdAt: "desc" },
+    include: { recommendations: true },
+  });
 
   // Stream SSE events so the client can advance steps as each phase actually completes
   const encoder = new TextEncoder();
@@ -32,7 +42,6 @@ export async function POST(req: Request) {
       };
 
       try {
-        // Each search completion fires step 0, 1, or 2; then step 3 fires when AI analysis starts
         const onProgress = (step: number) => send({ step });
 
         const reportData = await generatePortfolioReport(
@@ -40,17 +49,21 @@ export async function POST(req: Request) {
           profile,
           settings,
           onProgress,
-          undefined,
-          customPrompt
+          latestReport?.recommendations,
+          customPrompt,
+          convictionInputs
         );
 
-        // Deduplicate recommendations by ticker (LLM occasionally emits same ticker twice)
+        // Deduplicate by ticker
         const seenTickers = new Set<string>();
         const deduped = reportData.recommendations.filter(r => {
           if (seenTickers.has(r.ticker)) return false;
           seenTickers.add(r.ticker);
           return true;
         });
+
+        // Extract metadata attached by analyzer
+        const meta = (reportData as any)._meta ?? {};
 
         const report = await prisma.portfolioReport.create({
           data: {
@@ -67,13 +80,19 @@ export async function POST(req: Request) {
                 currentShares: r.currentShares,
                 targetShares: r.targetShares,
                 shareDelta: r.shareDelta,
+                dollarDelta: r.dollarDelta,
                 currentWeight: r.currentWeight,
                 targetWeight: r.targetWeight,
+                acceptableRangeLow: r.acceptableRangeLow,
+                acceptableRangeHigh: r.acceptableRangeHigh,
                 valueDelta: r.valueDelta,
                 action: r.action,
                 confidence: r.confidence,
+                positionStatus: r.positionStatus,
+                evidenceQuality: r.evidenceQuality,
                 thesisSummary: r.thesisSummary,
                 detailedReasoning: r.detailedReasoning,
+                whyChanged: r.whyChanged,
                 reasoningSources: JSON.stringify(r.reasoningSources ?? []),
               })),
             },
