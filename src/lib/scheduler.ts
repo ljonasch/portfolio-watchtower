@@ -82,13 +82,22 @@ export async function runDailyCheck(opts: {
       console.warn("Pricing live-fetch failed during scheduled run, falling back to db values.", e);
     }
 
-    // Run the full analysis (with live search + AI)
+    // Load user convictions for injection into the analysis prompt
+    const convictions = await prisma.userConviction.findMany({
+      where: { userId: user.id, active: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const convictionInputs = convictions.map(c => ({ ticker: c.ticker, rationale: c.rationale }));
+
+    // Run the full analysis (with live search + AI + conviction injection)
     const reportData = await generatePortfolioReport(
       topOfTheMinuteHoldings,
       user.profile,
       settings,
       onProgress,
-      latestReport?.recommendations
+      latestReport?.recommendations,
+      undefined, // no customPrompt on scheduled runs
+      convictionInputs
     );
 
     // Store the report
@@ -115,13 +124,19 @@ export async function runDailyCheck(opts: {
             currentShares: r.currentShares,
             targetShares: r.targetShares,
             shareDelta: r.shareDelta,
+            dollarDelta: r.dollarDelta,
             currentWeight: r.currentWeight,
             targetWeight: r.targetWeight,
+            acceptableRangeLow: r.acceptableRangeLow,
+            acceptableRangeHigh: r.acceptableRangeHigh,
             valueDelta: r.valueDelta,
             action: r.action,
             confidence: r.confidence,
+            positionStatus: r.positionStatus,
+            evidenceQuality: r.evidenceQuality,
             thesisSummary: r.thesisSummary,
             detailedReasoning: r.detailedReasoning,
+            whyChanged: r.whyChanged,
             reasoningSources: JSON.stringify(r.reasoningSources ?? []),
           })),
         },
@@ -142,13 +157,17 @@ export async function runDailyCheck(opts: {
           companyName: c.companyName,
           priorAction: c.priorAction,
           newAction: c.newAction,
+          priorRole: c.priorRole,
+          newRole: c.newRole,
           priorTargetShares: c.priorTargetShares,
           newTargetShares: c.newTargetShares,
           sharesDelta: c.sharesDelta,
           priorWeight: c.priorWeight,
           newWeight: c.newWeight,
           changed: c.changed,
+          evidenceDriven: c.evidenceDriven,
           changeReason: c.changeReason,
+          whyChanged: c.whyChanged,
         })),
       });
     }
@@ -156,13 +175,19 @@ export async function runDailyCheck(opts: {
     // Evaluate alert level
     const alert = evaluateAlert(changes, report.recommendations, user.profile, null);
 
-    // Update the run record
+    // Extract metadata attached by analyzer
+    const meta = (reportData as any)._meta ?? {};
+
+    // Update the run record with MVP 3 metadata
     await prisma.analysisRun.update({
       where: { id: run.id },
       data: {
         status: "complete",
         alertLevel: alert.level,
         alertReason: alert.reason,
+        profileSnapshot: meta.frozenProfileJson ?? JSON.stringify(user.profile),
+        portfolioMathSummary: JSON.stringify(reportData.portfolioMath ?? {}),
+        sourceQualitySummary: JSON.stringify(meta.sourceQualitySummary ?? {}),
         completedAt: new Date(),
       },
     });

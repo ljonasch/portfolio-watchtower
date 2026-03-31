@@ -321,3 +321,13 @@
 2026-03-30T08:11:16: [Watchtower Scheduler] Checking if today's run is needed...
 2026-03-30T08:11:16: [Watchtower Scheduler] Running. Press Ctrl+C to stop (or let PM2 manage it).
 2026-03-30T08:12:36: [Watchtower Scheduler] Startup check complete.
+2026-03-30T12:07:30: [dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  override existing env vars with { override: true }
+2026-03-30T12:07:30: [Watchtower Scheduler] Starting up. Process title set to "Portfolio Watchtower Scheduler".
+2026-03-30T12:07:30: [Watchtower Scheduler] Checking if today's run is needed on startup...
+2026-03-30T12:07:30: [Watchtower Scheduler] Running. Press Ctrl+C to stop (or let PM2 manage it).
+2026-03-30T12:07:30: [Watchtower Scheduler] Scheduled new daily check using cron: "0 12 * * *"
+2026-03-30T12:09:23: [Watchtower Scheduler] Startup check complete.
+2026-03-30T12:11:00: [Watchtower Scheduler] Detected schedule change from 12:00 to 13:00. Restarting cron job.
+2026-03-30T12:11:00: [Watchtower Scheduler] Scheduled new daily check using cron: "0 13 * * *"
+2026-03-30T13:00:00: [Watchtower Scheduler] Running scheduled daily check at 2026-03-30T20:00:00.016Z
+2026-03-30T13:01:38: [Watchtower Scheduler] Daily check complete. Run ID: cmndm3y8k001180wfulenujy3, Alert: high

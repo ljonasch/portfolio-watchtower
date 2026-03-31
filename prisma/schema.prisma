@@ -21,6 +21,7 @@ model User {
   notificationEvents   NotificationEvent[]
   notificationRecipients NotificationRecipient[]
   watchlistIdeas       WatchlistIdea[]
+  convictions          UserConviction[]
 }
 
 model UserProfile {
@@ -120,10 +121,16 @@ model HoldingRecommendation {
   currentWeight     Float
   targetWeight      Float
   valueDelta        Float
+  dollarDelta       Float?          // deterministically computed $ change
+  acceptableRangeLow  Float?        // lower bound of acceptable weight drift
+  acceptableRangeHigh Float?        // upper bound of acceptable weight drift
   action            String
   confidence        String?
+  positionStatus    String?         // "underweight" | "overweight" | "on_target"
+  evidenceQuality   String?         // "high" | "medium" | "low" | "mixed"
   thesisSummary     String?
   detailedReasoning String?
+  whyChanged        String?         // evidence-driven explanation of change from prior
   reasoningSources  String?         // JSON
 }
 
@@ -143,9 +150,12 @@ model AnalysisRun {
   alertLevel      String?           // "none" | "low" | "medium" | "high" | "urgent"
   alertReason     String?
   profileSnapshot String?           // JSON snapshot of UserProfile at time of run
+  portfolioMathSummary  String?     // JSON: totalValue, concentrationSummary, speculativeExposurePct, cashPct
+  sourceQualitySummary  String?     // JSON: high/medium/low source counts
+  researchCoverage      String?     // JSON: per-ticker coverage quality assessment
   startedAt       DateTime          @default(now())
   completedAt     DateTime?
-  
+
   reports              PortfolioReport[]
   changeLogs           RecommendationChangeLog[]
   notificationEvents   NotificationEvent[]
@@ -161,13 +171,17 @@ model RecommendationChangeLog {
   companyName    String?
   priorAction    String?
   newAction      String
+  priorRole      String?     // role in prior run
+  newRole        String?     // role in current run
   priorTargetShares Float?
   newTargetShares   Float
   sharesDelta    Float       // newTargetShares - priorTargetShares
   priorWeight    Float?
   newWeight      Float
   changed        Boolean     @default(false)
-  changeReason   String?     // brief explanation
+  evidenceDriven Boolean     @default(false) // true if change has source attribution
+  changeReason   String?     // brief mechanical explanation
+  whyChanged     String?     // dense evidence-driven explanation from LLM
   createdAt      DateTime    @default(now())
 }
 
@@ -201,16 +215,35 @@ model NotificationRecipient {
 
 // AI-suggested tickers not currently held
 model WatchlistIdea {
-  id          String      @id @default(cuid())
-  userId      String
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  runId       String
-  run         AnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
-  ticker      String
-  companyName String?
-  rationale   String?
-  confidence  String?
-  createdAt   DateTime    @default(now())
+  id                        String      @id @default(cuid())
+  userId                    String
+  user                      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runId                     String
+  run                       AnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  ticker                    String
+  companyName               String?
+  role                      String?     // HoldingRole
+  rationale                 String?
+  whyNow                    String?     // specific catalyst or timing reason
+  profileFitReason          String?     // why it fits the user's saved profile
+  recommendedStarterShares  Float?      // suggested starting shares
+  recommendedStarterDollars Float?      // suggested starting $ amount
+  recommendedStarterWeight  Float?      // suggested starting weight %
+  wouldReduceTicker         String?     // which existing position it would replace/trim
+  confidence                String?
+  createdAt                 DateTime    @default(now())
+}
+
+// User-written per-ticker conviction notes that persist across multiple analyses
+model UserConviction {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ticker         String
+  rationale      String   // the user's stated reason for their position/deviation
+  active         Boolean  @default(true)   // soft-delete: false = conviction retired
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
 model AppSettings {
