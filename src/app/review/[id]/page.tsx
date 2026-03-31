@@ -33,20 +33,22 @@ export default async function ReviewPage(props: { params: Promise<{ id: string }
 
 
 
+  const today = new Date().toISOString().split("T")[0];
+
   const formattedHoldings = snapshot.holdings.map(h => {
     const prior = priorHoldingMap.get(h.ticker.toUpperCase());
     const sharesChanged = !prior || Math.abs(prior.shares - h.shares) > 0.0001;
 
-    let lastBoughtAt: string | null = null;
+    let lastBoughtAt: string | null;
     if (!sharesChanged && prior?.lastBoughtAt) {
-      // Shares unchanged — inherit the prior date
+      // Shares unchanged — inherit the prior date (visibly pre-filled)
       lastBoughtAt = prior.lastBoughtAt.toISOString().split("T")[0];
-    } else if (!sharesChanged && !prior?.lastBoughtAt) {
-      // Shares unchanged, no prior date — leave blank (user can set if they want)
-      lastBoughtAt = null;
+    } else if (sharesChanged) {
+      // Shares changed — default to today (user almost certainly bought today)
+      lastBoughtAt = today;
     } else {
-      // Shares changed — don't default to today, leave blank so user enters intentionally
-      lastBoughtAt = null;
+      // New position with no prior at all — also default to today
+      lastBoughtAt = today;
     }
 
     return {
