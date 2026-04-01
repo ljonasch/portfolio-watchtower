@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { SortableHoldingsTable } from "@/components/SortableHoldingsTable";
 import { SortableRecommendationsTable } from "@/components/SortableRecommendationsTable";
+import { ConvictionThread } from "@/components/ConvictionThread";
+import type { ConvictionThreadData } from "@/components/ConvictionThread";
 import type { MarketContext, Source } from "@/lib/analyzer";
 
 function SourceChip({ source }: { source: Source }) {
@@ -36,7 +38,10 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
         analysisRun: true,
       },
     }),
-    prisma.userConviction.findMany({ where: { active: true } }),
+    (prisma as any).userConviction.findMany({
+      where: { active: true },
+      include: { messages: { orderBy: { createdAt: "asc" } } },
+    }),
   ]);
 
   if (!report) return notFound();
@@ -83,7 +88,7 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
   });
 
   // Convictions indexed by ticker
-  const convictionsByTicker = new Map(allConvictions.map(c => [c.ticker, c]));
+  const convictionsByTicker = new Map((allConvictions as any[]).map((c: any) => [c.ticker, c]));
 
   // Active convictions that apply to current recommendations
   const activeConvictionsForReport = recsEnriched
@@ -105,14 +110,24 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
     { key: "longTerm" as keyof MarketContext, label: "Long-Term", sublabel: "Structural & secular trends", icon: Landmark, color: "text-purple-400", border: "border-purple-500/20", bg: "bg-purple-500/5" },
   ];
 
-  // Serialize conviction data for client component
-  const convictionRows = allConvictions.map(c => ({
-    ticker: c.ticker,
-    rationale: c.rationale,
-    id: c.id,
-    createdAt: c.createdAt.toISOString(),
-    updatedAt: c.updatedAt.toISOString(),
-  }));
+  // Serialize conviction data (with full message threads) for client components
+  const convictionThreads: ConvictionThreadData[] = allConvictions
+    .filter((c: any) => convictionsByTicker.has(c.ticker))
+    .map((c: any) => ({
+      id: c.id,
+      ticker: c.ticker,
+      rationale: c.rationale,
+      active: c.active,
+      createdAt: c.createdAt.toISOString(),
+      updatedAt: c.updatedAt.toISOString(),
+      messages: (c.messages ?? []).map((m: any) => ({
+        id: m.id,
+        role: m.role as "user" | "ai",
+        content: m.content,
+        createdAt: m.createdAt.toISOString(),
+        analysisRunId: m.analysisRunId ?? null,
+      })),
+    }));
 
   return (
     <div className="space-y-10 max-w-6xl mx-auto">
@@ -146,26 +161,51 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
         )}
       </div>
 
-      {/* Active Convictions Banner */}
-      {activeConvictionsForReport.length > 0 && (
-        <div className="bg-amber-950/20 border border-amber-500/25 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <ShieldAlert className="w-4 h-4 text-amber-400" />
-            <span className="text-sm font-semibold text-amber-300">
-              {activeConvictionsForReport.length} Active Conviction Note{activeConvictionsForReport.length > 1 ? "s" : ""} — Injected into this analysis
-            </span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {activeConvictionsForReport.map(c => (
-              <div key={c.ticker} className="flex items-start gap-2 bg-amber-950/20 border border-amber-500/15 rounded-lg px-3 py-2">
-                <span className="font-bold text-amber-400 text-xs min-w-[40px]">{c.ticker}</span>
-                <p className="text-xs text-slate-400 leading-relaxed italic">"{c.rationale}"</p>
+      {/* Active Convictions Dialogue Threads */}
+      {convictionThreads.length > 0 && (
+        <div className="rounded-2xl border border-amber-500/40 overflow-hidden shadow-2xl shadow-amber-500/5">
+          {/* Section header banner */}
+          <div className="bg-gradient-to-r from-amber-950/60 via-amber-900/40 to-amber-950/60 border-b border-amber-500/30 px-5 py-4">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center flex-shrink-0">
+                  <ShieldAlert className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-amber-200 leading-tight">
+                    {convictionThreads.length} Active Conviction {convictionThreads.length > 1 ? "Notes" : "Note"} — Injected into this Analysis
+                  </h2>
+                  <p className="text-xs text-amber-500/70 mt-0.5">
+                    Your thesis vs. AI counterpoint · Full conversation history tracked with dates · Reply to rebut
+                  </p>
+                </div>
               </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                {convictionThreads.map(c => {
+                  const hasAiReply = c.messages.some(m => m.role === "ai");
+                  return (
+                    <div key={c.ticker} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                      hasAiReply
+                        ? "bg-red-500/15 text-red-300 border-red-500/30"
+                        : "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                    }`}>
+                      <span>{c.ticker}</span>
+                      {hasAiReply
+                        ? <span className="text-[10px] opacity-80">AI responded</span>
+                        : <span className="text-[10px] opacity-80">awaiting reply</span>
+                      }
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          {/* Thread list */}
+          <div className="bg-slate-950/60 p-4 space-y-3">
+            {convictionThreads.map(c => (
+              <ConvictionThread key={c.ticker} conviction={c} />
             ))}
           </div>
-          <p className="text-[11px] text-slate-500 mt-2">
-            The AI acknowledged each conviction above and may have provided counterpoints in the recommendations below.
-          </p>
         </div>
       )}
 
@@ -324,7 +364,7 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
             detailedReasoning: r.detailedReasoning,
             valueDelta: r.valueDelta,
           }))}
-          convictions={convictionRows}
+          convictions={convictionThreads.map(c => ({ ticker: c.ticker, rationale: c.rationale, id: c.id, createdAt: c.createdAt, updatedAt: c.updatedAt }))}
         />
       </div>
 

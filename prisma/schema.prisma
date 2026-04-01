@@ -56,12 +56,14 @@ model UserProfile {
 }
 
 model PortfolioSnapshot {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  notes     String?
-  confirmed Boolean  @default(false)  // false = OCR draft not yet reviewed; true = user confirmed
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  notes      String?
+  confirmed  Boolean  @default(false)  // false = OCR draft not yet reviewed; true = user confirmed
+  archivedAt DateTime?                 // set when the snapshot is archived; null = active
+  archiveLabel String?                 // optional user-set label for the archive batch
 
   holdings     Holding[]
   reports      PortfolioReport[]
@@ -237,14 +239,26 @@ model WatchlistIdea {
 
 // User-written per-ticker conviction notes that persist across multiple analyses
 model UserConviction {
-  id             String   @id @default(cuid())
-  userId         String
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  ticker         String
-  rationale      String   // the user's stated reason for their position/deviation
-  active         Boolean  @default(true)   // soft-delete: false = conviction retired
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id        String               @id @default(cuid())
+  userId    String
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ticker    String
+  rationale String               // kept for migration bridge; first message seeded from this
+  active    Boolean              @default(true)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  messages  ConvictionMessage[]
+}
+
+// One message in a per-ticker conversation between the user and AI
+model ConvictionMessage {
+  id            String         @id @default(cuid())
+  convictionId  String
+  conviction    UserConviction @relation(fields: [convictionId], references: [id], onDelete: Cascade)
+  role          String         // "user" | "ai"
+  content       String
+  analysisRunId String?        // set for AI messages — links to the run that produced them
+  createdAt     DateTime       @default(now())
 }
 
 model AppSettings {

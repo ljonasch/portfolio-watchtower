@@ -10,6 +10,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "No user profile found" }, { status: 404 });
   }
 
+  // T4.2 — Duplicate run guard: reject if a run is already in progress
+  const inFlightRun = await prisma.analysisRun.findFirst({
+    where: { userId: user.id, status: "running" },
+    orderBy: { startedAt: "desc" },
+  });
+  if (inFlightRun) {
+    return NextResponse.json(
+      { error: "An analysis run is already in progress", runId: inFlightRun.id },
+      { status: 409 }
+    );
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {

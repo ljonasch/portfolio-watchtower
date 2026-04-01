@@ -22,10 +22,21 @@ export async function POST(req: Request) {
 
   const [settingsObj, convictions] = await Promise.all([
     prisma.appSettings.findFirst({ where: { key: "portfolio_config" } }),
-    prisma.userConviction.findMany({ where: { userId: user.id, active: true } }),
+    prisma.userConviction.findMany({
+      where: { userId: user.id, active: true },
+      include: { messages: { orderBy: { createdAt: "asc" } } },
+    }),
   ]);
   const settings = settingsObj ? JSON.parse(settingsObj.value) : {};
-  const convictionInputs = convictions.map(c => ({ ticker: c.ticker, rationale: c.rationale }));
+  const convictionInputs = convictions.map(c => ({
+    ticker: c.ticker,
+    rationale: c.rationale,
+    messages: c.messages.map(m => ({
+      role: m.role,
+      content: m.content,
+      createdAt: m.createdAt.toISOString(),
+    })),
+  }));
 
   // Load prior recommendations for convergence anchor
   const latestReport = await prisma.portfolioReport.findFirst({
@@ -99,7 +110,30 @@ export async function POST(req: Request) {
           },
         });
 
+        // ── Write AI response messages for each active conviction ──────────────
+        // For each ticker with a conviction, extract the AI's response from
+        // detailedReasoning and persist it as a ConvictionMessage so it appears
+        // in the dialogue thread on the report page.
+        if (convictions.length > 0) {
+          const recByTicker = new Map(deduped.map(r => [r.ticker, r]));
+          await Promise.all(
+            convictions.map(async (conviction) => {
+              const rec = recByTicker.get(conviction.ticker);
+              if (!rec?.detailedReasoning) return;
+              await (prisma as any).convictionMessage.create({
+                data: {
+                  convictionId: conviction.id,
+                  role: "ai",
+                  content: rec.detailedReasoning,
+                  analysisRunId: report.id,
+                },
+              });
+            })
+          );
+        }
+
         send({ step: 4, reportId: report.id });
+
       } catch (err: any) {
         send({ error: err.message ?? "Analysis failed" });
       } finally {

@@ -1,8 +1,7 @@
 "use client";
-
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Check, User, Upload, Activity, FileText, RefreshCw, ChevronRight } from "lucide-react";
+import { Check, User, Upload, Activity, FileText, RefreshCw, ChevronRight, Archive } from "lucide-react";
 
 const STEPS = [
   { label: "Profile", href: "/", matches: ["/", "/settings"], icon: User },
@@ -70,6 +69,20 @@ export function GlobalWorkflowNav({ latestReportId }: { latestReportId?: string 
           </div>
         );
       })}
+
+      {/* ── Archives utility link ── */}
+      <div className="w-px h-4 bg-slate-700 mx-2 flex-shrink-0" />
+      <Link
+        href="/archive"
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border flex-shrink-0 ${
+          pathname === "/archive"
+            ? "bg-indigo-900/40 border-indigo-700/50 text-indigo-300"
+            : "bg-transparent border-transparent text-slate-500 hover:bg-slate-800/30 hover:text-slate-400"
+        }`}
+      >
+        <Archive className="w-3.5 h-3.5" />
+        <span className="hidden sm:inline">Archives</span>
+      </Link>
     </nav>
   );
 }

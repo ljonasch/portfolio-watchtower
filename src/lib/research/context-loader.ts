@@ -51,6 +51,7 @@ export function buildResearchContext(opts: {
     currentPrice?: number | null;
     currentValue?: number | null;
     isCash?: boolean;
+    lastBoughtAt?: Date | null;
   }>;
   priorRecommendations?: Array<{
     ticker: string;
@@ -80,15 +81,26 @@ export function buildResearchContext(opts: {
       computedValue,
       computedWeight: 0, // computed after totalValue is known
       isCash: h.isCash ?? false,
+      lastBoughtAt: h.lastBoughtAt,
     };
   });
 
   const totalValue = holdingsWithValues.reduce((sum, h) => sum + h.computedValue, 0);
 
+  // If all computed values are 0 (e.g. prices not yet fetched), fall back to equal
+  // weights based on share count so the context is still usable.
+  const totalShares = totalValue === 0
+    ? holdingsWithValues.filter(h => !h.isCash).reduce((sum, h) => sum + h.shares, 0)
+    : 0;
+
   // Now assign weights
   const holdingsWithWeights: HoldingInput[] = holdingsWithValues.map((h) => ({
     ...h,
-    computedWeight: totalValue > 0 ? Number(((h.computedValue / totalValue) * 100).toFixed(2)) : 0,
+    computedWeight: totalValue > 0
+      ? Number(((h.computedValue / totalValue) * 100).toFixed(2))
+      : (totalShares > 0 && !h.isCash)
+        ? Number(((h.shares / totalShares) * 100).toFixed(2))
+        : 0,
   }));
 
   // Derive constraints from actual profile fields

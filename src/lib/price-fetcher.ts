@@ -7,21 +7,24 @@
 
 import OpenAI from "openai";
 
+// T2.1 — Configurable fetch timeout (override via PRICE_FETCH_TIMEOUT_MS for testing)
+const FETCH_TIMEOUT_MS = Number(process.env.PRICE_FETCH_TIMEOUT_MS ?? 8000);
+
 // ─── Crypto ticker registry ────────────────────────────────────────────────────
 
 const CRYPTO_MAP: Record<string, { yahooSymbol: string; coingeckoId: string }> = {
-  BTC:   { yahooSymbol: "BTC-USD",   coingeckoId: "bitcoin" },
-  ETH:   { yahooSymbol: "ETH-USD",   coingeckoId: "ethereum" },
-  SOL:   { yahooSymbol: "SOL-USD",   coingeckoId: "solana" },
-  ADA:   { yahooSymbol: "ADA-USD",   coingeckoId: "cardano" },
-  DOGE:  { yahooSymbol: "DOGE-USD",  coingeckoId: "dogecoin" },
-  XRP:   { yahooSymbol: "XRP-USD",   coingeckoId: "ripple" },
-  DOT:   { yahooSymbol: "DOT-USD",   coingeckoId: "polkadot" },
-  AVAX:  { yahooSymbol: "AVAX-USD",  coingeckoId: "avalanche-2" },
-  LINK:  { yahooSymbol: "LINK-USD",  coingeckoId: "chainlink" },
-  LTC:   { yahooSymbol: "LTC-USD",   coingeckoId: "litecoin" },
+  BTC: { yahooSymbol: "BTC-USD", coingeckoId: "bitcoin" },
+  ETH: { yahooSymbol: "ETH-USD", coingeckoId: "ethereum" },
+  SOL: { yahooSymbol: "SOL-USD", coingeckoId: "solana" },
+  ADA: { yahooSymbol: "ADA-USD", coingeckoId: "cardano" },
+  DOGE: { yahooSymbol: "DOGE-USD", coingeckoId: "dogecoin" },
+  XRP: { yahooSymbol: "XRP-USD", coingeckoId: "ripple" },
+  DOT: { yahooSymbol: "DOT-USD", coingeckoId: "polkadot" },
+  AVAX: { yahooSymbol: "AVAX-USD", coingeckoId: "avalanche-2" },
+  LINK: { yahooSymbol: "LINK-USD", coingeckoId: "chainlink" },
+  LTC: { yahooSymbol: "LTC-USD", coingeckoId: "litecoin" },
   MATIC: { yahooSymbol: "MATIC-USD", coingeckoId: "matic-network" },
-  UNI:   { yahooSymbol: "UNI-USD",   coingeckoId: "uniswap" },
+  UNI: { yahooSymbol: "UNI-USD", coingeckoId: "uniswap" },
 };
 
 // ─── Source helpers ────────────────────────────────────────────────────────────
@@ -39,7 +42,7 @@ async function fetchYahooSparkBulk(
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json",
       },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return {};
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -66,7 +69,7 @@ async function fetchYahooV8Quote(yahooSymbol: string): Promise<number | null> {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json",
       },
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(Math.min(FETCH_TIMEOUT_MS, 6000)),
     });
     if (!res.ok) return null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -85,7 +88,7 @@ async function fetchCoinGeckoPrices(ids: string[]): Promise<Record<string, numbe
     const res = await fetch(url, {
       cache: "no-store",
       headers: { "Accept": "application/json" },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return {};
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

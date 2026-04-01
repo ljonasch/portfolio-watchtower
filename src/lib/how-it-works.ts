@@ -33,32 +33,29 @@ You then review what was extracted, correct any mistakes, and confirm. Once conf
   {
     id: "market-context",
     title: "How does the app gather market and news context?",
-    body: `Before generating recommendations, the app runs three separate live web searches using a search-capable AI model:
+    body: `Before generating recommendations, the app performs a deep multi-step research compilation:
 
-- **Macro & geopolitical search** — Fed decisions, inflation data, jobs reports, geopolitical events.
-- **Company-specific search** — Recent earnings, analyst upgrades/downgrades, and company news for each ticker you hold.
-- **Sector & regulatory search** — Industry news relevant to the sectors your holdings operate in.
+- **Market Regime Detection** — The app checks the VIX, Treasury rates, and the Dollar index to establish the current "macro regime" (e.g., Risk-On vs. Risk-Off) which mathematically scales the AI's aggressiveness.
+- **Raw Article Fetching** — Using Jina AI, the app bypasses standard search summaries and reads the *actual raw text* of financial articles to prevent AI summarizer bias.
+- **Source Deduplication** — The system uses advanced sentence hashing to detect if the same news event is being reported by 10 different outlets. Corroborated news is merged so the AI doesn't hallucinate high confidence just because an event went viral.
+- **Sentiment Scoring with Price Context** — Specialized local AI models (FinBERT & DistilRoBERTa) read the headlines and score them, cross-referencing the sentiment against the stock's actual intraday price movement.
 
-All three run at the same time. The app then **ranks the sources by quality**: primary sources like Reuters, Bloomberg, the FT, SEC filings, and official company investor-relations pages are rated "high quality." Aggregators and blogs are rated lower or filtered out. This means the AI's reasoning is grounded in more trustworthy evidence.
-
-If live news is unavailable, the app falls back to Yahoo Finance headlines and lowers confidence accordingly.`,
+If live news is unavailable, the app falls back to Yahoo Finance data and lowers confidence accordingly.`,
   },
   {
     id: "recommendations",
     title: "How does the recommendation engine work?",
-    body: `Once news is gathered, everything is assembled into a structured five-phase analysis:
+    body: `Once news is gathered, everything is assembled into a structured five-phase pipeline:
 
-**Phase 1 — Profile Constraints**: The system reads your profile and derives specific binding rules (maximum position size, total speculative exposure limit, cash target, how many holdings to aim for). These are enforced mathematically — not just as suggestions.
+**Phase 1 — Quantitative Checks**: The system derives binding rules from your profile (maximum position size, speculative caps) and immediately rejects "falling knife" candidates that have dropped organically >10% in 5 days.
 
-**Phase 2 — Evidence Quality Assessment**: Before recommending anything, the AI honestly rates its own research quality for each holding as HIGH, MEDIUM, or LOW. Recommendations with low evidence are marked as lower confidence.
+**Phase 2 — Parallel AI Reasoning**: We don't rely on just one AI. The app simultaneously boots up two different models (e.g., GPT-5 and o3-mini). GPT-5 writes the detailed portfolio thesis while o3-mini performs a totally independent strict cross-check. 
 
-**Phase 3 — Role Classification**: Every holding is assigned exactly one role — Core, Growth, Tactical, Hedge, Speculative, Income, or Watchlist. This role shapes how the position is sized and how strictly it is held.
+**Phase 3 — Signal Aggregation**: A deterministic engine grades the recommendations. If GPT-5 says "Buy" but o3-mini says "Sell", or if the machine-learning sentiment score clashes with the LLMs, the system flags a "Divergence," strictly lowering confidence and forcing a "Hold" or "Trim" to protect capital.
 
-**Phase 4 — Portfolio Construction**: The system checks for concentration risk (any position too large?), sector overlap (too much in one theme?), whether speculative positions exceed the cap, and whether cash is at the right level.
+**Phase 4 — Tax & Portfolio Math**: The system checks when you last bought a stock. If you bought it under a year ago, it drastically raises the required evidence threshold before recommending a "Sell" to protect against Short-Term Capital Gains tax. Position weights are mathematically capped.
 
-**Phase 5 — Recommendations with Attribution**: Every recommendation explains what changed from the prior run, what evidence drove it, and whether the position is underweight, overweight, or on target. If you have a conviction note for a stock, the AI explicitly acknowledges it and — if it disagrees — provides specific counterpoints.
-
-All portfolio math (weights, share deltas, dollar deltas) is verified deterministically by the app's own code after the AI responds, not just trusted from the AI output.`,
+**Phase 5 — Attributed Output**: Every recommendation explains exactly what changed, what evidence drove it, and addresses your personal conviction notes directly. All portfolio math (weights, deltas) is verified completely independently of the AI.`,
   },
   {
     id: "conviction-notes",
@@ -90,10 +87,10 @@ The goal is for the app to be reliable and honest — telling you what it knows,
 
 - Portfolio snapshots (each upload is saved permanently)
 - Extracted holdings per snapshot
-- Every analysis report and its recommendations (including role, confidence, why-changed, dollar deltas, and acceptable ranges)
-- A frozen copy of your profile at the time of each run (so old reports remain interpretable even after you update your settings)
+- Every analysis report and its recommendations (oldest reports are automatically pruned so your database never gets bloated; only the most recent 30 are kept)
+- A frozen copy of your profile at the time of each run 
 - A log of every automated and manual analysis run
-- Per-run research quality summaries (how many high/medium/low sources were used)
+- Model tracker historical data (which AI models were most accurate)
 - Notification history
 - Your user profile
 - Your conviction notes per ticker

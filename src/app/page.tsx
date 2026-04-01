@@ -15,31 +15,31 @@ export default async function Dashboard() {
   const profile = await prisma.userProfile.findFirst({ include: { user: true } });
   const recipients = await prisma.notificationRecipient.findMany({ where: { active: true } });
 
-  const latestReport = await prisma.portfolioReport.findFirst({
-    orderBy: { createdAt: "desc" },
-    include: {
-      recommendations: true,
-      snapshot: { include: { holdings: true } },
-      analysisRun: { include: { changeLogs: true } },
-    },
-  });
-
-  const latestSnapshot = await prisma.portfolioSnapshot.findFirst({
-    orderBy: { createdAt: "desc" },
-    include: { holdings: true },
-  });
-
-  // Latest scheduled run (independent of manual runs)
-  const latestRun = await prisma.analysisRun.findFirst({
-    orderBy: { startedAt: "desc" },
-    include: { changeLogs: true },
-  });
-
-  const recentRuns = await prisma.analysisRun.findMany({
-    orderBy: { startedAt: "desc" },
-    include: { reports: true },
-    take: 5,
-  });
+  const [latestReport, latestSnapshot, latestRun, recentRuns, allConvictions] = await Promise.all([
+    prisma.portfolioReport.findFirst({
+      orderBy: { createdAt: "desc" },
+      include: {
+        recommendations: true,
+        snapshot: { include: { holdings: true } },
+        analysisRun: { include: { changeLogs: true } },
+      },
+    }),
+    prisma.portfolioSnapshot.findFirst({
+      orderBy: { createdAt: "desc" },
+      include: { holdings: true },
+    }),
+    // Latest scheduled run (independent of manual runs)
+    prisma.analysisRun.findFirst({
+      orderBy: { startedAt: "desc" },
+      include: { changeLogs: true },
+    }),
+    prisma.analysisRun.findMany({
+      orderBy: { startedAt: "desc" },
+      include: { reports: true },
+      take: 5,
+    }),
+    (prisma as any).userConviction.findMany({ where: { active: true } }),
+  ]);
 
   const notifSettings = await prisma.appSettings.findFirst({ where: { key: "notification_settings" } });
   const notifConfig = notifSettings ? JSON.parse(notifSettings.value) : {};
@@ -230,7 +230,8 @@ export default async function Dashboard() {
             </div>
           </div>
           <SortableRecommendationsTable 
-            recommendations={latestReport.recommendations} 
+            recommendations={latestReport.recommendations}
+            convictions={(allConvictions as any[]).map((c: any) => ({ ticker: c.ticker, rationale: c.rationale, id: c.id, createdAt: c.createdAt.toISOString(), updatedAt: c.updatedAt.toISOString() }))}
           />
         </div>
       ) : (

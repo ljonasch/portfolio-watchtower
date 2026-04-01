@@ -212,6 +212,41 @@ export function enforceSpeculativeCap(
   });
 }
 
+// ─── Enforce max single position cap ─────────────────────────────────────────
+
+export function enforcePositionCap(
+  recommendations: RecommendationV3[],
+  maxSinglePositionPct: number
+): RecommendationV3[] {
+  if (maxSinglePositionPct <= 0 || maxSinglePositionPct >= 100) return recommendations;
+
+  let totalReduction = 0;
+
+  const capped = recommendations.map(r => {
+    if (r.ticker !== "CASH" && r.targetWeight > maxSinglePositionPct) {
+      const reduction = r.targetWeight - maxSinglePositionPct;
+      totalReduction += reduction;
+      // Recompute shares proportionally based on targetWeight
+      // Note: assumes total weight sum is approx 100
+      const newShares = r.currentPrice && r.currentPrice > 0
+        ? Math.round((maxSinglePositionPct / r.targetWeight) * r.targetShares)
+        : r.targetShares;
+      return { ...r, targetWeight: maxSinglePositionPct, targetShares: newShares };
+    }
+    return r;
+  });
+
+  if (totalReduction === 0) return capped;
+
+  // Add the freed weight to CASH
+  return capped.map(r => {
+    if (r.ticker === "CASH") {
+      return { ...r, targetWeight: Number((r.targetWeight + totalReduction).toFixed(2)) };
+    }
+    return r;
+  });
+}
+
 // ─── Enrich recommendations with computed math ────────────────────────────────
 
 export function enrichRecommendationsWithMath(

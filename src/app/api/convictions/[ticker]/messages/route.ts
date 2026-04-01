@@ -1,7 +1,6 @@
 /**
  * POST /api/convictions/[ticker]/messages
  * Adds a user reply message to an existing conviction thread.
- * Body: { content: string }
  */
 
 import { prisma } from "@/lib/prisma";
@@ -28,7 +27,6 @@ export async function POST(
     return NextResponse.json({ error: "Conviction not found" }, { status: 404 });
   }
 
-  // Add user reply to thread
   const message = await prisma.convictionMessage.create({
     data: {
       convictionId: conviction.id,
@@ -37,27 +35,11 @@ export async function POST(
     },
   });
 
-  // Update the rationale bridge to reflect latest user statement
+  // Keep rationale bridge in sync with most recent user statement
   await prisma.userConviction.update({
     where: { id: conviction.id },
     data: { rationale: content.trim(), updatedAt: new Date() },
   });
 
   return NextResponse.json({ message });
-}
-
-export async function DELETE(
-  _req: Request,
-  props: { params: Promise<{ ticker: string }> }
-) {
-  const { ticker } = await props.params;
-  const user = await prisma.user.findFirst();
-  if (!user) return NextResponse.json({ error: "No user" }, { status: 404 });
-
-  await prisma.userConviction.updateMany({
-    where: { userId: user.id, ticker: ticker.toUpperCase(), active: true },
-    data: { active: false },
-  });
-
-  return NextResponse.json({ success: true });
 }

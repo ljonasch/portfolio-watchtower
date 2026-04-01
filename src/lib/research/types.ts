@@ -57,6 +57,7 @@ export interface HoldingInput {
   computedValue: number;
   computedWeight: number;
   isCash: boolean;
+  lastBoughtAt?: Date | null;
 }
 
 export interface PriorRecommendation {

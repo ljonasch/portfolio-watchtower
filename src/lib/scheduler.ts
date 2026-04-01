@@ -25,6 +25,16 @@ export async function runDailyCheck(opts: {
   const user = await prisma.user.findFirst({ include: { profile: true } });
   if (!user || !user.profile) throw new Error("No user profile found.");
 
+  // T4.1 — Zombie run cleanup: force-fail any run stuck in "running" for >15 minutes
+  const zombieThreshold = new Date(Date.now() - 15 * 60 * 1000);
+  const zombieCount = await prisma.analysisRun.updateMany({
+    where: { userId: user.id, status: "running", startedAt: { lt: zombieThreshold } },
+    data: { status: "failed", errorMessage: "Auto-failed: stuck in running state for >15 minutes", completedAt: new Date() },
+  });
+  if (zombieCount.count > 0) {
+    console.warn(`[scheduler] Cleaned up ${zombieCount.count} zombie run(s).`);
+  }
+
   // Use the snapshot from the latest CONFIRMED report as ground truth
   const latestReport = await prisma.portfolioReport.findFirst({
     orderBy: { createdAt: "desc" },
@@ -71,25 +81,45 @@ export async function runDailyCheck(opts: {
           }
           return h;
         });
-        
+
         // Persist strictly corrected prices to DB so UI is globally synced
         await prisma.$transaction(topOfTheMinuteHoldings.map((h: any) => prisma.holding.update({
-           where: { id: h.id },
-           data: { currentPrice: h.currentPrice, currentValue: h.currentValue }
+          where: { id: h.id },
+          data: { currentPrice: h.currentPrice, currentValue: h.currentValue }
         })));
       }
     } catch (e) {
       console.warn("Pricing live-fetch failed during scheduled run, falling back to db values.", e);
     }
 
-    // Load user convictions for injection into the analysis prompt
-    const convictions = await prisma.userConviction.findMany({
+    // Load user convictions (with full message threads) for injection into the analysis prompt
+    const convictions = await (prisma as any).userConviction.findMany({
       where: { userId: user.id, active: true },
       orderBy: { updatedAt: 'desc' },
+      include: { messages: { orderBy: { createdAt: 'asc' } } },
     });
-    const convictionInputs = convictions.map(c => ({ ticker: c.ticker, rationale: c.rationale }));
+    // T6.2 — Conviction thread truncation: cap to last 10 messages to prevent token overflow
+    const MAX_CONVICTION_MSGS = 10;
+    const convictionInputs = convictions.map((c: any) => {
+      const allMsgs: any[] = c.messages ?? [];
+      const truncated = allMsgs.length > MAX_CONVICTION_MSGS
+        ? allMsgs.slice(allMsgs.length - MAX_CONVICTION_MSGS)
+        : allMsgs;
+      if (allMsgs.length > MAX_CONVICTION_MSGS) {
+        console.warn(`[scheduler] Conviction ${c.ticker}: truncated ${allMsgs.length} → ${MAX_CONVICTION_MSGS} messages for prompt.`);
+      }
+      return {
+        ticker: c.ticker,
+        rationale: c.rationale,
+        messages: truncated.map((m: any) => ({
+          role: m.role as 'user' | 'ai',
+          content: m.content,
+          createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : m.createdAt,
+        })),
+      };
+    });
 
-    // Run the full analysis (with live search + AI + conviction injection)
+    // Run the full analysis (with live search + AI + conviction injection + full thread history)
     const reportData = await generatePortfolioReport(
       topOfTheMinuteHoldings,
       user.profile,
@@ -143,6 +173,33 @@ export async function runDailyCheck(opts: {
       },
       include: { recommendations: true },
     });
+
+    // ── Save AI conviction replies back to the thread (T6.1 guarded) ──────────
+    // Only save an AI message if the detailedReasoning actually contains a
+    // conviction acknowledgment. This prevents every ticker's reasoning from
+    // being blindly saved as a conviction message.
+    const CONVICTION_MARKERS = /ACKNOWLEDGMENT:|COUNTERPOINT:|AGREEMENT:/i;
+    if (convictions.length > 0) {
+      const recByTicker = new Map(report.recommendations.map((r: any) => [r.ticker, r]));
+      for (const conviction of convictions as any[]) {
+        const rec = recByTicker.get(conviction.ticker);
+        if (!rec?.detailedReasoning) continue;
+        const raw: string = rec.detailedReasoning;
+        // T6.1 guard: only save if the AI actually addressed the conviction
+        if (!CONVICTION_MARKERS.test(raw)) {
+          console.warn(`[scheduler] Conviction ${conviction.ticker}: no acknowledgment marker in detailedReasoning — skipping AI message save.`);
+          continue;
+        }
+        await (prisma as any).convictionMessage.create({
+          data: {
+            convictionId: conviction.id,
+            role: 'ai',
+            content: raw.trim(),
+            analysisRunId: run.id,
+          },
+        });
+      }
+    }
 
     // Compare with prior run
     const priorRecs = latestReport?.recommendations ?? [];

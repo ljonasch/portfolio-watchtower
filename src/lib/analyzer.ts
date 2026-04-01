@@ -21,6 +21,7 @@ import {
 } from "./research/source-ranker";
 import {
   enforceSpeculativeCap,
+  enforcePositionCap,
   enrichRecommendationsWithMath,
   buildPortfolioMathSummary,
   validateWeightSum,
@@ -43,7 +44,7 @@ function buildAnalysisPrompt(
   ctx: ResearchContext,
   newsSection: string,
   trustedSources: Source[],
-  convictions: Array<{ ticker: string; rationale: string }>,
+  convictions: Array<{ ticker: string; rationale: string; messages?: Array<{ role: string; content: string; createdAt: string }> }>,
   usingFallback: boolean
 ): string {
   const {
@@ -66,8 +67,30 @@ function buildAnalysisPrompt(
     : "";
 
   const convictionsSection = convictions.length > 0
-    ? `\n=== USER CONVICTION NOTES (Persistent — re-injected every run) ===\nThe user has provided explicit reasons for their position in the following tickers.\nYou MUST address each conviction in its recommendation:\n1. Acknowledge the user's stated reasoning under "ACKNOWLEDGMENT:" in detailedReasoning.\n2. Incorporate it into sizing if the logic is sound.\n3. If you disagree, state specific counterpoints under "COUNTERPOINT:" with evidence.\n4. Never silently ignore a conviction.\n\n${convictions.map(c => `[${c.ticker}] User conviction: "${c.rationale}"`).join("\n")}\n`
+    ? `\n=== USER CONVICTION DIALOGUES (Persistent — re-injected every run) ===
+Today is ${today}. Each entry below is a running dialogue between the user and AI over multiple analysis runs.
+You MUST continue the conversation for each conviction ticker in that ticker's detailedReasoning field:
+1. Write your response as the next "AI" turn — do not repeat prior AI responses verbatim.
+2. Reference the DATE of each prior message and note relevant world events around those dates.
+3. Address the user's MOST RECENT point specifically and directly.
+4. ALWAYS begin your conviction response with exactly one of these required markers (no exceptions):
+   - "ACKNOWLEDGMENT:" — if you understand and partially accept the user's point
+   - "COUNTERPOINT:" — if you disagree; follow with evidence current as of ${today}
+   - "AGREEMENT:" — if the user's argument has fully convinced you
+   These markers are REQUIRED for your response to be saved. A response without them will be silently dropped.
+5. After the marker, continue with the full conviction dialogue using SHORT-TERM / MID-TERM / LONG-TERM structure.
+
+${convictions.map(c => {
+  const msgs = c.messages ?? [];
+  if (msgs.length === 0) return `[${c.ticker}]\n  User (initial): "${c.rationale}"`;
+  const thread = msgs.map(m => {
+    const d = m.createdAt ? new Date(m.createdAt).toISOString().split("T")[0] : "unknown date";
+    return `  [${d}] ${m.role === "user" ? "User" : "AI"}: "${m.content.slice(0, 600)}${m.content.length > 600 ? "..." : ""}"`;
+  }).join("\n");
+  return `[${c.ticker}] Thread (oldest → newest):\n${thread}\n  → [${today}] Write your next AI response now. MUST start with ACKNOWLEDGMENT:, COUNTERPOINT:, or AGREEMENT:`;
+}).join("\n\n")}\n`
     : "";
+
 
   const newsQualityNote = usingFallback
     ? "\n[WARNING: Primary live news fetch failed. Using Yahoo Finance fallback only. Lower confidence. Note in summary.]\n"
@@ -104,15 +127,22 @@ Sectors to emphasize: ${profile.sectorsToEmphasize ?? "None"}
 Sectors to avoid: ${profile.sectorsToAvoid ?? "None"}
 
 === C. CURRENT PORTFOLIO (Total: $${totalValue.toLocaleString()}) ===
-${JSON.stringify(holdings.map(h => ({
-  ticker: h.ticker,
-  companyName: h.companyName,
-  shares: h.shares,
-  currentPrice: h.currentPrice,
-  computedValue: h.computedValue,
-  computedWeight: h.computedWeight,
-  isCash: h.isCash,
-})), null, 2)}
+${JSON.stringify(holdings.map(h => {
+  const ageDays = h.lastBoughtAt ? (new Date(today).getTime() - new Date(h.lastBoughtAt).getTime()) / (1000 * 60 * 60 * 24) : null;
+  const isSTCG = ageDays !== null && ageDays < 365;
+  return {
+    ticker: h.ticker,
+    companyName: h.companyName,
+    shares: h.shares,
+    currentPrice: h.currentPrice,
+    computedValue: h.computedValue,
+    computedWeight: h.computedWeight,
+    isCash: h.isCash,
+    lastBoughtAt: h.lastBoughtAt ? new Date(h.lastBoughtAt).toISOString().split("T")[0] : null,
+    isShortTermCapitalGains: isSTCG,
+    taxWarning: isSTCG ? "WARNING: Held < 1 year. Sell/Trim triggers short-term capital taxes." : undefined
+  };
+}), null, 2)}
 
 ${newsSection}${newsQualityNote}${trustedSourceList}
 
@@ -122,6 +152,7 @@ ${priorRecsSection}${convictionsSection}
 PHASE 1 — PROFILE CONSTRAINT BINDING
 State the specific constraints that bind this portfolio given the profile above.
 Use ONLY what is in the profile. Do not assume anything not stated.
+N9 TAX RULE: For any ticker with "isShortTermCapitalGains": true, you must demand a strictly higher evidence threshold before recommending "Sell" or "Trim" to overcome the tax penalty.
 
 PHASE 2 — EVIDENCE QUALITY ASSESSMENT
 For each ticker, privately rate your research quality before making recommendations:
@@ -147,7 +178,7 @@ Check before finalizing:
 PHASE 5 — RECOMMENDATIONS WITH ATTRIBUTION
 For every position (existing + new):
 - thesisSummary: 1-2 dense, source-backed sentences. No generic statements.
-- detailedReasoning: organized as SHORT-TERM (0-3mo) / MID-TERM (3-18mo) / LONG-TERM (18mo+). If addressing a conviction: include "ACKNOWLEDGMENT:" and "COUNTERPOINT:" if you disagree.
+- detailedReasoning: organized as SHORT-TERM (0-3mo) / MID-TERM (3-18mo) / LONG-TERM (18mo+). For conviction tickers, you MUST start the detailedReasoning with one of: "ACKNOWLEDGMENT:", "COUNTERPOINT:", or "AGREEMENT:" — this is required for the response to be saved to the dialogue thread. Without it, the user will never see your reply.
 - whyChanged: MUST explain change vs prior. If no prior: state "No prior recommendation." If changed: cite specific evidence/event that drove it.
 - evidenceQuality: honest — use "low" when you lack hard data, "high" only with primary sources.
 - positionStatus: "underweight" | "overweight" | "on_target" vs acceptable range ±${constraints.driftTolerancePct}%
@@ -281,7 +312,9 @@ export async function generatePortfolioReport(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   priorRecommendations?: any[],
   customPrompt?: string,
-  convictions?: Array<{ ticker: string; rationale: string }>
+  convictions?: Array<{ ticker: string; rationale: string; messages?: Array<{ role: string; content: string; createdAt: string }> }>,
+  /** Pre-built context block from orchestrator (regime, sentiment, price reactions, candidates) */
+  additionalContext?: string
 ): Promise<PortfolioReportV3> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY in your .env file.");
@@ -291,11 +324,11 @@ export async function generatePortfolioReport(
   // Step 1: Build research context (pure, deterministic)
   const ctx = buildResearchContext({ profile, holdings, priorRecommendations, customPrompt });
 
-  // Step 2: Fetch live news with 50s hard timeout
-  const { combinedSummary, allSources, usingFallback } = await Promise.race([
+  // Step 2: Fetch live news with 55s hard timeout (4 parallel searches now)
+  const { combinedSummary, allSources, usingFallback, breaking24h } = await Promise.race([
     fetchAllNewsWithFallback(openai, ctx.holdings.map(h => h.ticker), ctx.today, onProgress),
-    new Promise<{ combinedSummary: string; allSources: Source[]; usingFallback: boolean }>(
-      (resolve) => setTimeout(() => resolve({ combinedSummary: "", allSources: [], usingFallback: true }), 50000)
+    new Promise<{ combinedSummary: string; allSources: Source[]; usingFallback: boolean; breaking24h: string }>(
+      (resolve) => setTimeout(() => resolve({ combinedSummary: "", allSources: [], usingFallback: true, breaking24h: "" }), 55000)
     ),
   ]);
 
@@ -303,38 +336,87 @@ export async function generatePortfolioReport(
   const trustedSources = filterToTrustedSources(deduplicateSources(allSources));
   const sourceQuality = summarizeSourceQuality(allSources);
 
-  const newsSection = combinedSummary.trim()
-    ? `=== VERIFIED CURRENT NEWS (live web search, ${ctx.today}) ===\n${combinedSummary}\n=== END CURRENT NEWS ===`
-    : `[NO LIVE NEWS: Primary search returned no content. Lower confidence across all company-specific recommendations. Do not fabricate news events.]`;
+  // Build news section: breaking 24h block appears first with highest priority
+  const breaking24hSection = breaking24h.trim()
+    ? `=== ⚡ BREAKING NEWS (last 24 hours — ${ctx.today}) ===
+${breaking24h}
+=== END BREAKING NEWS ===
+
+24-HOUR WEIGHTING RULES (apply to SHORT-TERM section of detailedReasoning):
+- STRONG signal: override the 30-day thesis if it directly contradicts prior action. Change recommendation.
+- MODERATE signal: adjust target weight ±3–5% within acceptable range. Note in whyChanged.
+- NOISE signal: log it in thesisSummary but do NOT change the recommendation.
+- If no breaking news exists for a ticker, state "No breaking developments" in SHORT-TERM.
+=== END 24-HOUR RULES ===`
+    : "";
+
+  const thirtyDaySection = combinedSummary.trim()
+    ? `=== VERIFIED CURRENT NEWS (last 30 days — ${ctx.today}) ===\n${combinedSummary}\n=== END CURRENT NEWS ===`
+    : "";
+
+  const newsSection = [
+    breaking24hSection,
+    thirtyDaySection,
+  ].filter(Boolean).join("\n\n") ||
+    `[NO LIVE NEWS: Primary search returned no content. Lower confidence across all company-specific recommendations. Do not fabricate news events.]`;
 
   // Step 4: Build prompt and call LLM
   onProgress?.(3);
   const prompt = buildAnalysisPrompt(ctx, newsSection, trustedSources, convictions ?? [], usingFallback);
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    temperature: 0,
-    response_format: {
-      type: "json_schema",
-      json_schema: { name: "portfolio_report_v3", strict: true, schema: REPORT_JSON_SCHEMA },
-    },
-    messages: [
-      {
-        role: "system",
-        content: `You are a rigorous, evidence-disciplined portfolio analyst API.
+  // Prepend orchestrator-provided context (regime, sentiment, price reactions, candidates)
+  const fullPrompt = additionalContext
+    ? `${additionalContext}\n\n${
+        // Only include the 30-day news from the prompt if orchestrator hasn't already injected it
+        prompt
+      }`
+    : prompt;
+
+  let response: any = null;
+  let content = "";
+  
+  // Rate-limit retry loop (TPM bucket refill for gpt-5.4 alias)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      response = await openai.chat.completions.create({
+        model: "gpt-5-search-api",
+        // Lower requested tokens to avoid instant TPM rejection if limit is exactly 6000
+        max_completion_tokens: 4000,
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: "portfolio_report_v3", strict: true, schema: REPORT_JSON_SCHEMA },
+        },
+        messages: [
+          {
+            role: "system",
+            content: `You are a rigorous, evidence-disciplined portfolio analyst API.
 - Never fabricate URLs. Only cite URLs from the verified list or well-known homepages.
 - Express uncertainty honestly. If evidence is weak, say so and lower confidence.
 - All targetWeight values MUST sum to exactly 100%.
 - shareDelta must equal targetShares minus currentShares exactly.
 - Every user conviction must be explicitly acknowledged and responded to.
-- If you reduce one position's weight, redistribute that weight elsewhere.`,
-      },
-      { role: "user", content: prompt },
-    ],
-  });
-
-  const content = response.choices[0]?.message?.content;
-  if (!content) throw new Error("LLM returned empty response.");
+- If you reduce one position's weight, redistribute that weight elsewhere.
+- For long-term reasoning (18mo+): use as role justification only, not as basis for trade direction.
+- Short-term evidence (specific facts, named events) carries full weight.
+- Mid-term evidence carries 60% weight. Long-term thesis alone cannot justify Buy/Sell.`,
+          },
+          { role: "user", content: fullPrompt },
+        ],
+      });
+      content = response.choices[0]?.message?.content;
+      if (!content) throw new Error(`LLM returned empty response. Finish reason: ${response.choices[0]?.finish_reason || "unknown"}`);
+      break; // Success
+    } catch (err: any) {
+      if (err?.status === 429 && attempt < 3) {
+        onProgress?.(4); // Or emit a rate-limit waiting status
+        const waitMs = 65000; // wait 65s for the 1-minute bucket to fully refill
+        console.warn(`[analyzer] Rate limit hit (attempt ${attempt}/3). Waiting ${waitMs / 1000}s...`);
+        await new Promise(r => setTimeout(r, waitMs));
+      } else {
+        throw err;
+      }
+    }
+  }
 
   let rawParsed: Partial<PortfolioReportV3>;
   try {
@@ -350,14 +432,15 @@ export async function generatePortfolioReport(
 
   let recommendations = (validation.correctedReport?.recommendations ?? []) as RecommendationV3[];
 
-  // Step 6: Enforce speculative cap + enrich with deterministic math
+  // Step 6: Enforce caps (speculative + max position) + enrich with deterministic math
   recommendations = enforceSpeculativeCap(recommendations, ctx.constraints.speculativeCapPct);
+  recommendations = enforcePositionCap(recommendations, ctx.constraints.maxSinglePositionPct);
   recommendations = enrichRecommendationsWithMath(recommendations, ctx);
 
   // Final weight normalization
   const { valid: finalWeightValid, sum: finalSum } = validateWeightSum(recommendations);
-  if (!finalWeightValid) {
-    console.warn(`[analyzer] Final weight sum ${finalSum}% — normalizing.`);
+  if (!finalWeightValid || Math.abs(finalSum - 100) > 0.05) {
+    if (Math.abs(finalSum - 100) > 0.05) console.warn(`[analyzer] Final weight sum ${finalSum}% — normalizing.`);
     recommendations = normalizeWeights(recommendations);
   }
 

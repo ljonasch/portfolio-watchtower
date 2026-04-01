@@ -18,6 +18,10 @@ module.exports = {
       error_file: path.join(__dirname, "logs", "scheduler-error.log"),
       time: true,
       watch: false,
+      // F10: Extended timeout to accommodate deep pipeline + HF cold-starts
+      kill_timeout: 720000,      // 12 minutes
+      kill_retry_delay: 30000,   // 30s retry delay
+      listen_timeout: 3000,
     },
   ],
 };

@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { SettingsForm } from "./SettingsForm";
 import { NotificationsForm } from "./NotificationsForm";
-import { ClearHoldingsButton } from "./ClearHoldingsButton";
+import { ArchivePortfolioButton } from "./ArchivePortfolioButton";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +45,7 @@ export default async function SettingsPage() {
         notifSettings={notifSettings}
       />
 
-      <ClearHoldingsButton />
+      <ArchivePortfolioButton />
     </div>
   );
 }
