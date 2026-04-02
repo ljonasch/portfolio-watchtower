@@ -59,7 +59,6 @@ export function applyAntiChurnOverride(
         : antiChurnNote;
     }
   }
-
   return recommendations;
 }
 
@@ -539,34 +538,6 @@ ${breaking24h}
   // T47: threshold is read from AppSettings at runtime (antichurn_threshold_pct), not a literal.
   // Default 1.5%. If the model labeled Trim/Buy just to fractionally balance < threshold, override to Hold.
   recommendations = applyAntiChurnOverride(recommendations, safeAntichurnThreshold);
-  /*
-  for (const rec of recommendations) {
-    const weightShift = (rec.targetWeight || 0) - (rec.currentWeight || 0);
-    if ((rec.action === "Trim" || rec.action === "Buy") && Math.abs(weightShift) < safeAntichurnThreshold && rec.targetShares > 0 && rec.currentShares > 0) {
-      rec.action = "Hold";
-      rec.whyChanged = (rec.whyChanged || "") + ` (Action normalized to Hold: |∆weight| ${Math.abs(weightShift).toFixed(2)}% < antichurn threshold ${safeAntichurnThreshold}%).`;
-    }
-  }
-
-  for (const rec of recommendations) {
-    const original = originalRecommendationAudit.get(rec.ticker);
-    const weightShift = (rec.targetWeight || 0) - (rec.currentWeight || 0);
-    const antiChurnFired = !!original
-      && (original.action === "Trim" || original.action === "Buy")
-      && Math.abs(weightShift) < safeAntichurnThreshold
-      && rec.targetShares > 0
-      && rec.currentShares > 0;
-
-    if (antiChurnFired) {
-      const antiChurnNote = `Action normalized to Hold: |Δweight| ${Math.abs(weightShift).toFixed(2)}% < antichurn threshold ${safeAntichurnThreshold}%.`;
-      rec.whyChanged = original.whyChanged;
-      rec.systemNote = original.systemNote
-        ? `${original.systemNote} ${antiChurnNote}`
-        : antiChurnNote;
-    }
-  }
-
-  */
 
   const portfolioMath = buildPortfolioMathSummary(recommendations, ctx);
 
