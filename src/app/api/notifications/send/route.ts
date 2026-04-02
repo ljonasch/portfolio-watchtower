@@ -1,9 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import { sendMail } from "@/lib/mailer";
 import { renderTestEmail, renderDailyAlertEmail, renderWeeklySummaryEmail } from "@/lib/email-templates";
 import { NextResponse } from "next/server";
 import { evaluateAlert, AlertLevel } from "@/lib/alerts";
 import { compareRecommendations } from "@/lib/comparator";
+import { sendEmailNotification } from "@/lib/services";
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -121,21 +121,15 @@ export async function POST(req: Request) {
       }));
     }
 
-    const result = await sendMail({ to: recipient.email, subject, html });
-    results.push({ email: recipient.email, ...result });
-
-    await prisma.notificationEvent.create({
-      data: {
-        userId: user.id,
-        type,
-        channel: "email",
-        recipient: recipient.email,
-        subject,
-        status: result.ok ? "sent" : "failed",
-        errorMessage: result.error,
-        isDebug: true,
-      },
+    const result = await sendEmailNotification({
+      userId: user.id,
+      type,
+      recipient: recipient.email,
+      subject,
+      html,
+      isDebug: true,
     });
+    results.push({ email: recipient.email, ...result });
   }
 
   return NextResponse.json({ results });

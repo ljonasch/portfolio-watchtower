@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { runDailyCheck } from "@/lib/scheduler";
+import { runDailyCheck } from "@/lib/services";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";

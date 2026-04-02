@@ -4,7 +4,7 @@
  * Emits real-time progress events while the single primary-model path runs.
  */
 
-import { runFullAnalysis } from "@/lib/research/analysis-orchestrator";
+import { runStreamAnalysis } from "@/lib/services";
 import type { ProgressEvent } from "@/lib/research/progress-events";
 import { AnalysisAbstainedError } from "@/lib/research/types";
 
@@ -27,7 +27,7 @@ export async function POST(req: Request): Promise<Response> {
       };
 
       try {
-        await runFullAnalysis(snapshotId, customPrompt, enqueue);
+        await runStreamAnalysis({ snapshotId, customPrompt, emit: enqueue });
       } catch (err: any) {
         if (err instanceof AnalysisAbstainedError) {
           enqueue({

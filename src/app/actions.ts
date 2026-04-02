@@ -53,7 +53,7 @@ export async function processUpload(formData: FormData) {
 export async function runAnalysis(snapshotId: string) {
   void snapshotId;
   throw new Error(
-    "runAnalysis() is deprecated. Start analysis through /api/analyze/stream so runs go through the orchestrator."
+    "runAnalysis() is deprecated. Start analysis through /api/analyze/stream so runs go through the lifecycle service boundary."
   );
 }
 
