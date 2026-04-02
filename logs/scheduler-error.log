@@ -298,3 +298,44 @@
 2026-03-29T12:02:50:     at node:internal/main/run_main_module:33:47
 2026-03-29T12:02:50: 
 2026-03-29T12:02:50: Node.js v24.14.1
+2026-04-01T08:42:39: [news-fetcher] Rate limit (429) hit for model gpt-5-search-api. Waiting 65s for bucket to refill...
+2026-04-01T08:44:00: [news-fetcher] Rate limit (429) hit for model gpt-5-search-api. Waiting 65s for bucket to refill...
+2026-04-01T08:45:30: [news-fetcher] Rate limit (429) hit for model gpt-5-search-api. Waiting 65s for bucket to refill...
+2026-04-01T08:46:57: [news-fetcher] Rate limit (429) hit for model gpt-5-search-api. Waiting 65s for bucket to refill...
+2026-04-01T08:48:25: [news-fetcher] Rate limit (429) hit for model gpt-5-search-api. Waiting 65s for bucket to refill...
+2026-04-01T08:50:09: [news-fetcher] Rate limit (429) hit for model gpt-5-search-api. Waiting 65s for bucket to refill...
+2026-04-01T08:51:29: [news-fetcher] Rate limit (429) hit for model gpt-5-search-api. Waiting 65s for bucket to refill...
+2026-04-01T08:52:03: [analyzer] Unknown LLM error (attempt 1/8): LLM returned empty response. Finish reason: length
+2026-04-01T08:52:57: [news-fetcher] Rate limit (429) hit for model gpt-5-search-api. Waiting 65s for bucket to refill...
+2026-04-01T08:53:27: [analyzer] Unknown LLM error (attempt 2/8): LLM returned empty response. Finish reason: length
+2026-04-01T08:53:27: [analyzer] Primary gpt-5.4 engine failed twice. Engaging Tier 2 backup...
+2026-04-01T08:54:22: [news-fetcher] Rate limit (429) hit for model gpt-5-search-api. Waiting 65s for bucket to refill...
+2026-04-01T08:54:24: [analyzer] Corrected: [
+2026-04-01T08:54:24:   {
+2026-04-01T08:54:24:     field: 'targetWeight',
+2026-04-01T08:54:24:     message: 'Overriding hallucinated targetWeight 14.79% with mathematically correct implied weight 14.93% (from 39.78 shares × $176.66)',
+2026-04-01T08:54:24:     ticker: 'NVDA',
+2026-04-01T08:54:24:     corrected: true
+2026-04-01T08:54:24:   },
+2026-04-01T08:54:24:   {
+2026-04-01T08:54:24:     field: 'targetWeight',
+2026-04-01T08:54:24:     message: 'Overriding hallucinated targetWeight 7.98% with mathematically correct implied weight 8.1% (from 17.96 shares × $212.33)',
+2026-04-01T08:54:24:     ticker: 'AMZN',
+2026-04-01T08:54:24:     corrected: true
+2026-04-01T08:54:24:   },
+2026-04-01T08:54:24:   {
+2026-04-01T08:54:24:     field: 'targetWeight',
+2026-04-01T08:54:24:     message: 'Overriding hallucinated targetWeight 10.8% with mathematically correct implied weight 10.49% (from 39.78 shares × $124.17)',
+2026-04-01T08:54:24:     ticker: 'USO',
+2026-04-01T08:54:24:     corrected: true
+2026-04-01T08:54:24:   },
+2026-04-01T08:54:24:   {
+2026-04-01T08:54:24:     field: 'targetWeight',
+2026-04-01T08:54:24:     message: 'Overriding hallucinated targetWeight 2.82% with mathematically correct implied weight 2.7% (from 21.59 shares × $58.9)',
+2026-04-01T08:54:24:     ticker: 'XLE',
+2026-04-01T08:54:24:     corrected: true
+2026-04-01T08:54:24:   }
+2026-04-01T08:54:24: ]
+2026-04-01T08:54:24: [analyzer] Final weight sum 99.83% — normalizing.
+2026-04-01T23:37:13: [Watchtower Scheduler] Startup check error: No user profile found.
+2026-04-02T08:00:00: [Watchtower Scheduler] Daily check failed: No user profile found.

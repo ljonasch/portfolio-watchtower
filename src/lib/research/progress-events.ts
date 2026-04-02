@@ -1,5 +1,9 @@
 // Shared discriminated-union type for all SSE events emitted during analysis.
 // The frontend reads these and renders the live progress UI.
+//
+// F1 fix: removed "o3mini" from model_verdict.model union.
+//         removed model_divergence event (dual-LLM only — no longer meaningful).
+//         added adjudicator_note event for gated diagnostic output.
 
 export type ProgressEvent =
   | { type: "stage_start";      stage: string; label: string; detail: string }
@@ -10,10 +14,8 @@ export type ProgressEvent =
   | { type: "candidate_eliminated"; ticker: string; reason: string }
   | { type: "sentiment_score";  ticker: string; direction: "buy" | "hold" | "sell"; magnitude: number; confidence: number; drivingArticle?: string; finbert?: number; fingpt?: number }
   | { type: "price_reaction";   ticker: string; verdict: string; note: string; preEventDrift?: number; reactionPct?: number; sustained?: boolean }
-  | { type: "model_verdict";    model: "gpt5" | "o3mini"; ticker: string; action: string; confidence: string; keyReason: string }
-  | { type: "model_divergence"; ticker: string; gpt5Action: string; o3Action: string; sentimentDirection: string; note: string }
-  | { type: "aggregated_signal"; ticker: string; finalAction: string; score: number; confidence: number; diverged: boolean; isCandidate: boolean; priceDataMissing?: boolean }
+  | { type: "model_verdict";    model: "gpt5"; ticker: string; action: string; confidence: string; keyReason: string }
+  | { type: "adjudicator_note"; tickers: string[]; notes: Record<string, { riskFlags: string[]; confidenceAssessment: string; keyUncertainty: string }> }
   | { type: "log";              message: string; level?: "info" | "warn" | "error" }
   | { type: "complete";         reportId: string; totalMs: number }
   | { type: "error";            message: string };
-

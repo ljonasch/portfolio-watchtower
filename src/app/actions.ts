@@ -2,12 +2,8 @@
 
 import { prisma } from "@/lib/prisma";
 import { parsePortfolioScreenshot } from "@/lib/parser";
-import { generatePortfolioReport } from "@/lib/analyzer";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { evaluateAlert } from "@/lib/alerts";
-import { compareRecommendations } from "@/lib/comparator";
-import OpenAI from "openai";
 import { enrichPricesCore } from "@/lib/price-fetcher";
 
 // Server action wrapper — delegates to the crypto-aware price fetcher
@@ -55,105 +51,10 @@ export async function processUpload(formData: FormData) {
 }
 
 export async function runAnalysis(snapshotId: string) {
-  const snapshot = await prisma.portfolioSnapshot.findUnique({
-    where: { id: snapshotId },
-    include: { holdings: true }
-  });
-  
-  if (!snapshot) throw new Error("Snapshot not found");
-
-  const user = await prisma.user.findUnique({
-    where: { id: snapshot.userId },
-    include: { profile: true }
-  });
-
-  const settingsObj = await prisma.appSettings.findUnique({
-    where: { key: 'portfolio_config' }
-  });
-
-  const settings = settingsObj ? JSON.parse(settingsObj.value) : {};
-  
-  const latestReport = await prisma.portfolioReport.findFirst({
-    orderBy: { createdAt: "desc" },
-    include: { recommendations: true },
-  });
-  
-  const reportData = await generatePortfolioReport(
-    snapshot.holdings,
-    user!.profile!,
-    settings,
-    undefined,
-    latestReport?.recommendations
+  void snapshotId;
+  throw new Error(
+    "runAnalysis() is deprecated. Start analysis through /api/analyze/stream so runs go through the orchestrator."
   );
-
-  // --- NEW: MVP2 AnalysisRun Tracing ---
-  const changes = compareRecommendations(
-    latestReport?.recommendations || [],
-    reportData.recommendations as any
-  );
-  const alert = evaluateAlert(changes, reportData.recommendations as any, user!.profile!, null);
-
-  const run = await prisma.analysisRun.create({
-    data: {
-      userId: snapshot.userId,
-      snapshotId: snapshot.id,
-      triggerType: "manual",
-      triggeredBy: user?.name || "User",
-      status: "complete",
-      alertLevel: alert.level,
-      alertReason: alert.reason,
-      profileSnapshot: JSON.stringify(user!.profile!),
-      startedAt: new Date(),
-      completedAt: new Date(),
-      changeLogs: {
-        create: changes.map(c => ({
-          ticker: c.ticker,
-          companyName: c.companyName,
-          priorAction: c.priorAction,
-          newAction: c.newAction,
-          priorTargetShares: c.priorTargetShares,
-          newTargetShares: c.newTargetShares,
-          sharesDelta: c.sharesDelta,
-          priorWeight: c.priorWeight,
-          newWeight: c.newWeight,
-          changed: c.changed,
-          changeReason: c.changeReason,
-        }))
-      }
-    }
-  });
-
-  const report = await prisma.portfolioReport.create({
-    data: {
-      userId: snapshot.userId,
-      snapshotId: snapshot.id,
-      analysisRunId: run.id, // LINK TO RUN
-      summary: reportData.summary,
-      reasoning: reportData.reasoning,
-      marketContext: JSON.stringify(reportData.marketContext ?? { shortTerm: [], mediumTerm: [], longTerm: [] }),
-      recommendations: {
-        create: reportData.recommendations.map(r => ({
-          ticker: r.ticker,
-          companyName: r.companyName,
-          role: r.role,
-          currentShares: r.currentShares,
-          targetShares: r.targetShares,
-          shareDelta: r.shareDelta,
-          currentWeight: r.currentWeight,
-          targetWeight: r.targetWeight,
-          valueDelta: r.valueDelta,
-          action: r.action,
-          confidence: r.confidence,
-          thesisSummary: r.thesisSummary,
-          detailedReasoning: r.detailedReasoning,
-          reasoningSources: JSON.stringify(r.reasoningSources ?? []),
-        }))
-      }
-    }
-  });
-
-  revalidatePath("/");
-  redirect(`/report/${report.id}`);
 }
 
 export async function fetchDailyChanges(tickers: string[]): Promise<Record<string, number | null>> {
@@ -270,4 +171,3 @@ export async function updateProfile(formData: FormData) {
     redirect('/upload');
   }
 }
-

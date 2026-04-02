@@ -29,7 +29,7 @@ const HF_BASE = "https://router.huggingface.co/hf-inference/models";
  * HF Inference API returns 503 {"error":"Model ... is currently loading"}
  * when a model hasn't been used recently. Retry up to 3 times.
  */
-async function callHuggingFace(model: string, inputs: string, apiKey: string, maxRetries = 3): Promise<any> {
+async function callHuggingFace(model: string, inputs: string, apiKey: string, maxRetries = 6): Promise<any> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const res = await fetch(`${HF_BASE}/${model}`, {
       method: "POST",
@@ -42,7 +42,8 @@ async function callHuggingFace(model: string, inputs: string, apiKey: string, ma
 
     // 503 = model loading — wait and retry
     if (res.status === 503 && attempt < maxRetries - 1) {
-      const waitMs = (attempt + 1) * 2000; // 2s, 4s, 6s
+      const waitMs = (attempt + 1) * 4000; // 4s, 8s, 12s, 16s, 20s
+      console.warn(`[HF API] Model ${model} is loading (503). Retrying in ${waitMs/1000}s...`);
       await new Promise(r => setTimeout(r, waitMs));
       continue;
     }
@@ -63,7 +64,7 @@ function parseHFLabels(raw: any): number {
   return Math.max(-1, Math.min(1, score));
 }
 
-function priceVerdictToScore(verdicts: ArticleReaction["verdict"][]): number {
+export function priceVerdictToScore(verdicts: ArticleReaction["verdict"][]): number {
   if (verdicts.length === 0) return 0;
   const scoreMap: Record<string, number> = {
     confirmed_bullish: +1.0,
@@ -96,11 +97,6 @@ async function scoreHeadlinesWithHF(
     return age < 24 * 3600000 ? 1.0 : age < 7 * 24 * 3600000 ? 0.6 : 0.3;
   };
 
-  // W14: Price context prefix for each headline
-  const pricePrefix = dayChangePct !== undefined
-    ? `[Stock is ${dayChangePct >= 0 ? "up" : "down"} ${Math.abs(dayChangePct).toFixed(1)}% today] `
-    : "";
-
   let totalWeight = 0;
   let finbertSum = 0;
   let distilrobertaSum = 0;
@@ -108,13 +104,16 @@ async function scoreHeadlinesWithHF(
   // Score each headline individually (F6)
   for (const headline of headlines.slice(0, 5)) {
     const rw = recencyWeight(headline.publishedAt);
-    const input = `${pricePrefix}${headline.title}`;
+    const input = headline.title;
 
     try {
       const [fbRaw, drRaw] = await Promise.allSettled([
         callHuggingFace("ProsusAI/finbert", input, apiKey),
         callHuggingFace("mrm8488/distilroberta-finetuned-financial-news-sentiment-analysis", input, apiKey),
       ]);
+
+      if (fbRaw.status === "rejected") console.warn(`[sentiment] FinBERT API skipped: ${fbRaw.reason}`);
+      if (drRaw.status === "rejected") console.warn(`[sentiment] DistilRoBERTa API skipped: ${drRaw.reason}`);
 
       const fbScore = fbRaw.status === "fulfilled" ? parseHFLabels(fbRaw.value) : 0;
       const drScore = drRaw.status === "fulfilled" ? parseHFLabels(drRaw.value) : 0;
@@ -184,7 +183,13 @@ export async function scoreTickerSentiment(
     ? magnitude * (1 - Math.abs(finbertScore - fingptScore) * 0.3)
     : magnitude * 0.7;
 
+  // F2: Confidence floor — suppress directional labels when signal is too weak to trust.
+  // With mktScore = 0 (no price bars), confidence is driven entirely by HF scores which
+  // vary run-to-run on identical articles. Floor prevents boundary-case flips.
+  const CONFIDENCE_FLOOR = 0.15;
+
   const direction: "buy" | "hold" | "sell" =
+    confidence < CONFIDENCE_FLOOR ? "hold" :   // low-confidence → neutral unconditionally
     finalScore > 0.2 ? "buy" :
     finalScore < -0.2 ? "sell" : "hold";
 

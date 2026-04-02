@@ -58,6 +58,22 @@ async function main() {
     update: {}
   })
 
+  // Batch 6: validation_enforce_block — when true, hard validation errors abort the run
+  // Default is "false" (log-only). Set to "true" to enable hard enforcement.
+  await prisma.appSettings.upsert({
+    where: { key: 'validation_enforce_block' },
+    create: { key: 'validation_enforce_block', value: 'false' },
+    update: {}
+  })
+
+  // Batch 9 / T47: antichurn_threshold_pct — weight change below this % → override Trim/Buy to Hold
+  // Default is 1.5%. Adjustable without code change via AppSettings.
+  await prisma.appSettings.upsert({
+    where: { key: 'antichurn_threshold_pct' },
+    create: { key: 'antichurn_threshold_pct', value: '1.5' },
+    update: {}
+  })
+
   console.log(`Seeded user: ${user.email}, notification recipient: lucasjonasch98@gmail.com`)
 }
 

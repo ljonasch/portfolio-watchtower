@@ -12,16 +12,16 @@ model User {
   name      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
-  profile              UserProfile?
-  snapshots            PortfolioSnapshot[]
-  reports              PortfolioReport[]
-  extractions          RawExtraction[]
-  analysisRuns         AnalysisRun[]
-  notificationEvents   NotificationEvent[]
+
+  profile                UserProfile?
+  snapshots              PortfolioSnapshot[]
+  reports                PortfolioReport[]
+  extractions            RawExtraction[]
+  analysisRuns           AnalysisRun[]
+  notificationEvents     NotificationEvent[]
   notificationRecipients NotificationRecipient[]
-  watchlistIdeas       WatchlistIdea[]
-  convictions          UserConviction[]
+  watchlistIdeas         WatchlistIdea[]
+  convictions            UserConviction[]
 }
 
 model UserProfile {
@@ -56,14 +56,14 @@ model UserProfile {
 }
 
 model PortfolioSnapshot {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
-  notes      String?
-  confirmed  Boolean  @default(false)  // false = OCR draft not yet reviewed; true = user confirmed
-  archivedAt DateTime?                 // set when the snapshot is archived; null = active
-  archiveLabel String?                 // optional user-set label for the archive batch
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime  @default(now())
+  notes        String?
+  confirmed    Boolean   @default(false)
+  archivedAt   DateTime?
+  archiveLabel String?
 
   holdings     Holding[]
   reports      PortfolioReport[]
@@ -71,19 +71,19 @@ model PortfolioSnapshot {
 }
 
 model Holding {
-  id          String            @id @default(cuid())
-  snapshotId  String
-  snapshot    PortfolioSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
-  ticker      String
-  companyName String?
-  shares      Float
-  currentPrice Float?
-  currentValue Float?
+  id             String            @id @default(cuid())
+  snapshotId     String
+  snapshot       PortfolioSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  ticker         String
+  companyName    String?
+  shares         Float
+  currentPrice   Float?
+  currentValue   Float?
   dailyChangePct Float?
   lastBoughtAt   DateTime?
-  isCash      Boolean           @default(false)
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  isCash         Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
 }
 
 model RawExtraction {
@@ -101,122 +101,152 @@ model PortfolioReport {
   user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   snapshotId    String
   snapshot      PortfolioSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
-  analysisRunId String?           // null for legacy reports created before MVP2
+  analysisRunId String?
   analysisRun   AnalysisRun?      @relation(fields: [analysisRunId], references: [id])
   summary       String?
   reasoning     String?
-  marketContext String?           // JSON
+  marketContext String?
   createdAt     DateTime          @default(now())
-  
+
   recommendations HoldingRecommendation[]
 }
 
 model HoldingRecommendation {
-  id                String          @id @default(cuid())
-  reportId          String
-  report            PortfolioReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  id                  String          @id @default(cuid())
+  reportId            String
+  report              PortfolioReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  ticker              String
+  companyName         String?
+  role                String?
+  currentShares       Float
+  targetShares        Float
+  shareDelta          Float
+  currentWeight       Float
+  targetWeight        Float
+  valueDelta          Float
+  dollarDelta         Float?
+  acceptableRangeLow  Float?
+  acceptableRangeHigh Float?
+  action              String
+  confidence          String?
+  positionStatus      String?
+  evidenceQuality     String?
+  thesisSummary       String?
+  detailedReasoning   String?
+  whyChanged          String?
+  systemNote          String?
+  reasoningSources    String?
+}
+
+model AnalysisRun {
+  id                   String            @id @default(cuid())
+  userId               String
+  user                 User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  snapshotId           String
+  snapshot             PortfolioSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  triggerType          String
+  triggeredBy          String?
+  status               String            @default("pending")
+  errorMessage         String?
+  alertLevel           String?
+  alertReason          String?
+  profileSnapshot      String?
+  portfolioMathSummary String?
+  sourceQualitySummary String?
+  researchCoverage     String?
+  inputTokens          Int?
+  outputTokens         Int?
+  modelUsed            String?
+  retryCount           Int               @default(0)
+  qualityMeta          String?
+  sseEventLog          String?
+  isCronRun            Boolean           @default(false)
+  startedAt            DateTime          @default(now())
+  completedAt          DateTime?
+
+  reports            PortfolioReport[]
+  changeLogs         RecommendationChangeLog[]
+  notificationEvents NotificationEvent[]
+  watchlistIdeas     WatchlistIdea[]
+  evidencePacket     EvidencePacket?
+}
+
+model EvidencePacket {
+  id                  String      @id @default(cuid())
+  runId               String      @unique
+  run                 AnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  schemaVersion       Int         @default(1)
+  snapshotId          String
+  frozenAt            DateTime    @default(now())
+  holdingsJson        String
+  newsJson            String
+  sentimentJson       String
+  valuationJson       String
+  correlationJson     String
+  regimeJson          String
+  candidatesJson      String
+  promptHash          String?
+  totalInputChars     Int         @default(0)
+  perSectionCharsJson String      @default("{}")
+  outcome             String      @default("pending")
+  createdAt           DateTime    @default(now())
+
+  @@index([snapshotId])
+  @@index([promptHash])
+  @@index([outcome])
+}
+
+model RecommendationChangeLog {
+  id                String      @id @default(cuid())
+  runId             String
+  run               AnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   ticker            String
   companyName       String?
-  role              String?
-  currentShares     Float
-  targetShares      Float
-  shareDelta        Float
-  currentWeight     Float
-  targetWeight      Float
-  valueDelta        Float
-  dollarDelta       Float?          // deterministically computed $ change
-  acceptableRangeLow  Float?        // lower bound of acceptable weight drift
-  acceptableRangeHigh Float?        // upper bound of acceptable weight drift
-  action            String
-  confidence        String?
-  positionStatus    String?         // "underweight" | "overweight" | "on_target"
-  evidenceQuality   String?         // "high" | "medium" | "low" | "mixed"
-  thesisSummary     String?
-  detailedReasoning String?
-  whyChanged        String?         // evidence-driven explanation of change from prior
-  reasoningSources  String?         // JSON
-}
-
-// ─── MVP2 NEW MODELS ──────────────────────────────────────────────────────────
-
-// Audit record for every automated/manual run
-model AnalysisRun {
-  id              String            @id @default(cuid())
-  userId          String
-  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  snapshotId      String
-  snapshot        PortfolioSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
-  triggerType     String            // "scheduled" | "manual" | "debug"
-  triggeredBy     String?           // label e.g. "Lucas (manual)" or "cron"
-  status          String            @default("pending") // "pending" | "running" | "complete" | "failed"
-  errorMessage    String?
-  alertLevel      String?           // "none" | "low" | "medium" | "high" | "urgent"
-  alertReason     String?
-  profileSnapshot String?           // JSON snapshot of UserProfile at time of run
-  portfolioMathSummary  String?     // JSON: totalValue, concentrationSummary, speculativeExposurePct, cashPct
-  sourceQualitySummary  String?     // JSON: high/medium/low source counts
-  researchCoverage      String?     // JSON: per-ticker coverage quality assessment
-  startedAt       DateTime          @default(now())
-  completedAt     DateTime?
-
-  reports              PortfolioReport[]
-  changeLogs           RecommendationChangeLog[]
-  notificationEvents   NotificationEvent[]
-  watchlistIdeas       WatchlistIdea[]
-}
-
-// Per-ticker diff between consecutive runs
-model RecommendationChangeLog {
-  id             String      @id @default(cuid())
-  runId          String
-  run            AnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
-  ticker         String
-  companyName    String?
-  priorAction    String?
-  newAction      String
-  priorRole      String?     // role in prior run
-  newRole        String?     // role in current run
+  priorAction       String?
+  newAction         String
+  priorRole         String?
+  newRole           String?
   priorTargetShares Float?
   newTargetShares   Float
-  sharesDelta    Float       // newTargetShares - priorTargetShares
-  priorWeight    Float?
-  newWeight      Float
-  changed        Boolean     @default(false)
-  evidenceDriven Boolean     @default(false) // true if change has source attribution
-  changeReason   String?     // brief mechanical explanation
-  whyChanged     String?     // dense evidence-driven explanation from LLM
-  createdAt      DateTime    @default(now())
+  sharesDelta       Float
+  deltaDollar       Float?
+  priorWeight       Float?
+  newWeight         Float
+  deltaWeight       Float?
+  changed           Boolean     @default(false)
+  evidenceDriven    Boolean     @default(false)
+  changeReason      String?
+  whyChanged        String?
+  createdAt         DateTime    @default(now())
 }
 
-// Every notification attempt (email or in-app)
 model NotificationEvent {
-  id           String      @id @default(cuid())
+  id           String       @id @default(cuid())
   userId       String
-  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  runId        String?     // null for standalone test sends
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runId        String?
   run          AnalysisRun? @relation(fields: [runId], references: [id])
-  type         String      // "daily_alert" | "weekly_summary" | "test" | "manual"
-  channel      String      // "email" | "browser"
-  recipient    String?     // email address or "browser"
+  reportId     String?
+  type         String
+  channel      String
+  recipient    String?
   subject      String?
-  status       String      @default("pending") // "pending" | "sent" | "failed"
+  status       String       @default("pending")
   errorMessage String?
-  isDebug      Boolean     @default(false)
-  createdAt    DateTime    @default(now())
+  isDebug      Boolean      @default(false)
+  createdAt    DateTime     @default(now())
 }
 
-// Email addresses enrolled for notifications
 model NotificationRecipient {
   id        String   @id @default(cuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   email     String
-  label     String?  // e.g. "Primary", "Work"
+  label     String?
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
 }
 
-// AI-suggested tickers not currently held
 model WatchlistIdea {
   id                        String      @id @default(cuid())
   userId                    String
@@ -225,46 +255,48 @@ model WatchlistIdea {
   run                       AnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   ticker                    String
   companyName               String?
-  role                      String?     // HoldingRole
+  role                      String?
   rationale                 String?
-  whyNow                    String?     // specific catalyst or timing reason
-  profileFitReason          String?     // why it fits the user's saved profile
-  recommendedStarterShares  Float?      // suggested starting shares
-  recommendedStarterDollars Float?      // suggested starting $ amount
-  recommendedStarterWeight  Float?      // suggested starting weight %
-  wouldReduceTicker         String?     // which existing position it would replace/trim
+  whyNow                    String?
+  profileFitReason          String?
+  recommendedStarterShares  Float?
+  recommendedStarterDollars Float?
+  recommendedStarterWeight  Float?
+  wouldReduceTicker         String?
   confidence                String?
+  evidenceQuality           String?
   createdAt                 DateTime    @default(now())
 }
 
-// User-written per-ticker conviction notes that persist across multiple analyses
 model UserConviction {
-  id        String               @id @default(cuid())
+  id        String              @id @default(cuid())
   userId    String
-  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   ticker    String
-  rationale String               // kept for migration bridge; first message seeded from this
-  active    Boolean              @default(true)
-  createdAt DateTime             @default(now())
-  updatedAt DateTime             @updatedAt
+  rationale String
+  active    Boolean             @default(true)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
   messages  ConvictionMessage[]
 }
 
-// One message in a per-ticker conversation between the user and AI
 model ConvictionMessage {
   id            String         @id @default(cuid())
   convictionId  String
   conviction    UserConviction @relation(fields: [convictionId], references: [id], onDelete: Cascade)
-  role          String         // "user" | "ai"
+  role          String
   content       String
-  analysisRunId String?        // set for AI messages — links to the run that produced them
+  analysisRunId String?
   createdAt     DateTime       @default(now())
+
+  @@index([analysisRunId])
+  @@index([convictionId, createdAt])
 }
 
 model AppSettings {
   id        String   @id @default(cuid())
   key       String   @unique
-  value     String   // JSON string
+  value     String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

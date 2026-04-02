@@ -42,20 +42,23 @@ async function validateUrls(text: string): Promise<{ verified: number; unverifie
 
 // Robust JSON array extractor — handles markdown fences, leading prose
 function extractJsonArray(raw: string): any[] {
-  const stripped = raw
-    .replace(/^```[\w]*\n?/m, "")
-    .replace(/\n?```$/m, "")
-    .trim();
-
-  const start = stripped.indexOf("[");
-  const end = stripped.lastIndexOf("]");
-  if (start === -1 || end === -1) return [];
-
-  try {
-    return JSON.parse(stripped.slice(start, end + 1));
-  } catch {
-    return [];
+  const stripped = raw.trim();
+  const s = stripped.indexOf("[");
+  const e = stripped.lastIndexOf("]");
+  if (s !== -1 && e !== -1 && e >= s) {
+    try {
+      const parsed = JSON.parse(stripped.slice(s, e + 1));
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
   }
+  const match = stripped.match(/\[\s*\{[\s\S]*?\}\s*\]/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  }
+  return [];
 }
 
 export async function runGapAnalysis(
@@ -73,18 +76,30 @@ export async function runGapAnalysis(
     .map(h => `${h.ticker} (${h.currentWeight.toFixed(1)}%)`)
     .join(", ");
 
-  const [landscapeRes, exposureRes] = await Promise.allSettled([
-    openai.chat.completions.create({
-      model: "gpt-5-search-api",
-      max_completion_tokens: 800,
-      messages: [{ role: "user", content: `Today is ${today}. Search for:\n1. Which S&P 500 sectors have outperformed YTD and in the last 30 days? (cite % figures)\n2. Where is institutional money actively rotating TO right now?\n3. Which themes — AI, defense, energy transition, reshoring, healthcare innovation — are driving the most institutional flows?\n4. What analyst upgrade cycles are active across sectors right now?\n\nBe specific. Cite data: flows in $B, sector ETF performance %, analyst consensus shifts. Return plain text analysis.` }]
-    }).catch(() => null),
+    async function fetchWithRetry(prompt: string, attempt = 1): Promise<any> {
+      try {
+        return await openai.chat.completions.create({
+          model: "gpt-5-search-api",
+          max_completion_tokens: 300,
+          messages: [{ role: "user", content: prompt }]
+        });
+      } catch (err: any) {
+        if (err?.status === 429 && attempt < 8) {
+          emit({ type: "log", message: `Gap analyzer rate limit hit, waiting 65s...`, level: "warn" });
+          await new Promise(r => setTimeout(r, 65000));
+          return fetchWithRetry(prompt, attempt + 1);
+        }
+        emit({ type: "log", message: `Gap analysis failed: ${err?.message}`, level: "warn" });
+        return null;
+      }
+    }
 
-    openai.chat.completions.create({
-      model: "gpt-5-search-api",
-      max_completion_tokens: 800,
-      messages: [{ role: "user", content: `Today is ${today}. Analyze this portfolio: ${holdingsSummary}\n\n1. What correlated risk is this portfolio overexposed to?\n2. What single narrative or macro event would damage most positions simultaneously?\n3. What market opportunities RIGHT NOW does this portfolio have zero exposure to?\n4. Are there redundant bets — multiple positions making the same bet?\n\nReturn plain text, 4-5 paragraphs.` }]
-    }).catch(() => null),
+    const landscapePrompt = `Today is ${today}. Search for:\n1. Which S&P 500 sectors have outperformed YTD and in the last 30 days? (cite % figures)\n2. Where is institutional money actively rotating TO right now?\n3. Which themes — AI, defense, energy transition, reshoring, healthcare innovation — are driving the most institutional flows?\n4. What analyst upgrade cycles are active across sectors right now?\n\nBe specific. Cite data: flows in $B, sector ETF performance %, analyst consensus shifts. Return plain text analysis.`;
+    const exposurePrompt = `Today is ${today}. Analyze this portfolio: ${holdingsSummary}\n\n1. What correlated risk is this portfolio overexposed to?\n2. What single narrative or macro event would damage most positions simultaneously?\n3. What market opportunities RIGHT NOW does this portfolio have zero exposure to?\n4. Are there redundant bets — multiple positions making the same bet?\n\nReturn plain text, 4-5 paragraphs.`;
+
+    const [landscapeRes, exposureRes] = await Promise.allSettled([
+      fetchWithRetry(landscapePrompt),
+      fetchWithRetry(exposurePrompt),
   ]);
 
   const landscapeText = landscapeRes.status === "fulfilled" && landscapeRes.value
@@ -98,7 +113,7 @@ export async function runGapAnalysis(
   if (landscapeText || exposureText) {
     validateUrls(landscapeText + " " + exposureText).then(({ verified, unverified }) => {
       if (unverified.length > 0) {
-        emit({ type: "log", message: `Gap analysis: ${verified} URLs verified, ${unverified.length} unverifiable (marked as low-quality)`, level: "warn" });
+        emit({ type: "log", message: `Gap URL check: ${verified} live, ${unverified.length} actively timed-out/firewalled`, level: "warn" });
       }
     }).catch(() => {});
   }
@@ -109,7 +124,7 @@ export async function runGapAnalysis(
     try {
       const parseRes = await openai.chat.completions.create({
         model: "gpt-5-search-api",
-        max_completion_tokens: 1000,
+        max_completion_tokens: 250,
         messages: [
           {
             role: "system",

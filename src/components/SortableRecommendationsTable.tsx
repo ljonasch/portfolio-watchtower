@@ -6,12 +6,16 @@ import {
   TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { ConvictionPanel, EvidenceBadge, PositionStatusBadge } from "./ConvictionPanel";
+import type { RecommendationViewModel } from "@/lib/view-models/types";
 
 // ─── Action badge (exported for reuse) ───────────────────────────────────────
+// Now driven by RecommendationViewModel.actionBadgeVariant — no inline classification
 
-export function ActionBadge({ action }: { action: string }) {
-  const isAdd = action === "Buy" || action === "Add";
-  const isSell = action === "Sell" || action === "Exit" || action === "Trim";
+export function ActionBadge({ action, variant }: { action: string; variant?: "buy" | "hold" | "trim" | "sell" | "exit" }) {
+  const v = variant ?? (action === "Buy" ? "buy" : action === "Hold" ? "hold" : action === "Trim" ? "trim" : action === "Sell" ? "sell" : action === "Exit" ? "exit" : "hold");
+  const isAdd = v === "buy";
+  const isSell = v === "sell" || v === "exit";
+  const isTrim = v === "trim";
   return (
     <span
       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
@@ -19,12 +23,14 @@ export function ActionBadge({ action }: { action: string }) {
           ? "bg-green-900/40 text-green-400"
           : isSell
           ? "bg-red-900/40 text-red-400"
+          : isTrim
+          ? "bg-orange-900/40 text-orange-400"
           : "bg-slate-800 text-slate-400"
       }`}
     >
       {isAdd ? (
         <TrendingUp className="w-3 h-3" />
-      ) : isSell ? (
+      ) : isSell || isTrim ? (
         <TrendingDown className="w-3 h-3" />
       ) : (
         <Minus className="w-3 h-3" />
@@ -98,30 +104,9 @@ function WhyChangedCell({ text }: { text: string | null }) {
   );
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-export type RecommendationRow = {
-  id: string;
-  ticker: string;
-  companyName: string | null;
-  role: string | null;
-  targetWeight: number;
-  targetShares: number;
-  shareDelta: number;
-  dollarDelta?: number | null;
-  currentWeight: number;
-  currentShares: number;
-  acceptableRangeLow?: number | null;
-  acceptableRangeHigh?: number | null;
-  action: string;
-  confidence?: string | null;
-  positionStatus?: string | null;
-  evidenceQuality?: string | null;
-  whyChanged?: string | null;
-  thesisSummary?: string | null;
-  detailedReasoning?: string | null;
-  valueDelta: number;
-};
+// Use RecommendationViewModel from view-model layer (Batch 4)
+// RecommendationRow kept as an alias for backward compatibility during transition
+export type RecommendationRow = RecommendationViewModel;
 
 export type ConvictionRow = {
   ticker: string;
@@ -158,6 +143,7 @@ export function SortableRecommendationsTable({
     }
   };
 
+  // Default sort: use sortPriority from ViewModel (locked order from formatters.ts)
   const sortedRecs = [...recommendations].sort((a, b) => {
     const vals: Record<SortKey, [any, any]> = {
       ticker:        [a.ticker, b.ticker],
@@ -167,7 +153,7 @@ export function SortableRecommendationsTable({
       shareDelta:    [a.shareDelta, b.shareDelta],
       dollarDelta:   [a.dollarDelta ?? 0, b.dollarDelta ?? 0],
       currentWeight: [a.currentWeight, b.currentWeight],
-      action:        [a.action, b.action],
+      action:        [a.sortPriority ?? 4, b.sortPriority ?? 4],  // use VM sort priority for action column
       confidence:    [a.confidence ?? "", b.confidence ?? ""],
     };
     const [aVal, bVal] = vals[sortKey];
@@ -232,17 +218,17 @@ export function SortableRecommendationsTable({
           </thead>
           <tbody className="divide-y divide-slate-800/80 bg-slate-900/20">
             {sortedRecs.map(rec => {
-              const isNew = rec.currentShares === 0 && rec.action === "Buy";
+              const isNew = rec.isNewPosition;
               const hasConviction = convictionMap.has(rec.ticker);
-              const isSell = rec.action === "Sell" || rec.action === "Exit" || rec.action === "Trim";
+              const isSell = rec.actionBadgeVariant === "sell" || rec.actionBadgeVariant === "exit" || rec.actionBadgeVariant === "trim";
 
               return (
-                <tr
-                  key={rec.id}
-                  className={`hover:bg-slate-800/30 transition-colors align-top ${
-                    isNew ? "bg-green-950/10" : isSell ? "bg-red-950/10" : ""
-                  } ${hasConviction ? "border-l-2 border-l-amber-500/40" : ""}`}
-                >
+                  <tr
+                    key={rec.id}
+                    className={`hover:bg-slate-800/30 transition-colors align-top ${
+                      isNew ? "bg-green-950/10" : isSell ? "bg-red-950/10" : ""
+                    }`}
+                  >
                   {/* Ticker */}
                   <td className="px-3 py-3">
                     <div className="flex flex-col gap-1">
@@ -283,7 +269,10 @@ export function SortableRecommendationsTable({
 
                   {/* Action */}
                   <td className="px-3 py-3">
-                    <ActionBadge action={rec.action} />
+                    <ActionBadge action={rec.action} variant={rec.actionBadgeVariant} />
+                    {rec.isFractionalRebalance && (
+                      <span className="ml-1 text-[9px] text-slate-500 italic">rebalance</span>
+                    )}
                   </td>
 
                   {/* Confidence */}

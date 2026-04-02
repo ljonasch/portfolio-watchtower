@@ -6,12 +6,16 @@
  *   - Manual "Run daily check now" button (debug trigger)
  * 
  * Trigger types: "scheduled" | "manual" | "debug"
+ *
+ * Batch 7 fixes:
+ *   - Removed duplicate staging AnalysisRun.create (Batch 5 orchestrator owns it)
+ *   - Email runId now tied to result.runId (confirmed run, not a pre-created stub)
+ *   - Idempotency check: skips email if NotificationEvent already exists for (runId, recipient, type)
+ *   - latestReport and snapshot scoped to user.id (cross-user data leak prevention)
  */
 
 import { prisma } from "./prisma";
-import { generatePortfolioReport } from "./analyzer";
-import { compareRecommendations } from "./comparator";
-import { evaluateAlert } from "./alerts";
+import { runFullAnalysis } from "./research/analysis-orchestrator";
 import { sendMail } from "./mailer";
 import { renderDailyAlertEmail } from "./email-templates";
 
@@ -35,28 +39,17 @@ export async function runDailyCheck(opts: {
     console.warn(`[scheduler] Cleaned up ${zombieCount.count} zombie run(s).`);
   }
 
-  // Use the snapshot from the latest CONFIRMED report as ground truth
-  const latestReport = await prisma.portfolioReport.findFirst({
-    orderBy: { createdAt: "desc" },
-    include: { snapshot: { include: { holdings: true } }, recommendations: true },
-  });
-  const snapshot = latestReport?.snapshot ?? await prisma.portfolioSnapshot.findFirst({
+  // Batch 7: scope snapshot and latestReport to current user
+  const snapshot = await prisma.portfolioSnapshot.findFirst({
+    where: { userId: user.id },
     orderBy: { createdAt: "desc" },
     include: { holdings: true },
   });
   if (!snapshot) throw new Error("No portfolio snapshot found.");
 
-  // Create the AnalysisRun audit record
-  const run = await prisma.analysisRun.create({
-    data: {
-      userId: user.id,
-      snapshotId: snapshot.id,
-      triggerType,
-      triggeredBy,
-      status: "running",
-      profileSnapshot: JSON.stringify(user.profile),
-    },
-  });
+  // Batch 5+7: DO NOT pre-create an AnalysisRun here.
+  // The orchestrator (runFullAnalysis) creates its own staging run before the LLM call.
+  // Passing existingRunId caused a double-run record; the orchestrator now owns the run lifecycle.
 
   try {
     const settingsObj = await prisma.appSettings.findFirst({ where: { key: "portfolio_config" } });
@@ -68,7 +61,7 @@ export async function runDailyCheck(opts: {
     let topOfTheMinuteHoldings = snapshot.holdings;
     try {
       if (tickersToEnrich.length > 0) {
-        onProgress?.(1); // Signify fetching market data
+        onProgress?.(1);
         const livePrices: Record<string, number> = await Promise.race([
           enrichPricesWithLLM(tickersToEnrich),
           new Promise((_, reject) => setTimeout(() => reject(new Error("Yahoo Finance timeout")), 10000))
@@ -92,165 +85,25 @@ export async function runDailyCheck(opts: {
       console.warn("Pricing live-fetch failed during scheduled run, falling back to db values.", e);
     }
 
-    // Load user convictions (with full message threads) for injection into the analysis prompt
-    const convictions = await (prisma as any).userConviction.findMany({
-      where: { userId: user.id, active: true },
-      orderBy: { updatedAt: 'desc' },
-      include: { messages: { orderBy: { createdAt: 'asc' } } },
-    });
-    // T6.2 — Conviction thread truncation: cap to last 10 messages to prevent token overflow
-    const MAX_CONVICTION_MSGS = 10;
-    const convictionInputs = convictions.map((c: any) => {
-      const allMsgs: any[] = c.messages ?? [];
-      const truncated = allMsgs.length > MAX_CONVICTION_MSGS
-        ? allMsgs.slice(allMsgs.length - MAX_CONVICTION_MSGS)
-        : allMsgs;
-      if (allMsgs.length > MAX_CONVICTION_MSGS) {
-        console.warn(`[scheduler] Conviction ${c.ticker}: truncated ${allMsgs.length} → ${MAX_CONVICTION_MSGS} messages for prompt.`);
-      }
-      return {
-        ticker: c.ticker,
-        rationale: c.rationale,
-        messages: truncated.map((m: any) => ({
-          role: m.role as 'user' | 'ai',
-          content: m.content,
-          createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : m.createdAt,
-        })),
-      };
-    });
-
-    // Run the full analysis (with live search + AI + conviction injection + full thread history)
-    const reportData = await generatePortfolioReport(
-      topOfTheMinuteHoldings,
-      user.profile,
-      settings,
-      onProgress,
-      latestReport?.recommendations,
-      undefined, // no customPrompt on scheduled runs
-      convictionInputs
+    // Batch 7: do NOT pass existingRunId — orchestrator creates and owns its staging run
+    const result = await runFullAnalysis(
+      snapshot.id,
+      undefined,
+      (event: any) => {
+        if (event.type === "log") {
+          console.log(`[scheduler-ai] ${event.message}`);
+        } else if (event.type === "stage_start") {
+          console.log(`[scheduler-ai] >>> Starting Stage: ${event.label} - ${event.detail}`);
+        }
+      },
+      triggerType as any,
+      triggeredBy,
+      // no existingRunId
     );
 
-    // Store the report
-    const seenTickers = new Set<string>();
-    const deduped = reportData.recommendations.filter((r) => {
-      if (seenTickers.has(r.ticker)) return false;
-      seenTickers.add(r.ticker);
-      return true;
-    });
-
-    const report = await prisma.portfolioReport.create({
-      data: {
-        userId: user.id,
-        snapshotId: snapshot.id,
-        analysisRunId: run.id,
-        summary: reportData.summary,
-        reasoning: reportData.reasoning,
-        marketContext: JSON.stringify(reportData.marketContext ?? { shortTerm: [], mediumTerm: [], longTerm: [] }),
-        recommendations: {
-          create: deduped.map((r) => ({
-            ticker: r.ticker,
-            companyName: r.companyName,
-            role: r.role,
-            currentShares: r.currentShares,
-            targetShares: r.targetShares,
-            shareDelta: r.shareDelta,
-            dollarDelta: r.dollarDelta,
-            currentWeight: r.currentWeight,
-            targetWeight: r.targetWeight,
-            acceptableRangeLow: r.acceptableRangeLow,
-            acceptableRangeHigh: r.acceptableRangeHigh,
-            valueDelta: r.valueDelta,
-            action: r.action,
-            confidence: r.confidence,
-            positionStatus: r.positionStatus,
-            evidenceQuality: r.evidenceQuality,
-            thesisSummary: r.thesisSummary,
-            detailedReasoning: r.detailedReasoning,
-            whyChanged: r.whyChanged,
-            reasoningSources: JSON.stringify(r.reasoningSources ?? []),
-          })),
-        },
-      },
-      include: { recommendations: true },
-    });
-
-    // ── Save AI conviction replies back to the thread (T6.1 guarded) ──────────
-    // Only save an AI message if the detailedReasoning actually contains a
-    // conviction acknowledgment. This prevents every ticker's reasoning from
-    // being blindly saved as a conviction message.
-    const CONVICTION_MARKERS = /ACKNOWLEDGMENT:|COUNTERPOINT:|AGREEMENT:/i;
-    if (convictions.length > 0) {
-      const recByTicker = new Map(report.recommendations.map((r: any) => [r.ticker, r]));
-      for (const conviction of convictions as any[]) {
-        const rec = recByTicker.get(conviction.ticker);
-        if (!rec?.detailedReasoning) continue;
-        const raw: string = rec.detailedReasoning;
-        // T6.1 guard: only save if the AI actually addressed the conviction
-        if (!CONVICTION_MARKERS.test(raw)) {
-          console.warn(`[scheduler] Conviction ${conviction.ticker}: no acknowledgment marker in detailedReasoning — skipping AI message save.`);
-          continue;
-        }
-        await (prisma as any).convictionMessage.create({
-          data: {
-            convictionId: conviction.id,
-            role: 'ai',
-            content: raw.trim(),
-            analysisRunId: run.id,
-          },
-        });
-      }
-    }
-
-    // Compare with prior run
-    const priorRecs = latestReport?.recommendations ?? [];
-    const changes = compareRecommendations(priorRecs, report.recommendations);
-
-    // Store change logs
-    if (changes.length > 0) {
-      await prisma.recommendationChangeLog.createMany({
-        data: changes.map((c) => ({
-          runId: run.id,
-          ticker: c.ticker,
-          companyName: c.companyName,
-          priorAction: c.priorAction,
-          newAction: c.newAction,
-          priorRole: c.priorRole,
-          newRole: c.newRole,
-          priorTargetShares: c.priorTargetShares,
-          newTargetShares: c.newTargetShares,
-          sharesDelta: c.sharesDelta,
-          priorWeight: c.priorWeight,
-          newWeight: c.newWeight,
-          changed: c.changed,
-          evidenceDriven: c.evidenceDriven,
-          changeReason: c.changeReason,
-          whyChanged: c.whyChanged,
-        })),
-      });
-    }
-
-    // Evaluate alert level
-    const alert = evaluateAlert(changes, report.recommendations, user.profile, null);
-
-    // Extract metadata attached by analyzer
-    const meta = (reportData as any)._meta ?? {};
-
-    // Update the run record with MVP 3 metadata
-    await prisma.analysisRun.update({
-      where: { id: run.id },
-      data: {
-        status: "complete",
-        alertLevel: alert.level,
-        alertReason: alert.reason,
-        profileSnapshot: meta.frozenProfileJson ?? JSON.stringify(user.profile),
-        portfolioMathSummary: JSON.stringify(reportData.portfolioMath ?? {}),
-        sourceQualitySummary: JSON.stringify(meta.sourceQualitySummary ?? {}),
-        completedAt: new Date(),
-      },
-    });
-
     // Send email notifications if warranted
-    if (alert.shouldEmailDaily) {
+    const shouldEmailDaily = result.alertLevel === "red" || result.alertLevel === "yellow";
+    if (shouldEmailDaily) {
       const recipients = await prisma.notificationRecipient.findMany({
         where: { userId: user.id, active: true },
       });
@@ -259,42 +112,57 @@ export async function runDailyCheck(opts: {
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
       for (const recipient of recipients) {
+        // Batch 7: Idempotency check — skip if already sent for this run + recipient + type
+        const alreadySent = await prisma.notificationEvent.findFirst({
+          where: {
+            userId: user.id,
+            runId: result.runId,
+            recipient: recipient.email,
+            type: "daily_alert",
+            status: "sent",
+          },
+        });
+        if (alreadySent) {
+          console.log(`[scheduler] Skipping duplicate email to ${recipient.email} for run ${result.runId}`);
+          continue;
+        }
+
         const { subject, html } = renderDailyAlertEmail({
-          reportId: report.id,
-          alertLevel: alert.level as any,
-          alertReason: alert.reason,
-          changes,
-          recommendations: report.recommendations,
+          reportId: result.reportId,
+          alertLevel: result.alertLevel as any,
+          alertReason: result.alertReason ?? "",
+          changes: result.changes,
+          recommendations: result.report.recommendations,
           profile: user.profile,
           runDate: today,
-          reportSummary: report.summary ?? undefined,
-          reportReasoning: report.reasoning ?? undefined,
+          reportSummary: result.report.summary ?? undefined,
+          reportReasoning: result.report.reasoning ?? undefined,
           appUrl,
         });
 
-        const result = await sendMail({ to: recipient.email, subject, html });
+        const mailRes = await sendMail({ to: recipient.email, subject, html });
 
         await prisma.notificationEvent.create({
           data: {
             userId: user.id,
-            runId: run.id,
+            runId: result.runId,       // Batch 7: confirmed run (not pre-created stub)
+            reportId: result.reportId, // Batch 7: wire reportId
             type: "daily_alert",
             channel: "email",
             recipient: recipient.email,
             subject,
-            status: result.ok ? "sent" : "failed",
-            errorMessage: result.error,
+            status: mailRes.ok ? "sent" : "failed",
+            errorMessage: mailRes.error,
           },
         });
       }
     }
 
-    return { runId: run.id, reportId: report.id, alertLevel: alert.level };
+    return { runId: result.runId, reportId: result.reportId, alertLevel: result.alertLevel };
   } catch (err: any) {
-    await prisma.analysisRun.update({
-      where: { id: run.id },
-      data: { status: "failed", errorMessage: err?.message, completedAt: new Date() },
-    });
+    // Batch 7: orchestrator owns its own staging run error state.
+    // Log here but do not double-update — orchestrator already marks status="failed"/"abstained".
+    console.error(`[scheduler] runDailyCheck failed: ${err?.message}`);
     throw err;
   }
 }

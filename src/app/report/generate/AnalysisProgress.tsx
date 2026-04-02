@@ -15,9 +15,7 @@ interface LiveTicker {
   ticker: string;
   sentiment?: { direction: "buy" | "hold" | "sell"; magnitude: number; confidence: number };
   gpt5?: { action: string; confidence: string };
-  o3?: { action: string; confidence: string };
   finalAction?: string;
-  diverged?: boolean;
   isCandidate?: boolean;
   eliminated?: boolean;
   eliminatedReason?: string;
@@ -51,8 +49,7 @@ const PIPELINE_STAGES = [
   { id: "candidates",   icon: Search,     label: "Candidate Screening",      color: "text-purple-400", bgColor: "bg-purple-500/10 border-purple-800/30" },
   { id: "stage1",       icon: Globe,      label: "News & Price Research",    color: "text-blue-400",   bgColor: "bg-blue-500/10 border-blue-800/30" },
   { id: "sentiment",    icon: Activity,   label: "Sentiment Scoring",        color: "text-cyan-400",   bgColor: "bg-cyan-500/10 border-cyan-800/30" },
-  { id: "stage3",       icon: Brain,      label: "Parallel AI Reasoning",    color: "text-indigo-400", bgColor: "bg-indigo-500/10 border-indigo-800/30" },
-  { id: "stage4",       icon: BarChart2,  label: "Signal Aggregation",       color: "text-green-400",  bgColor: "bg-green-500/10 border-green-800/30" },
+  { id: "stage3",       icon: Brain,      label: "Primary AI Reasoning",     color: "text-indigo-400", bgColor: "bg-indigo-500/10 border-indigo-800/30" },
   { id: "stage5",       icon: Archive,    label: "Saving Results",           color: "text-slate-400",  bgColor: "bg-slate-500/10 border-slate-700/30" },
 ];
 
@@ -98,7 +95,6 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
   const [gaps, setGaps]                     = useState<Gap[]>([]);
   const [tickers, setTickers]               = useState<Map<string, LiveTicker>>(new Map());
   const [logs, setLogs]                     = useState<LiveLog[]>([]);
-  const [divergences, setDivergences]       = useState<{ ticker: string; note: string }[]>([]);
   const [error, setError]                   = useState<string | null>(null);
   const [done, setDone]                     = useState(false);
   const [startTs]                           = useState(Date.now());
@@ -114,6 +110,37 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
+
+  // Navigation guard to prevent accidental cancellation
+  useEffect(() => {
+    if (done || error) return;
+
+    // 1. Warn on tab close or page reload
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "Analysis is still running. If you leave, the run will be cancelled. Are you sure?";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    // 2. Intercept internal Next.js <Link> routing
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const anchor = target.closest("a");
+      // Only intercept local links
+      if (anchor && anchor.href && !anchor.hasAttribute("target") && anchor.host === window.location.host) {
+        if (!window.confirm("Analysis is currently running. If you navigate away, this run will be cancelled. Are you sure you want to leave?")) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }
+    };
+    document.addEventListener("click", handleClick, true); // capture phase
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("click", handleClick, true);
+    };
+  }, [done, error]);
 
   // Stream connection
   useEffect(() => {
@@ -218,19 +245,14 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
         break;
 
       case "model_verdict":
+        // Only gpt5 model verdicts are emitted in the new single-LLM pipeline
         if (ev.model === "gpt5") updateTicker(ev.ticker, { gpt5: { action: ev.action, confidence: ev.confidence } });
-        if (ev.model === "o3mini") updateTicker(ev.ticker, { o3: { action: ev.action, confidence: ev.confidence } });
-        addLog(`${ev.model === "gpt5" ? "🤖 GPT-5.4" : "🧠 o3-mini"} ${ev.ticker}: ${ev.action} (${ev.confidence}) — ${ev.keyReason.slice(0, 80)}`);
+        addLog(`🤖 GPT-5.4 ${ev.ticker}: ${ev.action} (${ev.confidence}) — ${ev.keyReason.slice(0, 80)}`);
         break;
 
-      case "model_divergence":
-        updateTicker(ev.ticker, { diverged: true });
-        setDivergences(prev => [...prev, { ticker: ev.ticker, note: ev.note }]);
-        addLog(`⚡ DIVERGENCE ${ev.ticker}: GPT-5.4=${ev.gpt5Action} vs o3=${ev.o3Action} vs sentiment=${ev.sentimentDirection} | ${ev.note}`, "warn");
-        break;
-
-      case "aggregated_signal":
-        updateTicker(ev.ticker, { finalAction: ev.finalAction, diverged: ev.diverged });
+      case "adjudicator_note":
+        // Gated adjudicator fired for low-conf/low-evidence tickers — diagnostic only
+        addLog(`🔍 Adjudicator notes for [${ev.tickers.join(", ")}]: diagnostic only, no action change`, "info");
         break;
 
       case "log":
@@ -281,9 +303,6 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
             Elapsed: {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}
-            {divergences.length > 0 && (
-              <span className="ml-3 text-amber-400">⚡ {divergences.length} model divergence{divergences.length !== 1 ? "s" : ""} detected</span>
-            )}
           </p>
         </div>
       </div>
@@ -353,18 +372,6 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
               </div>
             </div>
           )}
-
-          {/* Divergences */}
-          {divergences.length > 0 && (
-            <div className="rounded-xl border border-amber-900/40 bg-amber-950/10 p-3 space-y-1.5">
-              <p className="text-xs font-semibold text-amber-400 flex items-center gap-1.5"><ShieldAlert className="w-3 h-3" /> Model Divergences</p>
-              {divergences.map((d, i) => (
-                <div key={i} className="text-[10px] text-amber-200/70">
-                  <span className="font-bold text-amber-300">{d.ticker}</span>: {d.note.slice(0, 100)}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Middle column: Live ticker scores */}
@@ -378,13 +385,11 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
               </p>
               <div className="space-y-1">
                 {heldTickers.map(t => (
-                  <div key={t.ticker} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs ${t.diverged ? "bg-amber-950/20 border border-amber-900/30" : "bg-slate-800/30"}`}>
+                  <div key={t.ticker} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs bg-slate-800/30">
                     <span className="font-bold text-slate-200 w-12 flex-shrink-0">{t.ticker}</span>
                     {t.sentiment && <DirectionIcon direction={t.sentiment.direction} />}
                     {t.gpt5 && <ActionBadge action={t.gpt5.action} />}
-                    {t.o3 && <span className="text-[9px] text-slate-500 flex-shrink-0">o3:{t.o3.action}</span>}
                     {t.finalAction && !t.gpt5 && <ActionBadge action={t.finalAction} />}
-                    {t.diverged && <Zap className="w-3 h-3 text-amber-400 flex-shrink-0 ml-auto" />}
                     {t.sentiment && (
                       <div className="ml-auto flex items-center gap-1">
                         <div className="w-10 h-1 rounded-full bg-slate-700 overflow-hidden">
@@ -407,13 +412,11 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
               </p>
               <div className="space-y-1">
                 {candidateList.map(t => (
-                  <div key={t.ticker} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs ${t.diverged ? "bg-amber-950/15 border border-amber-900/20" : "bg-slate-800/20"}`}>
+                  <div key={t.ticker} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs bg-slate-800/20">
                     <span className="font-bold text-purple-300 w-12 flex-shrink-0">{t.ticker}</span>
                     <span className="text-[9px] text-purple-600 flex-shrink-0">NEW</span>
                     {t.sentiment && <DirectionIcon direction={t.sentiment.direction} />}
                     {t.gpt5 && <ActionBadge action={t.gpt5.action} />}
-                    {t.o3 && <span className="text-[9px] text-slate-500">o3:{t.o3.action}</span>}
-                    {t.diverged && <Zap className="w-3 h-3 text-amber-400 flex-shrink-0 ml-auto" />}
                   </div>
                 ))}
               </div>

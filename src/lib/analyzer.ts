@@ -5,6 +5,8 @@
  */
 
 import OpenAI from "openai";
+import { withRetry } from "./research/retry";
+import { prisma } from "./prisma";
 
 // Re-export types for consumers (backwards-compatible)
 export type { Source } from "./research/types";
@@ -177,6 +179,7 @@ Check before finalizing:
 
 PHASE 5 — RECOMMENDATIONS WITH ATTRIBUTION
 For every position (existing + new):
+- YOU MUST RETURN A RECOMMENDATION FOR EVERY SINGLE TICKER LISTED IN SECTION C! Do not skip or omit ANY existing holding. Your "recommendations" JSON array must contain at least ${holdings.length} items.
 - thesisSummary: 1-2 dense, source-backed sentences. No generic statements.
 - detailedReasoning: organized as SHORT-TERM (0-3mo) / MID-TERM (3-18mo) / LONG-TERM (18mo+). For conviction tickers, you MUST start the detailedReasoning with one of: "ACKNOWLEDGMENT:", "COUNTERPOINT:", or "AGREEMENT:" — this is required for the response to be saved to the dialogue thread. Without it, the user will never see your reply.
 - whyChanged: MUST explain change vs prior. If no prior: state "No prior recommendation." If changed: cite specific evidence/event that drove it.
@@ -188,6 +191,7 @@ CRITICAL MATH (enforced):
 2. shareDelta = targetShares - currentShares (exact, not estimated)  
 3. If you reduce one position, INCREASE another — no money disappears
 4. New position: currentShares=0, currentWeight=0, action="Buy", shareDelta=targetShares
+5. MATH ADJUSTMENTS: If you are making a tiny fractional share adjustment (<2% target weight shift) strictly to balance the 100% portfolio math, KEEP the action as "Hold". DO NOT label it "Trim" or "Buy". Only use "Trim" or "Buy" for deliberate, research-driven strategic changes!
 
 SOURCE RULES:
 - ONLY cite URLs from the verified list above, Yahoo Finance quote pages, or major publication homepages
@@ -308,7 +312,7 @@ export async function generatePortfolioReport(
   profile: Record<string, any>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   settings: Record<string, any>,
-  onProgress?: (step: number) => void,
+  onProgress?: (step: number, customMessage?: string) => void,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   priorRecommendations?: any[],
   customPrompt?: string,
@@ -324,13 +328,28 @@ export async function generatePortfolioReport(
   // Step 1: Build research context (pure, deterministic)
   const ctx = buildResearchContext({ profile, holdings, priorRecommendations, customPrompt });
 
-  // Step 2: Fetch live news with 55s hard timeout (4 parallel searches now)
-  const { combinedSummary, allSources, usingFallback, breaking24h } = await Promise.race([
-    fetchAllNewsWithFallback(openai, ctx.holdings.map(h => h.ticker), ctx.today, onProgress),
-    new Promise<{ combinedSummary: string; allSources: Source[]; usingFallback: boolean; breaking24h: string }>(
-      (resolve) => setTimeout(() => resolve({ combinedSummary: "", allSources: [], usingFallback: true, breaking24h: "" }), 55000)
-    ),
-  ]);
+  // Step 2: Fetch live news — SKIP when orchestrator already injected additionalContext (F6: removes duplicate fetch)
+  let combinedSummary = "";
+  let allSources: Source[] = [];
+  let usingFallback = false;
+  let breaking24h = "";
+
+  if (!additionalContext) {
+    // Standalone call (no orchestrator): fetch news ourselves with 55s timeout
+    const newsResult = await Promise.race([
+      fetchAllNewsWithFallback(openai, ctx.holdings.map(h => h.ticker), ctx.today, onProgress),
+      new Promise<{ combinedSummary: string; allSources: Source[]; usingFallback: boolean; breaking24h: string }>(
+        (resolve) => setTimeout(() => resolve({ combinedSummary: "", allSources: [], usingFallback: true, breaking24h: "" }), 55000)
+      ),
+    ]);
+    combinedSummary = newsResult.combinedSummary;
+    allSources = newsResult.allSources;
+    usingFallback = newsResult.usingFallback;
+    breaking24h = (newsResult as any).breaking24h ?? "";
+  } else {
+    // Orchestrator already fetched and injected news via additionalContext — skip redundant fetch
+    usingFallback = false;
+  }
 
   // Step 3: Filter to high-quality sources, deduplicate
   const trustedSources = filterToTrustedSources(deduplicateSources(allSources));
@@ -351,7 +370,7 @@ ${breaking24h}
     : "";
 
   const thirtyDaySection = combinedSummary.trim()
-    ? `=== VERIFIED CURRENT NEWS (last 30 days — ${ctx.today}) ===\n${combinedSummary}\n=== END CURRENT NEWS ===`
+    ? `=== VERIFIED CURRENT NEWS (last 30 days — ${ctx.today}) ===\n${combinedSummary.slice(0, 2000)}\n=== END CURRENT NEWS ===`
     : "";
 
   const newsSection = [
@@ -360,28 +379,46 @@ ${breaking24h}
   ].filter(Boolean).join("\n\n") ||
     `[NO LIVE NEWS: Primary search returned no content. Lower confidence across all company-specific recommendations. Do not fabricate news events.]`;
 
-  // Step 4: Build prompt and call LLM
+  // Step 4a: Dynamic max_completion_tokens (Batch 3 — replaces hardcoded value)
+  // Formula: min(holdingCount × 500 + 1500, 16000)
+  // 16 tickers → 9500 tokens, well above the old 6000 cap that caused abstains on large portfolios.
+  // Ceiling 16000 prevents runaway cost on arbitrarily large uploads.
+  const holdingCount = ctx.holdings.filter(h => !h.isCash).length;
+  const dynamicMaxTokens = Math.min(holdingCount * 500 + 1500, 16000);
+
+  // Batch 6: Read validation_enforce_block from AppSettings once before the LLM call.
+  // Batch 9 / T47: Read antichurn_threshold_pct from AppSettings — NOT a hardcoded literal.
+  // Default 1.5% if key is missing (backward-compatible with deployments pre-Batch-9).
+  const [enforceBlockSetting, antichurnSetting] = await Promise.all([
+    prisma.appSettings.findUnique({ where: { key: "validation_enforce_block" } }),
+    prisma.appSettings.findUnique({ where: { key: "antichurn_threshold_pct" } }),
+  ]);
+  const validationEnforceBlock = enforceBlockSetting?.value === "true";
+  const antichurnThresholdPct = parseFloat(antichurnSetting?.value ?? "1.5");
+  const safeAntichurnThreshold = isNaN(antichurnThresholdPct) ? 1.5 : antichurnThresholdPct;
+
+  // Step 4b: Build prompt and call LLM with single retry on JSON parse failure
+  // (Replaces prohibited 8-attempt multi-model waterfall — Batch 3)
   onProgress?.(3);
   const prompt = buildAnalysisPrompt(ctx, newsSection, trustedSources, convictions ?? [], usingFallback);
 
   // Prepend orchestrator-provided context (regime, sentiment, price reactions, candidates)
   const fullPrompt = additionalContext
-    ? `${additionalContext}\n\n${
-        // Only include the 30-day news from the prompt if orchestrator hasn't already injected it
-        prompt
-      }`
+    ? `${additionalContext}\n\n${prompt}`
     : prompt;
 
   let response: any = null;
-  let content = "";
-  
-  // Rate-limit retry loop (TPM bucket refill for gpt-5.4 alias)
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      response = await openai.chat.completions.create({
-        model: "gpt-5-search-api",
-        // Lower requested tokens to avoid instant TPM rejection if limit is exactly 6000
-        max_completion_tokens: 4000,
+  let rawParsed: Partial<PortfolioReportV3> | null = null;
+  let llmRetryCount = 0;  // Batch 5: track actual retry count for qualityMeta
+
+  // Single model (gpt-4.1), 1 retry on JSON parse failure only.
+  // finish_reason === "length" → hard fail immediately (AbstainResult in orchestrator).
+  await withRetry<void>(
+    async (attemptNumber: number) => {
+      llmRetryCount = attemptNumber - 1;  // attemptNumber is 1-indexed
+      const payload: any = {
+        model: "gpt-5.4",
+        max_completion_tokens: dynamicMaxTokens,
         response_format: {
           type: "json_schema",
           json_schema: { name: "portfolio_report_v3", strict: true, schema: REPORT_JSON_SCHEMA },
@@ -395,39 +432,57 @@ ${breaking24h}
 - All targetWeight values MUST sum to exactly 100%.
 - shareDelta must equal targetShares minus currentShares exactly.
 - Every user conviction must be explicitly acknowledged and responded to.
-- If you reduce one position's weight, redistribute that weight elsewhere.
-- For long-term reasoning (18mo+): use as role justification only, not as basis for trade direction.
-- Short-term evidence (specific facts, named events) carries full weight.
-- Mid-term evidence carries 60% weight. Long-term thesis alone cannot justify Buy/Sell.`,
+- If you reduce one position's weight, redistribute that weight elsewhere.`,
           },
           { role: "user", content: fullPrompt },
         ],
-      });
-      content = response.choices[0]?.message?.content;
-      if (!content) throw new Error(`LLM returned empty response. Finish reason: ${response.choices[0]?.finish_reason || "unknown"}`);
-      break; // Success
-    } catch (err: any) {
-      if (err?.status === 429 && attempt < 3) {
-        onProgress?.(4); // Or emit a rate-limit waiting status
-        const waitMs = 65000; // wait 65s for the 1-minute bucket to fully refill
-        console.warn(`[analyzer] Rate limit hit (attempt ${attempt}/3). Waiting ${waitMs / 1000}s...`);
-        await new Promise(r => setTimeout(r, waitMs));
-      } else {
-        throw err;
-      }
-    }
-  }
+      };
 
-  let rawParsed: Partial<PortfolioReportV3>;
-  try {
-    rawParsed = JSON.parse(content);
-  } catch {
-    throw new Error("Failed to parse LLM JSON response.");
+      response = await openai.chat.completions.create(payload);
+
+      // Batch 3: finish_reason === "length" → hard fail BEFORE parse — no persist
+      const finishReason = response.choices[0]?.finish_reason;
+      if (finishReason === "length") {
+        throw new Error(
+          `finish_reason_length: Model output was truncated (max_completion_tokens=${dynamicMaxTokens}). Analysis aborted.`
+        );
+      }
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error(`LLM returned empty response. Finish reason: ${finishReason ?? "unknown"}`);
+      }
+
+      const cleanContent = content.replace(/```[a-z]*\n?/gi, "").replace(/```$/gi, "").trim();
+      rawParsed = JSON.parse(cleanContent);
+    },
+    {
+      maxAttempts: 2,           // Primary call + 1 retry on JSON parse failure
+      backoffMs: 10000,         // 10s backoff on retry
+      abortOnLengthError: true, // finish_reason=length → no retry
+    }
+  );
+
+  if (!rawParsed) {
+    throw new Error("Failed to generate and parse valid portfolio report JSON after retry.");
   }
+  const parsedReport = rawParsed as Partial<PortfolioReportV3>;
 
   // Step 5: Validate and deterministically correct
   const validation = validatePortfolioReport(rawParsed, ctx.totalValue);
-  if (validation.errors.length > 0) console.warn("[analyzer] Validation errors:", validation.errors);
+  if (validation.errors.length > 0) {
+    // Batch 6: Hard errors present
+    if (validationEnforceBlock) {
+      // Enforce mode: throw immediately so the orchestrator persists AbstainResult
+      const errorSummary = validation.errors.map(e => `${e.field}: ${e.message}`).join("; ");
+      throw new Error(
+        `validation_enforce_block: Report failed validation with ${validation.errors.length} hard error(s): ${errorSummary}`
+      );
+    } else {
+      // Log-only mode: record errors but continue with best-effort correction
+      console.warn("[analyzer] Validation errors (enforce=false, proceeding with correction):", validation.errors);
+    }
+  }
   if (validation.warnings.length > 0) console.warn("[analyzer] Corrected:", validation.warnings);
 
   let recommendations = (validation.correctedReport?.recommendations ?? []) as RecommendationV3[];
@@ -457,25 +512,42 @@ ${breaking24h}
     }
   }
 
+  // Deterministic Anti-Churn Override:
+  // T47: threshold is read from AppSettings at runtime (antichurn_threshold_pct), not a literal.
+  // Default 1.5%. If the model labeled Trim/Buy just to fractionally balance < threshold, override to Hold.
+  for (const rec of recommendations) {
+    const weightShift = (rec.targetWeight || 0) - (rec.currentWeight || 0);
+    if ((rec.action === "Trim" || rec.action === "Buy") && Math.abs(weightShift) < safeAntichurnThreshold && rec.targetShares > 0 && rec.currentShares > 0) {
+      rec.action = "Hold";
+      rec.whyChanged = (rec.whyChanged || "") + ` (Action normalized to Hold: |∆weight| ${Math.abs(weightShift).toFixed(2)}% < antichurn threshold ${safeAntichurnThreshold}%).`;
+    }
+  }
+
   const portfolioMath = buildPortfolioMathSummary(recommendations, ctx);
 
   const report: PortfolioReportV3 = {
-    summary: rawParsed.summary ?? "",
-    reasoning: rawParsed.reasoning ?? "",
-    evidenceQualitySummary: rawParsed.evidenceQualitySummary ?? "",
-    marketContext: rawParsed.marketContext ?? { shortTerm: [], mediumTerm: [], longTerm: [] },
+    summary: parsedReport.summary ?? "",
+    reasoning: parsedReport.reasoning ?? "",
+    evidenceQualitySummary: parsedReport.evidenceQualitySummary ?? "",
+    marketContext: parsedReport.marketContext ?? { shortTerm: [], mediumTerm: [], longTerm: [] },
     portfolioMath,
     recommendations,
-    watchlistIdeas: (rawParsed.watchlistIdeas ?? []) as WatchlistIdeaV3[],
+    watchlistIdeas: (parsedReport.watchlistIdeas ?? []) as WatchlistIdeaV3[],
   };
 
-  // Attach metadata for scheduler to persist
+  // Attach metadata for scheduler to persist (Batch 5: added model telemetry)
   (report as any)._meta = {
     sourceQualitySummary: sourceQuality,
     frozenProfileJson: ctx.frozenProfileJson,
     usingFallback,
     validationErrors: validation.errors,
     validationWarnings: validation.warnings,
+    // Batch 5: token telemetry wired from OpenAI response.usage
+    modelUsed: response?.model ?? "gpt-4.1",
+    inputTokens: response?.usage?.prompt_tokens ?? null,
+    outputTokens: response?.usage?.completion_tokens ?? null,
+    retryCount: llmRetryCount,
+    validationWarningCount: validation.warnings.length,
   };
 
   return report;

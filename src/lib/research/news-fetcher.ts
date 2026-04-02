@@ -121,15 +121,23 @@ const SEARCH_MODELS = ["gpt-5-search-api", "gpt-4o-search-preview"];
 async function openaiSearchCall(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   openai: any,
-  prompt: string
+  prompt: string,
+  attempt = 1
 ): Promise<RawNewsResult> {
   for (const model of SEARCH_MODELS) {
     try {
-      const resp = await (openai.chat.completions.create as Function)({
+      const payload: any = {
         model,
+        max_completion_tokens: 1000,
         web_search_options: {},
         messages: [{ role: "user", content: prompt }],
-      });
+      };
+
+      if (!model.includes("gpt-5")) {
+        payload.temperature = 0;
+      }
+
+      const resp = await (openai.chat.completions.create as Function)(payload);
 
       const message = resp.choices[0]?.message;
       const textContent: string = message?.content ?? "";
@@ -145,6 +153,11 @@ async function openaiSearchCall(
       const rankedSources = rankSources(rawSources);
       return { summary: textContent, sources: rankedSources };
     } catch (err: any) {
+      if (err?.status === 429 && attempt < 8) {
+        console.warn(`[news-fetcher] Rate limit (429) hit for model ${model}. Waiting 65s for bucket to refill...`);
+        await new Promise(r => setTimeout(r, 65000));
+        return openaiSearchCall(openai, prompt, attempt + 1);
+      }
       const isDeprecated = err?.status === 404 || err?.message?.includes("deprecated") || err?.message?.includes("not found");
       if (isDeprecated && model !== SEARCH_MODELS[SEARCH_MODELS.length - 1]) {
         console.warn(`[news-fetcher] Model ${model} unavailable, trying fallback...`);
@@ -157,220 +170,108 @@ async function openaiSearchCall(
   return { summary: "", sources: [] };
 }
 
-// ─── Three targeted searches ──────────────────────────────────────────────────
-
-export async function fetchMacroNews(
-  openai: any,
-  tickers: string[],
-  today: string,
-  onProgress?: () => void
-): Promise<EvidenceItem> {
-  const tickerList = tickers.filter((t) => t !== "CASH").join(", ");
-  const result = await openaiSearchCall(
-    openai,
-    `Today is ${today}. Search exclusively for MACROECONOMIC and GEOPOLITICAL news from the last 30 days that affects equity markets broadly and specifically these holdings: ${tickerList}.
-
-Find and cite at least 5–8 distinct real news articles from high-quality sources (Reuters, Bloomberg, FT, WSJ, AP, Federal Reserve, BLS, BEA). Search specifically for:
-- Federal Reserve rate decisions, FOMC minutes, Fed speaker comments
-- CPI, PCE, jobs report (NFP), GDP data releases
-- Geopolitical flashpoints: wars, sanctions, tariffs, trade disputes
-- Treasury yield movements and dollar strength
-- Energy/commodity shocks (oil, natural gas, metals)
-
-For each item, state which ticker(s) it impacts and how. Cite every source with a real URL from a reputable outlet.`
-  );
-  onProgress?.();
-
-  return {
-    content: result.summary,
-    sources: result.sources,
-    evidenceType: "secondary",
-    category: "macro",
-  };
-}
-
-export async function fetchCompanyNews(
-  openai: any,
-  tickers: string[],
-  today: string,
-  onProgress?: () => void
-): Promise<EvidenceItem> {
-  const tickerList = tickers.filter((t) => t !== "CASH").join(", ");
-  const result = await openaiSearchCall(
-    openai,
-    `Today is ${today}. Search for COMPANY-SPECIFIC news from the last 30 days for EACH of these individual stocks: ${tickerList}.
-
-For EACH ticker, find and cite separate, dedicated articles about:
-- Latest earnings reports, revenue beats/misses, EPS surprises (prefer company IR pages or SEC filings)
-- Forward guidance changes, analyst upgrades/downgrades, price target revisions
-- Insider buying/selling, share buybacks
-- Product launches, partnerships, acquisitions, or legal issues
-- CEO/executive changes
-
-Treat each ticker independently. Cite a unique, real article URL for each company from Reuters, Bloomberg, WSJ, BusinessWire, PRNewswire, or the company's own investor relations site. Do not reuse the same sources across different tickers.`
-  );
-  onProgress?.();
-
-  return {
-    content: result.summary,
-    sources: result.sources,
-    evidenceType: "primary",
-    category: "company",
-  };
-}
-
-export async function fetchSectorNews(
-  openai: any,
-  tickers: string[],
-  today: string,
-  onProgress?: () => void
-): Promise<EvidenceItem> {
-  const tickerList = tickers.filter((t) => t !== "CASH").join(", ");
-  const result = await openaiSearchCall(
-    openai,
-    `Today is ${today}. Search for SECTOR, REGULATORY, and THEMATIC news from the last 30 days relevant to the industry sectors of these holdings: ${tickerList}.
-
-Focus on high-quality regulatory and policy sources:
-- AI / semiconductor / cloud computing regulatory news (cite EU AI Act, US export controls, FTC/DOJ antitrust filings)
-- Energy transition policy, EPA rules, oil/gas sector trends
-- Financial regulatory changes (SEC filings, Fed banking rules, interest rate policy)
-- Healthcare/biotech FDA approvals, drug pricing legislation (cite FDA.gov, HHS sources)
-- Defense spending bills, government contracts (cite DoD, GAO)
-- Tech antitrust investigations or rulings (cite DOJ, FTC)
-
-Prefer primary/official sources. For each theme, cite multiple distinct sources. Link specifically to how each news item affects one or more of the listed holdings.`
-  );
-  onProgress?.();
-
-  return {
-    content: result.summary,
-    sources: result.sources,
-    evidenceType: "secondary",
-    category: "sector",
-  };
-}
-
-// ─── 24-hour breaking news search ────────────────────────────────────────────
-
-export async function fetch24hNews(
-  openai: any,
-  tickers: string[],
-  today: string,
-  onProgress?: () => void
-): Promise<EvidenceItem & { hoursOld?: number }> {
-  const tickerList = tickers.filter((t) => t !== "CASH").join(", ");
-  // yesterday ISO date for bounding the search
-  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-
-  const result = await openaiSearchCall(
-    openai,
-    `Today is ${today}. Search ONLY for news published in the last 24 hours (since ${yesterday}) for these holdings: ${tickerList}.
-
-This is a BREAKING NEWS search. Only include items that are:
-- Earnings reports or earnings surprises released today or after market close yesterday
-- Federal Reserve or Treasury announcements in the last 24 hours
-- Analyst upgrades or downgrades issued today
-- Breaking geopolitical events (tariffs announced, sanctions, military action) in last 24h
-- Premarket or after-hours price moves >3% with a known catalyst
-- FDA approvals or rejections, product recalls, or regulatory actions issued today
-- Major CEO statements, acquisitions, or contract wins announced in last 24h
-
-For EACH item, specify:
-1. TICKER: which holding is affected
-2. EVENT: what happened (1 sentence)
-3. PUBLISHED: the exact date and time if available
-4. IMPACT: Buy/Sell/Hold signal strength — classify as STRONG (override 30-day thesis), MODERATE (adjust weight), or NOISE (log but don't change position)
-5. SOURCE: real URL from Reuters, Bloomberg, AP, MarketWatch, or the company IR page
-
-If there is genuinely no breaking news for a ticker in the last 24 hours, say "No breaking news" for that ticker. Do not fabricate events.`
-  );
-  onProgress?.();
-
-  return {
-    content: result.summary,
-    sources: result.sources,
-    evidenceType: "primary",
-    category: "macro",
-    hoursOld: 24,
-  };
-}
-
-// ─── Combined news fetch with fallback ───────────────────────────────────────
+// ─── Single unified news search ───────────────────────────────────────────────
 
 export async function fetchAllNewsWithFallback(
   openai: any,
   tickers: string[],
   today: string,
-  onProgress?: (step: number) => void
+  onProgress?: (step: number, customMessage?: string) => void
 ): Promise<{
   evidence: EvidenceItem[];
   combinedSummary: string;
   allSources: Source[];
   usingFallback: boolean;
-  breaking24h: string;      // separate field so prompt can label it BREAKING
+  breaking24h: string;
 }> {
   const nonCash = tickers.filter((t) => t !== "CASH");
   if (nonCash.length === 0) {
     return { evidence: [], combinedSummary: "", allSources: [], usingFallback: false, breaking24h: "" };
   }
 
-  // Fire all 4 searches in parallel — 24h search runs alongside the 30-day searches
-  const [macro, company, sector, breaking] = await Promise.all([
-    fetchMacroNews(openai, tickers, today, () => onProgress?.(0)).catch(() => ({
-      content: "",
-      sources: [],
-      evidenceType: "secondary" as const,
-      category: "macro" as const,
-    })),
-    fetchCompanyNews(openai, tickers, today, () => onProgress?.(1)).catch(() => ({
-      content: "",
-      sources: [],
-      evidenceType: "primary" as const,
-      category: "company" as const,
-    })),
-    fetchSectorNews(openai, tickers, today, () => onProgress?.(2)).catch(() => ({
-      content: "",
-      sources: [],
-      evidenceType: "secondary" as const,
-      category: "sector" as const,
-    })),
-    fetch24hNews(openai, tickers, today, () => onProgress?.(3)).catch(() => ({
-      content: "",
-      sources: [],
-      evidenceType: "primary" as const,
-      category: "macro" as const,
-    })),
-  ]);
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
-  const evidence = [macro, company, sector, breaking];
-
-  // Breaking is surfaced separately so the prompt can label and weight it distinctly
-  const breaking24hText = breaking.content?.trim() ?? "";
-
-  // F9: Sentence-level deduplication across all 3 background searches
-  const { deduplicatedContent, corroborationCount } = deduplicateNewsContent([
-    { label: "MACRO & GEOPOLITICS (last 30 days)", content: macro.content ?? "" },
-    { label: "COMPANY-SPECIFIC NEWS (last 30 days)", content: company.content ?? "" },
-    { label: "SECTOR & REGULATORY (last 30 days)", content: sector.content ?? "" },
-  ]);
-
-  if (corroborationCount > 0) {
-    console.log(`[news-fetcher] F9: ${corroborationCount} corroborated sentences annotated across searches`);
+  const chunkSize = 4;
+  const chunks = [];
+  for (let i = 0; i < nonCash.length; i += chunkSize) {
+    chunks.push(nonCash.slice(i, i + chunkSize));
   }
 
-  const combinedSummary = deduplicatedContent.filter(s => !s.startsWith("=== MACRO") || macro.content)
-    .join("\n\n");
+  let fullCombinedText = "";
+  let fullBreakingText = "";
+  let allSourcesRef: Source[] = [];
+  let isFallback = false;
 
-  const allRawSources = [
-    ...macro.sources,
-    ...company.sources,
-    ...sector.sources,
-    ...breaking.sources,
-  ];
-  const allSources = deduplicateSources(allRawSources);
+  onProgress?.(0, `Fetching unified news across ${chunks.length} batches...`);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkTickers = chunks[i].join(", ");
+
+    let prompt = "";
+    if (i === 0) {
+      prompt = `Today is ${today}. Perform a comprehensive, unified search for these holdings: ${chunkTickers}.
+  
+You MUST search for and group your response exactly into these four sections:
+=== BREAKING 24H NEWS ===
+Search ONLY for material events from the last 24h (since ${yesterday}). State the event, the ticker it impacts, and cite the source. If none, explicitly state "No breaking news".
+
+=== MACRO & GEOPOLITICS ===
+Search for recent broad economic data (CPI, Fed rates, tariffs) from the last 30 days impacting these specific holdings.
+
+=== SECTOR & REGULATORY ===
+Search for policy, AI regulations, FDA approvals, or defense spending impacting these specific holdings' industries.
+
+=== COMPANY-SPECIFIC ===
+Search for specific news (earnings, product launches, downgrades) for EACH individual ticker. Seek consensus among multiple sources for strong claims.
+
+Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) for every claim.`;
+    } else {
+      prompt = `Today is ${today}. Perform a deep, specific search for these holdings: ${chunkTickers}.
+  
+You MUST search for and group your response exactly into these two sections:
+
+=== SECTOR & REGULATORY ===
+Search for policy, AI regulations, FDA approvals, or defense spending impacting these specific holdings' industries.
+
+=== COMPANY-SPECIFIC ===
+Search for specific news (earnings, product launches, downgrades) for EACH individual ticker. Seek consensus among multiple sources for strong claims.
+
+Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) for every claim.`;
+    }
+
+    const result = await openaiSearchCall(openai, prompt);
+    let breakingChunk = "";
+    let combinedChunk = result.summary;
+
+    if (i === 0) {
+      const blocks = result.summary.split("=== MACRO & GEOPOLITICS ===");
+      if (blocks.length > 1) {
+        breakingChunk = blocks[0].replace("=== BREAKING 24H NEWS ===", "").trim();
+        combinedChunk = "=== MACRO & GEOPOLITICS ===" + blocks[1];
+      }
+    }
+
+    fullBreakingText += (breakingChunk ? breakingChunk + "\n" : "");
+    fullCombinedText += "\n" + combinedChunk;
+    allSourcesRef.push(...result.sources);
+    
+    // Pause briefly to respect concurrency pacing
+    if (i < chunks.length - 1) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  const allSources = deduplicateSources(allSourcesRef);
+
+  const evidenceItem: EvidenceItem = {
+    content: fullCombinedText,
+    sources: allSources,
+    evidenceType: "primary",
+    category: "company"
+  };
 
   // If primary fetch failed entirely, use Yahoo fallback
-  if (!combinedSummary.trim() && !breaking24hText) {
+  if (!fullCombinedText.trim() && !fullBreakingText) {
     console.log("[news-fetcher] Primary fetch returned empty. Using Yahoo Finance fallback.");
     const fallback = await fetchYahooFinanceFallback(tickers);
     return {
@@ -389,5 +290,5 @@ export async function fetchAllNewsWithFallback(
     };
   }
 
-  return { evidence, combinedSummary, allSources, usingFallback: false, breaking24h: breaking24hText };
+  return { evidence: [evidenceItem], combinedSummary: fullCombinedText.trim(), allSources, usingFallback: false, breaking24h: fullBreakingText.trim() };
 }

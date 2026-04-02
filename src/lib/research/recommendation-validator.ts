@@ -99,8 +99,17 @@ function validateRecommendation(
     });
   }
 
-  // Action normalization
-  const correctedAction = normalizeAction(rec.action);
+  // Math consistency: shareDelta should equal targetShares - currentShares
+  const expectedDelta = (rec.targetShares ?? 0) - (rec.currentShares ?? 0);
+
+  // Action normalization & Hard Math Override
+  let correctedAction = normalizeAction(rec.action);
+  if (expectedDelta > 0 && (rec.currentShares ?? 0) === 0) correctedAction = "Buy";
+  else if (expectedDelta > 0 && (rec.currentShares ?? 0) > 0) correctedAction = "Add";
+  else if (expectedDelta < 0 && (rec.targetShares ?? 0) === 0) correctedAction = "Exit";
+  else if (expectedDelta < 0 && (rec.targetShares ?? 0) > 0) correctedAction = "Trim";
+  else if (expectedDelta === 0) correctedAction = "Hold";
+
   if (rec.action && !VALID_ACTIONS.has(rec.action)) {
     warnings.push({
       field: "action",
@@ -110,8 +119,6 @@ function validateRecommendation(
     });
   }
 
-  // Math consistency: shareDelta should equal targetShares - currentShares
-  const expectedDelta = (rec.targetShares ?? 0) - (rec.currentShares ?? 0);
   const reportedDelta = rec.shareDelta ?? 0;
   if (Math.abs(expectedDelta - reportedDelta) > 0.5) {
     warnings.push({
@@ -128,17 +135,19 @@ function validateRecommendation(
     ? Number(((expectedDelta) * currentPrice).toFixed(2))
     : (rec.dollarDelta ?? 0);
 
-  // Weight vs price sanity check
+  // Weight vs price sanity check — the LLM frequently hallucinates targetWeight that contradicts targetShares.
+  // We MUST mathematically enforce that targetWeight == (targetShares * price) / totalValue
+  let finalTargetWeight = rec.targetWeight ?? 0;
   if (currentPrice > 0 && totalValue > 0 && rec.targetShares !== undefined) {
     const impliedWeight = Number(((rec.targetShares * currentPrice / totalValue) * 100).toFixed(2));
-    const reportedTargetWeight = rec.targetWeight ?? 0;
-    if (Math.abs(impliedWeight - reportedTargetWeight) > 3) {
+    if (Math.abs(impliedWeight - finalTargetWeight) > 0.1) {
       warnings.push({
         field: "targetWeight",
-        message: `targetWeight ${reportedTargetWeight}% vs implied ${impliedWeight}% from shares×price — using implied`,
+        message: `Overriding hallucinated targetWeight ${finalTargetWeight}% with mathematically correct implied weight ${impliedWeight}% (from ${rec.targetShares} shares × $${currentPrice})`,
         ticker,
         corrected: true,
       });
+      finalTargetWeight = impliedWeight;
     }
   }
 
@@ -156,9 +165,9 @@ function validateRecommendation(
     shareDelta: Number(expectedDelta.toFixed(2)),
     dollarDelta: deterministicDollarDelta,
     currentWeight: rec.currentWeight ?? 0,
-    targetWeight: rec.targetWeight ?? 0,
-    acceptableRangeLow: rec.acceptableRangeLow ?? Math.max(0, (rec.targetWeight ?? 0) - 4),
-    acceptableRangeHigh: rec.acceptableRangeHigh ?? ((rec.targetWeight ?? 0) + 4),
+    targetWeight: finalTargetWeight,
+    acceptableRangeLow: rec.acceptableRangeLow ?? Math.max(0, finalTargetWeight - 4),
+    acceptableRangeHigh: rec.acceptableRangeHigh ?? (finalTargetWeight + 4),
     valueDelta: rec.valueDelta ?? deterministicDollarDelta,
     action: correctedAction,
     confidence: correctedConfidence,

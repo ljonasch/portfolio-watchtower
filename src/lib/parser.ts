@@ -50,7 +50,8 @@ If a row is cash or a money market sweep, set ticker to "CASH", isCash to true, 
 
 CRITICAL PARSING INSTRUCTIONS:
 1. NEVER confuse a percentage (%) with a price. If a column has percent signs or sums vertically to roughly 100, it is a portfolio WEIGHT (% of total), NOT a stock price. Ignore portfolio weight entirely!
-2. You must mathematically self-check your extraction: (shares * currentPrice) MUST roughly equal currentValue. If currentPrice or currentValue are 0, skip the math check. If the math fails drastically, you have misidentified the columns. If you are ever forced to extract data that fails this math check, or if headers are completely missing and ambiguous, you MUST push a clear explanation into the "warnings" array highlighting the specific ticker and the ambiguity so the user can be alerted.` 
+2. WARNING FOR ROBINHOOD/BROKERAGE RETURNS: If a dollar amount has a + or - sign in front of it (e.g., +$301.39 or -$11.18) and is stacked with a daily percentage change, it is the return/profit, NOT the current price of the stock. Do NOT extract it as currentPrice or currentValue. If the actual current price per share is missing, use 0.
+3. You must mathematically self-check your extraction: (shares * currentPrice) MUST roughly equal currentValue. If currentPrice or currentValue are 0, skip the math check. If the math fails drastically, you have misidentified the columns. If you are ever forced to extract data that fails this math check, or if headers are completely missing and ambiguous, you MUST push a clear explanation into the "warnings" array highlighting the specific ticker and the ambiguity so the user can be alerted.` 
           },
           { 
             type: "image_url", 

@@ -24,14 +24,20 @@ import { screenCandidates }        from "./candidate-screener";
 import { fetchAllNewsWithFallback } from "./news-fetcher";
 import { fetchPriceTimelines }     from "./price-timeline";
 import { scoreSentimentForAll }    from "./sentiment-scorer";
-import { aggregateSignals, type ModelVerdict } from "./signal-aggregator";
+import { buildSentimentOverlay, type SentimentOverlay } from "./signal-aggregator";
 import { buildResearchContext }    from "./context-loader";
 import { generatePortfolioReport } from "@/lib/analyzer";
 import { compareRecommendations }  from "@/lib/comparator";
 import { evaluateAlert }           from "@/lib/alerts";
 import { fetchValuationForAll, formatValuationSection } from "./valuation-fetcher";
 import { buildCorrelationMatrix, formatCorrelationSection } from "./correlation-matrix";
-import { loadModelWeights, recordRunStats } from "./model-tracker";
+import { recordRunStats } from "./model-tracker";
+import {
+  buildPromptHash,
+  buildPerSectionChars,
+  writeEvidencePacket,
+  updateEvidencePacketOutcome,
+} from "./evidence-packet-builder";
 import type { ProgressEvent }      from "./progress-events";
 
 // ── W23: Circuit breaker ──────────────────────────────────────────────────────
@@ -72,8 +78,11 @@ function guardContextLength(text: string, maxChars: number, label: string): stri
 export async function runFullAnalysis(
   snapshotId: string,
   customPrompt: string | undefined,
-  emit: (e: ProgressEvent) => void
-): Promise<void> {
+  emit: (e: ProgressEvent) => void,
+  triggerType: "manual" | "scheduled" | "debug" = "manual",
+  triggeredBy?: string,
+  existingRunId?: string
+): Promise<{ runId: string; reportId: string; alertLevel: string; alertReason: string | null; changes: any[]; report: any }> {
   const t0 = Date.now();
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
@@ -104,9 +113,9 @@ export async function runFullAnalysis(
     emit({ type: "log", message: `WARNING: Analyzing a snapshot that is ${Math.round(ageDays)} days old. Prices and weights may be stale.`, level: "warn" });
   }
 
-  // N3: Concurrent run lock (prevent double-execution)
+  // N3: Concurrent run lock (prevent double-execution) — F8: use "running" not "processing"
   const activeRuns = await prisma.analysisRun.count({
-    where: { userId: snapshot.userId, status: "processing" }
+    where: { userId: snapshot.userId, status: "running" }
   });
   if (activeRuns > 0) {
     throw new Error("An analysis run is already in progress for this user. Please wait for it to complete.");
@@ -121,33 +130,40 @@ export async function runFullAnalysis(
   const settingsObj = await prisma.appSettings.findUnique({ where: { key: "portfolio_config" } });
   const settings = settingsObj ? JSON.parse(settingsObj.value) : {};
 
+  // F5: Scope latestReport to current user to prevent cross-user email data leaks
   const latestReport = await prisma.portfolioReport.findFirst({
+    where: { userId: snapshot.userId },
     orderBy: { createdAt: "desc" },
     include: { recommendations: true },
   });
+
+  // Batch 5: Create "running" AnalysisRun record BEFORE any LLM call.
+  // This enables: (1) rollback if GPT-5 fails, (2) AbstainResult persistence.
+  const stagingRun = existingRunId
+    ? await prisma.analysisRun.findUnique({ where: { id: existingRunId } })
+    : await prisma.analysisRun.create({
+        data: {
+          userId: snapshot.userId,
+          snapshotId: snapshot.id,
+          triggerType,
+          triggeredBy: triggeredBy || "User",
+          status: "running",
+          startedAt: new Date(t0),
+        },
+      });
+  if (!stagingRun) throw new Error("Failed to create staging AnalysisRun record");
+  const runId = stagingRun.id;
 
   const ctx = buildResearchContext({ profile: user.profile, holdings: snapshot.holdings, priorRecommendations: latestReport?.recommendations, customPrompt });
   const today = ctx.today;
   const existingTickers = snapshot.holdings.filter(h => !h.isCash).map(h => h.ticker);
   const heldTickerSet = new Set(existingTickers.map(t => t.toUpperCase()));
 
-  // F3: Build prior action map for external convergence rule
-  const priorActionMap = new Map<string, string>();
-  for (const rec of latestReport?.recommendations ?? []) {
-    priorActionMap.set(rec.ticker.toUpperCase(), rec.action);
-  }
-
-  // F8: Load model weights
-  const modelWeights = await loadModelWeights(prisma);
-  emit({ type: "log", message: `Model weights: GPT-5=${modelWeights.gpt5} o3=${modelWeights.o3mini} sent=${modelWeights.sentiment} (${modelWeights.runCount} historical runs)`, level: "info" });
-
   emit({ type: "log", message: `Analysis started: ${existingTickers.length} existing positions`, level: "info" });
 
   // ══════════════════════════════════════════════════════════════════════════════
   // STAGE 0: Market Intelligence — regime + gap + candidates
   // ══════════════════════════════════════════════════════════════════════════════
-  emit({ type: "stage_start", stage: "stage0", label: "Stage 0 · Market Intelligence", detail: "Regime detection, gap analysis, candidate screening, valuation + correlation" });
-
   const [regime, gapReport] = await Promise.all([
     detectMarketRegime(openai, today, emit),
     runGapAnalysis(openai, ctx.holdings.map(h => ({ ticker: h.ticker, currentWeight: h.computedWeight, isCash: h.isCash })), user.profile, today, emit),
@@ -175,9 +191,30 @@ export async function runFullAnalysis(
     buildCorrelationMatrix(existingTickers, emit),
   ]);
 
-  // Price timelines after news (article timestamps needed)
+  // F3: Populate articleMapForPrice from news results so price reactions can be assessed.
+  // The map was previously left empty, meaning fetchPriceTimelines received no articles
+  // and produced reactions:[] for every ticker → mktScore=0 for all sentiment signals.
+  // We extract mention-lines per ticker from combined news — same logic as Stage 2 tickerArticles.
+  // publishedAt approximated to current time; sufficient for verdict classification.
   const articleMapForPrice = new Map<string, { title: string; publishedAt: string }[]>();
-  // (would populate from structured article data in full F1 implementation)
+  const newsTextForPrice = (newsResult.combinedSummary ?? "") + "\n" + (newsResult.breaking24h ?? "");
+  for (const ticker of allTickers) {
+    const mentionLines = newsTextForPrice
+      .split("\n")
+      .filter(l => l.toUpperCase().includes(ticker.toUpperCase()))
+      .slice(0, 5);
+    if (mentionLines.length > 0) {
+      articleMapForPrice.set(ticker.toUpperCase(), mentionLines.map(l => ({
+        title: l.slice(0, 120),
+        // F3.1: Use a fixed mid-morning UTC timestamp instead of the runtime clock.
+        // Using the current time placed articles at the moment of analysis, causing
+        // react60 to look 60min into the future where no bars exist → verdict="ignored" → mktScore=0.
+        // 14:30Z = 9:30 AM EST (winter) or 10:30 AM EDT (summer) — safely inside NYSE session.
+        // Bars at pub+60 (10:30 AM or 11:30 AM) and pub+120 always exist for afternoon runs.
+        publishedAt: `${today}T14:30:00.000Z`,
+      })));
+    }
+  }
 
   const timelines = await fetchPriceTimelines(allTickers, articleMapForPrice, today, emit);
 
@@ -255,9 +292,9 @@ export async function runFullAnalysis(
   emit({ type: "stage_complete", stage: "sentiment", durationMs: Date.now() - t0 });
 
   // ══════════════════════════════════════════════════════════════════════════════
-  // STAGE 3: Parallel reasoning — GPT-5 + o3-mini
+  // STAGE 3: Freeze EvidencePacket + Primary gpt-5.4 reasoning (F1: single-model path)
   // ══════════════════════════════════════════════════════════════════════════════
-  emit({ type: "stage_start", stage: "stage3", label: "Stage 3 · Parallel AI Reasoning", detail: "GPT-5 (full analysis) + o3-mini (cross-check) running simultaneously" });
+  emit({ type: "stage_start", stage: "stage3", label: "Stage 3 · Primary AI Reasoning", detail: "Single gpt-5.4 call with json_schema — authoritative recommendations" });
 
   const breaking24hSection = newsResult.breaking24h?.trim()
     ? `=== ⚡ BREAKING NEWS (last 24 hours — ${today}) ===\n${guardContextLength(newsResult.breaking24h, 3000, "breaking")}\n=== END BREAKING NEWS ===\n\n24-HOUR WEIGHTING RULES:\n- STRONG signal: override 30-day thesis\n- MODERATE: adjust weight ±3-5%\n- NOISE: log but don't change recommendation`
@@ -268,8 +305,15 @@ export async function runFullAnalysis(
     .map(tl => `${tl.ticker} (${tl.exchange}): day ${tl.dayChangePct > 0 ? "+" : ""}${tl.dayChangePct.toFixed(1)}%${tl.marketClosed ? " [MARKET CLOSED]" : ""} | reactions: ${tl.reactions.map(r => r.verdict).join(", ")}`)
     .join("\n");
 
+  // F2: Replace directional prose ("NVDA: buy") with bounded numeric fields only.
+  // Low-confidence entries (conf < 0.15) are filtered out entirely — they add noise, not signal.
+  // The "buy"/"sell" label is removed; the primary model sees numeric scores it must interpret itself.
   const sentimentSection = Array.from(sentimentSignals.entries())
-    .map(([t, s]) => `${t}: ${s.direction} (score ${s.finalScore.toFixed(2)}, conf ${s.confidence.toFixed(2)})${s.drivingArticle ? ` — "${s.drivingArticle.slice(0, 60)}"` : ""}`)
+    .filter(([, s]) => s.confidence >= 0.15 && s.magnitude >= 0.10)
+    .map(([t, s]) =>
+      `${t}: NLP score=${s.finalScore.toFixed(2)} | conf=${s.confidence.toFixed(2)} | mag=${s.magnitude.toFixed(2)}` +
+      (s.drivingArticle ? ` (driven by: "${s.drivingArticle.slice(0, 60)}")` : "")
+    )
     .join("\n");
 
   const candidateSection = activeCandidates.length > 0
@@ -291,11 +335,56 @@ export async function runFullAnalysis(
     breaking24hSection,
     newsSection ? `=== RESEARCH (30-day) ===\n${newsSection}` : "",
     priceReactionSection ? `=== INTRADAY PRICE REACTIONS ===\n${priceReactionSection}` : "",
-    sentimentSection ? `=== SENTIMENT SIGNALS ===\n${sentimentSection}` : "",
+    sentimentSection ? `=== SENTIMENT SIGNALS (informational only — do NOT treat as a directional vote; use as a weak prior only) ===\n${sentimentSection}` : "",
     valuationSection,
     correlationSection,
     candidateSection,
   ].filter(Boolean).join("\n\n");
+
+  // Batch 5: Build promptHash + write frozen EvidencePacket BEFORE LLM call
+  const perSectionChars = buildPerSectionChars({
+    regime: regimeSection,
+    breaking24h: breaking24hSection,
+    news30d: newsSection,
+    priceReactions: priceReactionSection,
+    sentiment: sentimentSection,
+    valuation: valuationSection,
+    correlation: correlationSection,
+    candidates: candidateSection,
+  });
+  const promptHash = buildPromptHash(additionalContext);
+  emit({ type: "log", message: `Evidence packet assembled: ${additionalContext.length} chars, hash=${promptHash}`, level: "info" });
+
+  let evidencePacketId: string | null = null;
+  try {
+    evidencePacketId = await writeEvidencePacket(
+      {
+        snapshotId: snapshot.id,
+        userId: snapshot.userId,
+        runId,
+        regime: finalRegime,
+        newsText: newsSection,
+        breaking24h: newsResult.breaking24h ?? "",
+        // F2: pass structured signal map + articleTitles (replaces prior prose string)
+        sentimentSignals,
+        articleTitles: new Map(Array.from(tickerArticles.entries()).map(([t, arts]) => [t, arts.map(a => a.title)])),
+        priceReactionText: priceReactionSection,
+        valuationText: valuationSection,
+        correlationText: correlationSection,
+        candidateText: candidateSection,
+        customPrompt,
+        holdingCount: snapshot.holdings.filter(h => !h.isCash).length,
+        candidateCount: activeCandidates.length,
+        totalInputChars: additionalContext.length,
+        perSectionChars,
+      },
+      promptHash
+    );
+    emit({ type: "log", message: `EvidencePacket written: id=${evidencePacketId}`, level: "info" });
+  } catch (epErr: any) {
+    // Non-fatal — evidence packet write failure must not abort the pipeline
+    emit({ type: "log", message: `EvidencePacket write failed (non-fatal): ${epErr?.message}`, level: "warn" });
+  }
 
   const convictions = (user.convictions ?? []).filter(c => c.active).map(c => ({
     ticker: c.ticker,
@@ -303,84 +392,119 @@ export async function runFullAnalysis(
     messages: c.messages.map(m => ({ role: m.role, content: m.content, createdAt: m.createdAt.toISOString() })),
   }));
 
-  const [fullReport, o3Verdicts] = await Promise.allSettled([
-    generatePortfolioReport(
+  // ── Primary gpt-5.4 call — single authoritative LLM scorer (F1 fix) ─────────
+  // Direct await instead of Promise.allSettled. Errors propagate into the
+  // try/catch below which runs AbstainResult persistence before re-throwing.
+  let reportData: Awaited<ReturnType<typeof generatePortfolioReport>>;
+  try {
+    reportData = await generatePortfolioReport(
       snapshot.holdings,
       user.profile,
       settings,
-      (step) => emit({ type: "log", message: `GPT-5 analysis step ${step + 1}/4`, level: "info" }),
+      (step, customMessage) => {
+        if (customMessage) {
+          emit({ type: "log", message: `[Primary Engine] ${customMessage}`, level: "warn" });
+        } else {
+          emit({ type: "log", message: `Primary Analysis step ${step + 1}/4`, level: "info" });
+        }
+      },
       latestReport?.recommendations,
       customPrompt,
       convictions,
       additionalContext
-    ),
-    runO3CrossCheck(openai, allTickers, additionalContext, today, emit),
-  ]);
+    );
+  } catch (primaryErr: any) {
+    // Q3 trace: finish_reason_length, validation_enforce_block, and generic LLM failures
+    // all arrive here as thrown Errors from generatePortfolioReport / withRetry.
+    const isLengthAbort     = primaryErr?.message?.includes("finish_reason_length");
+    const isValidationBlock = primaryErr?.message?.includes("validation_enforce_block");
+    const abstainReason     = isLengthAbort     ? "CONTEXT_TOO_LONG"
+                            : isValidationBlock  ? "VALIDATION_HARD_ERROR"
+                            :                      "LLM_FAILURE";
+
+    if (evidencePacketId) await updateEvidencePacketOutcome(evidencePacketId, "abstained");
+
+    await (prisma as any).analysisRun.update({
+      where: { id: runId },
+      data: {
+        status: "abstained",
+        completedAt: new Date(),
+        errorMessage: primaryErr?.message ?? "Analysis aborted",
+        qualityMeta: JSON.stringify({
+          abstainReason,
+          isLengthAbort,
+          promptHash,
+          usingFallbackNews: newsResult.usingFallback ?? false,
+        }),
+      },
+    });
+
+    emit({ type: "log", message: `Analysis abstained: ${abstainReason}. Run marked as abstained.`, level: "warn" });
+    throw new Error(`Analysis abstained (${abstainReason}): ${primaryErr?.message}`);
+  }
+
+  // EvidencePacket outcome: "used" — primary LLM succeeded
+  if (evidencePacketId) await updateEvidencePacketOutcome(evidencePacketId, "used");
 
   emit({ type: "stage_complete", stage: "stage3", durationMs: Date.now() - t0 });
 
-  // ══════════════════════════════════════════════════════════════════════════════
-  // STAGE 4: Aggregate signals
-  // ══════════════════════════════════════════════════════════════════════════════
-  emit({ type: "stage_start", stage: "stage4", label: "Stage 4 · Signal Aggregation", detail: "Combining GPT-5 + o3-mini + sentiment into weighted composite with regime multipliers" });
-
-  const gpt5Verdicts = new Map<string, ModelVerdict>();
-  if (fullReport.status === "fulfilled") {
-    for (const rec of fullReport.value.recommendations) {
-      gpt5Verdicts.set(rec.ticker, {
-        ticker: rec.ticker,
-        action: rec.action as any,
-        confidence: rec.confidence as any ?? "medium",
-        keyReason: rec.thesisSummary?.slice(0, 100) ?? "",
-        evidenceQuality: rec.evidenceQuality as any ?? "medium",
-        role: rec.role ?? undefined,
-      });
-    }
-  }
-
-  const o3VerdictMap = new Map<string, ModelVerdict>();
-  if (o3Verdicts.status === "fulfilled") {
-    for (const v of o3Verdicts.value) {
-      o3VerdictMap.set(v.ticker, v);
-    }
-  }
-
-  // N7: Skipped ticker guard — ensure GPT-5 covered all holdings
-  const missingHeldTickers = Array.from(heldTickerSet).filter(t => t !== "CASH" && !gpt5Verdicts.has(t));
+  // ── Coverage check — log warning for any held ticker the primary engine missed ─
+  const coveredTickers = new Set(reportData.recommendations.map((r: any) => r.ticker.toUpperCase()));
+  const missingHeldTickers = Array.from(heldTickerSet).filter(t => t !== "CASH" && !coveredTickers.has(t));
   if (missingHeldTickers.length > 0) {
-    emit({ type: "log", message: `WARNING: GPT-5 missing coverage for ${missingHeldTickers.length} holdings: ${missingHeldTickers.join(", ")}. Relying strictly on o3-mini and sentiment anchors.`, level: "warn" });
+    emit({ type: "log", message: `WARNING: Primary engine missing coverage for ${missingHeldTickers.length} holdings: ${missingHeldTickers.join(", ")}.`, level: "warn" });
   }
 
-  const aggregated = aggregateSignals(
+  // ── Sentiment overlay (display-only, no voting) ───────────────────────────────
+  const gpt5Roles = new Map<string, string | undefined>();
+  for (const rec of reportData.recommendations) {
+    gpt5Roles.set((rec as any).ticker, (rec as any).role ?? undefined);
+  }
+
+  const sentimentOverlay: SentimentOverlay[] = buildSentimentOverlay(
     allTickers,
-    gpt5Verdicts,
-    o3VerdictMap,
+    gpt5Roles,
     sentimentSignals,
     candidateTickerSet,
     finalRegime,
     emit,
-    priorActionMap,    // F3: external convergence anchor
-    priceDataMissing   // W24: price data flag
+    priceDataMissing
   );
 
-  emit({ type: "stage_complete", stage: "stage4", durationMs: Date.now() - t0 });
+  // ── Gated o3-mini adjudicator (diagnostic notes only — F1 fix) ───────────────
+  // Fires ONLY for tickers where BOTH confidence=low AND evidenceQuality=low.
+  // Output: structured diagnostic notes stored in qualityMeta ONLY.
+  // Never changes recommendations, never feeds back into scoring.
+  const lowConfTickers = (reportData.recommendations as any[])
+    .filter(r => r.confidence === "low" && r.evidenceQuality === "low")
+    .map(r => r.ticker);
+
+  let adjudicatorNotes: Record<string, AdjudicatorNote> = {};
+  let adjudicatorInvoked = false;
+
+  if (lowConfTickers.length > 0) {
+    adjudicatorInvoked = true;
+    emit({ type: "log", message: `Gated adjudicator: ${lowConfTickers.length} ticker(s) qualify (low conf + low evidence): ${lowConfTickers.join(", ")}`, level: "info" });
+    try {
+      adjudicatorNotes = await runO3Adjudicator(openai, lowConfTickers, additionalContext, today, emit);
+    } catch (adjErr: any) {
+      emit({ type: "log", message: `Gated adjudicator failed (non-fatal): ${adjErr?.message}`, level: "warn" });
+    }
+  }
 
   // ══════════════════════════════════════════════════════════════════════════════
   // STAGE 5: Persist report
   // ══════════════════════════════════════════════════════════════════════════════
   emit({ type: "stage_start", stage: "stage5", label: "Stage 5 · Saving Results", detail: "Persisting report, conviction threads, analysis run record" });
 
-  if (fullReport.status !== "fulfilled") {
-    throw new Error(`GPT-5 analysis failed: ${(fullReport as any).reason}`);
-  }
-  const reportData = fullReport.value;
+  // reportData is guaranteed to be defined here — any primary LLM failure was caught
+  // and re-thrown as an AbstainResult before reaching this point.
 
-  (reportData as any)._aggregation = {
+  (reportData as any)._runMeta = {
     regime: finalRegime,
     gaps: gapReport.gaps,
     candidates: candidates.map(c => c.ticker),
-    divergedTickers: aggregated.filter(a => a.diverged).map(a => a.ticker),
-    aggregatedSignals: aggregated,
+    sentimentOverlay,
     correlationClusters: correlationMatrix.clusters,
     priceDataMissing,
   };
@@ -388,34 +512,97 @@ export async function runFullAnalysis(
   const changes = compareRecommendations(latestReport?.recommendations || [], reportData.recommendations as any);
   const alert = evaluateAlert(changes, reportData.recommendations as any, user.profile, null);
 
-  const run = await prisma.analysisRun.create({
-    data: {
-      userId: snapshot.userId,
-      snapshotId: snapshot.id,
-      triggerType: "manual",
-      triggeredBy: user.name || "User",
-      status: "complete",
-      alertLevel: alert.level,
-      alertReason: alert.reason,
-      profileSnapshot: JSON.stringify(user.profile),
-      startedAt: new Date(t0),
-      completedAt: new Date(),
-      changeLogs: {
-        create: changes.map(c => ({
-          ticker: c.ticker,
-          companyName: c.companyName,
-          priorAction: c.priorAction,
-          newAction: c.newAction,
-          priorTargetShares: c.priorTargetShares,
-          newTargetShares: c.newTargetShares,
-          sharesDelta: c.sharesDelta,
-          priorWeight: c.priorWeight,
-          newWeight: c.newWeight,
-          changed: c.changed,
-          changeReason: c.changeReason,
-        }))
-      }
+  const systemVerification = {
+    marketRegime: {
+      status: finalRegime.summary !== "Regime data unavailable." ? `${finalRegime.riskMode}, ${finalRegime.rateTrend}` : "!Unavailable",
+      rationale: finalRegime.summary
+    },
+    gapAnalysis: {
+      status: Array.isArray(gapReport.gaps) && gapReport.gaps.length > 0 ? `${gapReport.gaps.length} gaps` : "!0 gaps",
+      rationale: gapReport.searchBrief || "No gaps identified based on holdings."
+    },
+    candidateScreening: {
+      status: Array.isArray(candidates) && candidates.length > 0 ? `${candidates.length} added` : "!0 added",
+      rationale: candidates.map(c => `${c.ticker} (${c.companyName}): ${c.reason}`).join("\n") || "No candidates found."
+    },
+    fastSearchResearch: {
+      status: (newsResult.combinedSummary?.length ?? 0) > 10 || (newsResult.breaking24h?.length ?? 0) > 10 ? `${newsResult.allSources?.length ?? 0} sources` : "!0 sources",
+      rationale: ""
+    },
+    finbertSentiment: {
+      status: Array.from(sentimentSignals.values()).some(s => (s.finbertScore ?? 0) !== 0 || (s.fingptScore ?? 0) !== 0) ? `${Array.from(sentimentSignals.values()).filter(s => (s.finbertScore ?? 0) !== 0 || (s.fingptScore ?? 0) !== 0).length} scored` : "!0 scored",
+      rationale: ""
+    },
+    gpt5Strategic: {
+      status: Array.isArray((reportData as any)?.recommendations) && (reportData as any).recommendations.length > 0 ? `${(reportData as any).recommendations.length} recs` : "!Failed",
+      rationale: ""
+    },
+    // F1 fix: o3miniReasoning removed — o3 is now a gated adjudicator (diagnostic only)
+    // Its notes are stored in qualityMeta.adjudicatorNotes, not in systemVerification.
+    sentimentOverlay: {
+      status: sentimentOverlay.length > 0 ? `${sentimentOverlay.length} tickers enriched` : "!0 tickers",
+      overlay: sentimentOverlay,
+    },
+  };
+
+  // Batch 5: Extract token + model telemetry from reportData._meta (set by withRetry in analyzer.ts)
+  const llmMeta = (reportData as any)._meta ?? {};
+  const modelUsed = llmMeta.modelUsed ?? "gpt-4.1";
+  const inputTokens = typeof llmMeta.inputTokens === "number" ? llmMeta.inputTokens : null;
+  const outputTokens = typeof llmMeta.outputTokens === "number" ? llmMeta.outputTokens : null;
+  const retryCount = typeof llmMeta.retryCount === "number" ? llmMeta.retryCount : 0;
+  const validationWarningCount = typeof llmMeta.validationWarningCount === "number" ? llmMeta.validationWarningCount : 0;
+  const usingFallbackNews = newsResult.usingFallback ?? false;
+
+  // Build qualityMeta JSON for this run
+  const qualityMetaPayload = JSON.stringify({
+    promptHash,
+    usingFallbackNews,
+    validationWarningCount,
+    perSectionChars,
+    totalInputChars: additionalContext.length,
+    evidencePacketId,
+    adjudicatorInvoked,
+    adjudicatorTickers: Object.keys(adjudicatorNotes),
+    adjudicatorNotes,
+  });
+
+  // Stage 5: Always UPDATE the staging run (created before LLM call in Batch 5)
+  const runData = {
+    status: "complete",
+    alertLevel: alert.level,
+    alertReason: alert.reason,
+    profileSnapshot: JSON.stringify(user.profile),
+    researchCoverage: JSON.stringify(systemVerification),
+    modelUsed,
+    inputTokens,
+    outputTokens,
+    retryCount,
+    startedAt: new Date(t0),
+    completedAt: new Date(),
+    changeLogs: {
+      create: changes.map(c => ({
+        ticker: c.ticker,
+        companyName: c.companyName,
+        priorAction: c.priorAction,
+        newAction: c.newAction,
+        priorTargetShares: c.priorTargetShares,
+        newTargetShares: c.newTargetShares,
+        sharesDelta: c.sharesDelta,
+        deltaDollar: c.dollarDelta ?? null,   // D6: map comparator.dollarDelta → schema.deltaDollar
+        priorWeight: c.priorWeight,
+        newWeight: c.newWeight,
+        deltaWeight: (c.newWeight != null && c.priorWeight != null) ? (c.newWeight - c.priorWeight) : null, // D6
+        changed: c.changed,
+        changeReason: c.changeReason,
+      }))
     }
+  };
+
+  // Batch 5: Always update the staging run (qualityMeta cast to any — TS server lag after prisma generate)
+  const run = await (prisma as any).analysisRun.update({
+    where: { id: runId },
+    data: { ...runData, qualityMeta: qualityMetaPayload },
   });
 
   const report = await prisma.portfolioReport.create({
@@ -436,22 +623,29 @@ export async function runFullAnalysis(
           shareDelta: r.shareDelta,
           currentWeight: r.currentWeight,
           targetWeight: r.targetWeight,
-          valueDelta: r.valueDelta,
+          valueDelta: r.valueDelta ?? 0,
+          dollarDelta: r.dollarDelta ?? null,          // F9: was omitted
+          acceptableRangeLow: r.acceptableRangeLow ?? null,   // F9: was omitted
+          acceptableRangeHigh: r.acceptableRangeHigh ?? null, // F9: was omitted
           action: r.action,
-          confidence: r.confidence,
-          thesisSummary: r.thesisSummary,
-          detailedReasoning: r.detailedReasoning,
+          confidence: r.confidence ?? null,
+          positionStatus: r.positionStatus ?? null,    // F9: was omitted
+          evidenceQuality: r.evidenceQuality ?? null,  // F9: was omitted
+          thesisSummary: r.thesisSummary ?? null,
+          detailedReasoning: r.detailedReasoning ?? null,
+          whyChanged: r.whyChanged ?? null,            // F9: was omitted
+          systemNote: r.systemNote ?? null,            // F9: new field (Batch 0)
           reasoningSources: JSON.stringify(r.reasoningSources ?? []),
         }))
       }
     }
   });
 
-  // F8: Record model performance stats (non-blocking)
+  // Non-blocking model performance tracking (o3 removed from active pipeline)
   recordRunStats(prisma, {
-    gpt5Confidence: 0.7, // approximate
-    o3Confidence: 0.65,
-    divergedTickers: aggregated.filter(a => a.diverged).map(a => a.ticker),
+    gpt5Confidence: 0.7,
+    // o3Confidence intentionally omitted — o3 no longer runs on every call (F1 fix)
+    divergedTickers: [],   // divergence tracking removed with dual-LLM voting
     totalTickers: allTickers.length,
   }).catch(() => {});
 
@@ -469,74 +663,93 @@ export async function runFullAnalysis(
   }).catch(() => {});
 
   emit({ type: "complete", reportId: report.id, totalMs: Date.now() - t0 });
+
+  return {
+    runId: run.id,
+    reportId: report.id,
+    alertLevel: alert.level,
+    alertReason: alert.reason,
+    changes,
+    report: reportData,
+  };
 }
 
-// ── o3-mini cross-check (fixed) ────────────────────────────────────────────────
+// ── Gated adjudicator types ───────────────────────────────────────────────────
 
-async function runO3CrossCheck(
+/**
+ * Structured diagnostic note returned by the gated o3-mini adjudicator.
+ * STRICTLY non-authoritative: no action, no shares, no weights.
+ * Stored in qualityMeta only.
+ */
+interface AdjudicatorNote {
+  ticker: string;
+  /** Specific risks, concerns, or uncertainties identified. */
+  riskFlags: string[];
+  /** Brief qualitative assessment of the confidence level. */
+  confidenceAssessment: string;
+  /** What could change the recommendation thesis. */
+  keyUncertainty: string;
+}
+
+// ── Gated o3-mini adjudicator (diagnostic only) ───────────────────────────────
+// Called ONLY when a ticker has BOTH confidence=low AND evidenceQuality=low.
+// Returns structured diagnostic notes — never recommendation-shaped output.
+// never changes recommendations, never feeds back into scoring.
+
+async function runO3Adjudicator(
   openai: any,
   tickers: string[],
   context: string,
   today: string,
   emit: (e: ProgressEvent) => void
-): Promise<ModelVerdict[]> {
-  emit({ type: "log", message: "o3-mini cross-check initializing...", level: "info" });
+): Promise<Record<string, AdjudicatorNote>> {
+  if (tickers.length === 0) return {};
+
+  const res = await openai.chat.completions.create({
+    model: "o3-mini",
+    max_completion_tokens: 1500,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "developer",
+        content: "You are a risk-identification assistant. Output ONLY a JSON object. Do not provide investment advice, buy/sell recommendations, or price targets."
+      },
+      {
+        role: "user",
+        content: `Today: ${today}. The primary analysis engine flagged these tickers as having LOW confidence AND LOW evidence quality: [${tickers.join(", ")}].\n\nContext:\n${guardContextLength(context, 4000, "context")}\n\nFor each flagged ticker, identify diagnostic concerns ONLY. Output:\n{"notes":[{"ticker":"SYMBOL","riskFlags":["specific risk 1","specific risk 2"],"confidenceAssessment":"why confidence is low in one sentence","keyUncertainty":"what would change the thesis"}]}\n\nDo NOT include action, score, targetShares, or targetWeight fields. Do NOT recommend Buy/Sell/Hold.`
+      }
+    ],
+  });
+
+  const raw = res.choices[0]?.message?.content ?? "";
+  let parsed: AdjudicatorNote[] | null = null;
 
   try {
-    const res = await openai.chat.completions.create({
-      model: "o3-mini",
-      // IMPORTANT: o3-mini uses hidden reasoning tokens before visible output.
-      // With < 2000 tokens the response is empty or truncated even for ~10 ticker requests.
-      // 4000 tokens handles portfolios up to ~25 tickers safely.
-      max_completion_tokens: 4000,
-      messages: [
-        {
-          role: "system",
-          content: "You are a concise financial analyst. Return ONLY a valid JSON array. No markdown, no preamble, no explanation. Start your response with [ and end with ]."
-        },
-        {
-          role: "user",
-          content: `Today: ${today}. Context:\n${guardContextLength(context, 6000, "context")}\n\nFor each ticker in [${tickers.join(", ")}], return a JSON array element:\n[{"ticker":"SYMBOL","action":"Buy","confidence":"high","keyReason":"one sentence citing a specific fact","evidenceQuality":"high"}]\n\nValid action values: Buy, Hold, Sell, Trim\nValid confidence values: high, medium, low\nDo NOT use any other values. Return ONLY the JSON array starting with [.`
-        }
-      ],
-    });
-
-    const raw = res.choices[0]?.message?.content ?? "";
-
-    // Robust extraction: find first [ to last ]
-    const start = raw.indexOf("[");
-    const end   = raw.lastIndexOf("]");
-    if (start === -1 || end === -1) {
-      emit({ type: "log", message: `o3-mini: no JSON array found in response (len=${raw.length})`, level: "warn" });
-      return [];
+    const jsonStart = raw.indexOf("{");
+    const jsonEnd   = raw.lastIndexOf("}");
+    if (jsonStart !== -1 && jsonEnd > jsonStart) {
+      const obj = JSON.parse(raw.slice(jsonStart, jsonEnd + 1));
+      if (Array.isArray(obj.notes)) parsed = obj.notes;
     }
+  } catch { /* non-fatal */ }
 
-    const cleaned = raw.slice(start, end + 1);
-    const parsed: any[] = JSON.parse(cleaned);
-
-    // W25: normalize actions, validate shapes
-    const VALID_ACTIONS = new Set(["Buy", "Hold", "Sell", "Trim"]);
-    const ACTION_NORMALIZE: Record<string, string> = {
-      "buy": "Buy", "hold": "Hold", "sell": "Sell", "trim": "Trim",
-      "strong buy": "Buy", "accumulate": "Buy", "reduce": "Trim",
-      "strong sell": "Sell", "overweight": "Buy", "underweight": "Sell",
-    };
-    const normalizeAction = (a: string) => ACTION_NORMALIZE[a?.toLowerCase()] ?? (VALID_ACTIONS.has(a) ? a : "Hold");
-
-    const verdicts: ModelVerdict[] = parsed
-      .filter(v => v && typeof v.ticker === "string")
-      .map(v => ({
-        ticker: v.ticker.toUpperCase(),
-        action: normalizeAction(v.action) as any,
-        confidence: ["high", "medium", "low"].includes(v.confidence) ? v.confidence : "medium",
-        keyReason: String(v.keyReason ?? "").slice(0, 150),
-        evidenceQuality: ["high", "medium", "low"].includes(v.evidenceQuality) ? v.evidenceQuality : "medium",
-      }));
-
-    emit({ type: "log", message: `o3-mini cross-check complete: ${verdicts.length} verdicts`, level: "info" });
-    return verdicts;
-  } catch (err: any) {
-    emit({ type: "log", message: `o3-mini cross-check failed: ${err?.message}`, level: "warn" });
-    return [];
+  if (!parsed || !Array.isArray(parsed)) {
+    emit({ type: "log", message: `Adjudicator: could not parse response (len=${raw.length}). Skipping notes.`, level: "warn" });
+    return {};
   }
+
+  const result: Record<string, AdjudicatorNote> = {};
+  for (const note of parsed) {
+    if (typeof note.ticker !== "string") continue;
+    // Enforce non-authoritative shape — strip any recommendation fields if model hallucinated them
+    result[note.ticker.toUpperCase()] = {
+      ticker: note.ticker.toUpperCase(),
+      riskFlags:            Array.isArray(note.riskFlags) ? note.riskFlags.map(String).slice(0, 5) : [],
+      confidenceAssessment: String(note.confidenceAssessment ?? "").slice(0, 200),
+      keyUncertainty:       String(note.keyUncertainty      ?? "").slice(0, 200),
+    };
+  }
+
+  emit({ type: "log", message: `Adjudicator notes produced for ${Object.keys(result).length} ticker(s)`, level: "info" });
+  return result;
 }

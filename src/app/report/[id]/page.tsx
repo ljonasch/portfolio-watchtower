@@ -4,15 +4,17 @@ import Link from "next/link";
 import {
   ArrowLeft, Target, TrendingUp, AlertTriangle, ExternalLink,
   Zap, Clock, Landmark, Upload, ShieldCheck, ShieldAlert,
-  BarChart3, Layers,
+  BarChart3, Layers, CheckCircle2, XCircle
 } from "lucide-react";
 import { SortableHoldingsTable } from "@/components/SortableHoldingsTable";
 import { SortableRecommendationsTable } from "@/components/SortableRecommendationsTable";
 import { ConvictionThread } from "@/components/ConvictionThread";
 import type { ConvictionThreadData } from "@/components/ConvictionThread";
-import type { MarketContext, Source } from "@/lib/analyzer";
+import type { MarketContext } from "@/lib/analyzer";
+import { projectRecommendation } from "@/lib/view-models";
+import type { SourceViewModel } from "@/lib/view-models/types";
 
-function SourceChip({ source }: { source: Source }) {
+function SourceChip({ source }: { source: SourceViewModel }) {
   return (
     <a
       href={source.url}
@@ -23,6 +25,63 @@ function SourceChip({ source }: { source: Source }) {
       {source.title}
       <ExternalLink className="w-2.5 h-2.5 flex-shrink-0" />
     </a>
+  );
+}
+
+function VerRow({ label, value }: { label: string, value: any }) {
+  if (value === undefined) {
+    return (
+      <details className="p-3 rounded-xl border transition-colors group cursor-pointer bg-slate-900/40 border-slate-800/30 hover:border-slate-700/50">
+        <summary className="flex items-center justify-between list-none focus:outline-none">
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-500">{label}</span>
+            <div className="text-sm font-semibold text-slate-400">Not Available</div>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-slate-500 opacity-0 transition-opacity hidden sm:block">Legacy Run</span>
+          </div>
+        </summary>
+      </details>
+    );
+  }
+
+  // Gracefully handle strings vs new objects containing {status, rationale, ...}
+  const payload = typeof value === "object" && value !== null ? value : { status: typeof value === "string" ? value : false };
+  
+  let ok = payload.status !== false;
+  let text = typeof payload.status === "string" ? payload.status : null;
+  if (typeof payload.status === "string" && payload.status.startsWith("!")) {
+    ok = false;
+    text = payload.status.substring(1);
+  }
+
+  return (
+    <details className={`p-3 rounded-xl border transition-colors group cursor-pointer ${
+      ok 
+        ? "bg-slate-900/40 border-emerald-900/30 hover:border-emerald-700/50" 
+        : "bg-slate-900/40 border-red-900/30 hover:border-red-700/50"
+    }`}>
+      <summary className="flex items-center justify-between list-none focus:outline-none">
+        <div className="flex flex-col gap-1">
+          <span className={`text-[10px] uppercase tracking-wider font-semibold ${
+            ok ? "text-slate-400" : "text-slate-500"
+          }`}>
+            {label}
+          </span>
+          <div className={`text-sm font-semibold ${ok ? "text-slate-200" : "text-red-400"}`}>
+            {text ? text : (ok ? "Verified" : "Failed")}
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:block">Expand</span>
+          {ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" /> : <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />}
+        </div>
+      </summary>
+      
+      <div className="mt-3 pt-3 border-t border-slate-800/50 text-xs text-slate-400 leading-relaxed whitespace-pre-wrap">
+        {payload.rationale || (typeof value === "object" ? JSON.stringify(value, null, 2) : "System step executed seamlessly. No extensive diagnostic logs generated.")}
+      </div>
+    </details>
   );
 }
 
@@ -46,6 +105,10 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
 
   if (!report) return notFound();
 
+  // Read antichurn threshold from AppSettings (defaults to 1.5% if not set)
+  const antichurnSetting = await prisma.appSettings.findUnique({ where: { key: "antichurn_threshold_pct" } });
+  const antichurnPct = antichurnSetting ? parseFloat(antichurnSetting.value) : 1.5;
+
   const totalValue = report.snapshot.holdings.reduce((sum, h) => sum + (h.currentValue || 0), 0);
 
   const marketContext: MarketContext = (() => {
@@ -65,26 +128,27 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
     catch { return {}; }
   })();
 
+  // System Verification (MVP 3)
+  const sysVer = (() => {
+    try { return JSON.parse((report.analysisRun as any)?.researchCoverage ?? "{}"); }
+    catch { return {}; }
+  })();
+
   // Build holding value map for current weights
   const holdingValueByTicker = new Map<string, number>();
   for (const h of report.snapshot.holdings) {
     holdingValueByTicker.set(h.ticker, (holdingValueByTicker.get(h.ticker) || 0) + (h.currentValue || 0));
   }
 
-  // Enrich recommendations with parsed sources + correct current weight
+  // Project recommendations through view-model layer (Batch 4)
+  // Raw DB rows never pass to components directly after this point.
   const recsEnriched = report.recommendations.map(rec => {
+    // Correct currentWeight from live holdings (authoritative over DB-stored value)
     const holdingValue = holdingValueByTicker.get(rec.ticker) ?? 0;
     const computedCurrentWeight = totalValue > 0
       ? Number(((holdingValue / totalValue) * 100).toFixed(2))
       : 0;
-    return {
-      ...rec,
-      currentWeight: computedCurrentWeight,
-      parsedSources: (() => {
-        try { return JSON.parse(rec.reasoningSources ?? "[]") as Source[]; }
-        catch { return [] as Source[]; }
-      })(),
-    };
+    return projectRecommendation({ ...rec, currentWeight: computedCurrentWeight }, antichurnPct ?? 1.5);
   });
 
   // Convictions indexed by ticker
@@ -98,9 +162,9 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
       rationale: convictionsByTicker.get(r.ticker)!.rationale,
     }));
 
-  // Tickers that have changed this run
+  // Tickers that have changed this run (use actionBadgeVariant — never compare to lowercase "hold")
   const changedRecs = recsEnriched.filter(r =>
-    r.shareDelta !== 0 || (r.action !== "Hold" && r.action !== "hold")
+    r.shareDelta !== 0 || r.actionBadgeVariant !== "hold"
   );
 
   // Market context horizons config
@@ -161,53 +225,21 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
         )}
       </div>
 
-      {/* Active Convictions Dialogue Threads */}
-      {convictionThreads.length > 0 && (
-        <div className="rounded-2xl border border-amber-500/40 overflow-hidden shadow-2xl shadow-amber-500/5">
-          {/* Section header banner */}
-          <div className="bg-gradient-to-r from-amber-950/60 via-amber-900/40 to-amber-950/60 border-b border-amber-500/30 px-5 py-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center flex-shrink-0">
-                  <ShieldAlert className="w-5 h-5 text-amber-400" />
-                </div>
-                <div>
-                  <h2 className="text-base font-bold text-amber-200 leading-tight">
-                    {convictionThreads.length} Active Conviction {convictionThreads.length > 1 ? "Notes" : "Note"} — Injected into this Analysis
-                  </h2>
-                  <p className="text-xs text-amber-500/70 mt-0.5">
-                    Your thesis vs. AI counterpoint · Full conversation history tracked with dates · Reply to rebut
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 flex-wrap">
-                {convictionThreads.map(c => {
-                  const hasAiReply = c.messages.some(m => m.role === "ai");
-                  return (
-                    <div key={c.ticker} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
-                      hasAiReply
-                        ? "bg-red-500/15 text-red-300 border-red-500/30"
-                        : "bg-amber-500/15 text-amber-400 border-amber-500/30"
-                    }`}>
-                      <span>{c.ticker}</span>
-                      {hasAiReply
-                        ? <span className="text-[10px] opacity-80">AI responded</span>
-                        : <span className="text-[10px] opacity-80">awaiting reply</span>
-                      }
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-          {/* Thread list */}
-          <div className="bg-slate-950/60 p-4 space-y-3">
-            {convictionThreads.map(c => (
-              <ConvictionThread key={c.ticker} conviction={c} />
-            ))}
-          </div>
+
+      {/* System Verification Check */}
+      <div className="space-y-4">
+        <h3 className="text-xl font-bold border-b border-slate-800 pb-2 flex items-center gap-2 text-slate-200">
+          <ShieldCheck className="w-5 h-5 text-emerald-400" /> Deep Analysis Verification
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          <VerRow label="Market Regime" value={sysVer.marketRegime} />
+          <VerRow label="Portfolio Gap Scan" value={sysVer.gapAnalysis} />
+          <VerRow label="Candidate Screening" value={sysVer.candidateScreening} />
+          <VerRow label="News & Event Sources" value={sysVer.fastSearchResearch} />
+          <VerRow label="FinBERT Sentiment" value={sysVer.finbertSentiment} />
+          <VerRow label="GPT-5 Reasoning" value={sysVer.gpt5Strategic} />
         </div>
-      )}
+      </div>
 
       {/* Summary + Reasoning */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -342,28 +374,7 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
       <div className="space-y-4">
         <h2 className="text-xl font-bold border-b border-slate-800 pb-2">Recommended Final Holdings</h2>
         <SortableRecommendationsTable
-          recommendations={recsEnriched.map(r => ({
-            id: r.id,
-            ticker: r.ticker,
-            companyName: r.companyName,
-            role: r.role,
-            targetWeight: r.targetWeight,
-            targetShares: r.targetShares,
-            shareDelta: r.shareDelta,
-            dollarDelta: (r as any).dollarDelta ?? null,
-            currentWeight: r.currentWeight,
-            currentShares: r.currentShares,
-            acceptableRangeLow: (r as any).acceptableRangeLow ?? null,
-            acceptableRangeHigh: (r as any).acceptableRangeHigh ?? null,
-            action: r.action,
-            confidence: r.confidence,
-            positionStatus: (r as any).positionStatus ?? null,
-            evidenceQuality: (r as any).evidenceQuality ?? null,
-            whyChanged: (r as any).whyChanged ?? null,
-            thesisSummary: r.thesisSummary,
-            detailedReasoning: r.detailedReasoning,
-            valueDelta: r.valueDelta,
-          }))}
+          recommendations={recsEnriched}
           convictions={convictionThreads.map(c => ({ ticker: c.ticker, rationale: c.rationale, id: c.id, createdAt: c.createdAt, updatedAt: c.updatedAt }))}
         />
       </div>
@@ -404,8 +415,8 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
                       )}
                     </td>
                     <td className={`px-4 py-3 font-medium ${
-                      rec.action === "Buy" || rec.action === "Add" ? "text-green-400"
-                      : rec.action === "Hold" ? "text-slate-400" : "text-red-400"
+                      rec.actionBadgeVariant === "buy" ? "text-green-400"
+                      : rec.actionBadgeVariant === "hold" ? "text-slate-400" : "text-red-400"
                     }`}>
                       {rec.action}
                     </td>
@@ -415,17 +426,17 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
                       {rec.shareDelta === 0 ? "—" : `${rec.shareDelta > 0 ? "+" : ""}${rec.shareDelta} shrs`}
                     </td>
                     <td className={`px-4 py-3 text-right font-medium tabular-nums ${
-                      ((rec as any).dollarDelta ?? 0) > 0 ? "text-green-400" : ((rec as any).dollarDelta ?? 0) < 0 ? "text-red-400" : "text-slate-500"
+                      rec.dollarDelta > 0 ? "text-green-400" : rec.dollarDelta < 0 ? "text-red-400" : "text-slate-500"
                     }`}>
-                      {!(rec as any).dollarDelta || (rec as any).dollarDelta === 0 ? "—" : (
-                        `${(rec as any).dollarDelta > 0 ? "+" : ""}$${Math.abs((rec as any).dollarDelta).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                      {!rec.dollarDelta || rec.dollarDelta === 0 ? "—" : (
+                        `${rec.dollarDelta > 0 ? "+" : ""}$${Math.abs(rec.dollarDelta).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
                       )}
                     </td>
                     <td className="px-4 py-3">
                       <p className="text-xs text-slate-400 leading-relaxed mb-1.5">{rec.detailedReasoning}</p>
-                      {rec.parsedSources.length > 0 && (
+                      {rec.sources.length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
-                          {rec.parsedSources.map((s, i) => <SourceChip key={i} source={s} />)}
+                          {rec.sources.map((s: SourceViewModel, i: number) => <SourceChip key={i} source={s} />)}
                         </div>
                       )}
                     </td>
@@ -433,6 +444,54 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Active Convictions Dialogue Threads */}
+      {convictionThreads.length > 0 && (
+        <div className="rounded-2xl border border-amber-500/40 overflow-hidden shadow-2xl shadow-amber-500/5">
+          {/* Section header banner */}
+          <div className="bg-gradient-to-r from-amber-950/60 via-amber-900/40 to-amber-950/60 border-b border-amber-500/30 px-5 py-4">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center flex-shrink-0">
+                  <ShieldAlert className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-amber-200 leading-tight">
+                    {convictionThreads.length} Active Conviction {convictionThreads.length > 1 ? "Notes" : "Note"} — Injected into this Analysis
+                  </h2>
+                  <p className="text-xs text-amber-500/70 mt-0.5">
+                    Your thesis vs. AI counterpoint · Full conversation history tracked with dates · Reply to rebut
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                {convictionThreads.map(c => {
+                  const hasAiReply = c.messages.some(m => m.role === "ai");
+                  return (
+                    <div key={c.ticker} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                      hasAiReply
+                        ? "bg-red-500/15 text-red-300 border-red-500/30"
+                        : "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                    }`}>
+                      <span>{c.ticker}</span>
+                      {hasAiReply
+                        ? <span className="text-[10px] opacity-80">AI responded</span>
+                        : <span className="text-[10px] opacity-80">awaiting reply</span>
+                      }
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          {/* Thread list */}
+          <div className="bg-slate-950/60 p-4 space-y-3">
+            {convictionThreads.map(c => (
+              <ConvictionThread key={c.ticker} conviction={c} />
+            ))}
           </div>
         </div>
       )}

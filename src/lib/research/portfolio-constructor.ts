@@ -42,18 +42,53 @@ export function validateWeightSum(recommendations: RecommendationV3[]): {
 // ─── Normalize weights to exactly 100% ───────────────────────────────────────
 
 export function normalizeWeights(recommendations: RecommendationV3[]): RecommendationV3[] {
-  const { sum } = validateWeightSum(recommendations);
-  if (Math.abs(sum - 100) < 0.01) return recommendations;
+  // Edge-case: if LLM literally gave 0 weights for everything, fall back to pure math
+  const allZero = recommendations.every(r => r.targetWeight === 0);
+  if (allZero) {
+    const totalTarget = recommendations.reduce((acc, r) => acc + (r.targetShares * (r.currentPrice || 0)), 0);
+    return recommendations.map(r => {
+      const w = totalTarget > 0 ? (r.targetShares * (r.currentPrice || 0) / totalTarget) * 100 : 0;
+      return { ...r, targetWeight: Number(w.toFixed(2)) };
+    });
+  }
 
-  // Distribute the drift proportionally across all non-cash hold positions
-  const holdable = recommendations.filter((r) => r.action !== "Exit" && r.ticker !== "CASH");
-  if (holdable.length === 0) return recommendations;
+  let currentSum = recommendations.reduce((acc, r) => acc + r.targetWeight, 0);
+  if (Math.abs(currentSum - 100) < 0.05) return recommendations;
 
-  const correctionPerPosition = (100 - sum) / holdable.length;
-  return recommendations.map((r) => {
-    if (r.action === "Exit" || r.ticker === "CASH") return r;
-    const adjusted = Number((r.targetWeight + correctionPerPosition).toFixed(2));
-    return { ...r, targetWeight: Math.max(0, adjusted) };
+  const hasCash = recommendations.some(r => r.ticker === "CASH");
+
+  // Scenario 1: Underspent (sum < 100) and we possess a CASH holding to absorb it.
+  if (currentSum < 100 && hasCash) {
+    const missing = 100 - currentSum;
+    return recommendations.map(r => {
+      if (r.ticker === "CASH") {
+        return { ...r, targetWeight: Number((r.targetWeight + missing).toFixed(2)) };
+      }
+      return r;
+    });
+  }
+
+  // Scenario 2: Overspent (sum > 100) OR we are underspent but have no CASH position.
+  // In this highly invalid state, we must scale all positions proportionally to hit 100.
+  const scale = 100 / currentSum;
+  return recommendations.map(r => {
+    const newTargetWeight = Number((r.targetWeight * scale).toFixed(2));
+    
+    // Scale the shares to perfectly trace the rescaled weight.
+    let newTargetShares = r.targetShares;
+    let expectedDelta = r.shareDelta;
+    if (r.currentPrice && r.currentPrice > 0 && r.targetWeight > 0) {
+      // e.g. if we scale by 0.8x, we must lower targetShares by 0.8x
+      newTargetShares = Math.round((r.targetShares * scale) * 100) / 100;
+      expectedDelta = Number((newTargetShares - r.currentShares).toFixed(2));
+    }
+    
+    return { 
+      ...r, 
+      targetWeight: newTargetWeight,
+      targetShares: newTargetShares,
+      shareDelta: expectedDelta
+    };
   });
 }
 

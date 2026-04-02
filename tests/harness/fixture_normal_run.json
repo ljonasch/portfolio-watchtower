@@ -1,0 +1,20 @@
+{
+  "_fixtureId": "golden_packet_normal_run",
+  "_description": "Normal completed analysis run with full evidence packet. All sections populated. Outcome: used.",
+  "runId": "run_fixture_001",
+  "snapshotId": "snap_fixture_001",
+  "userId": "user_fixture_001",
+  "schemaVersion": 1,
+  "frozenAt": "2026-04-01T10:00:00.000Z",
+  "promptHash": "a1b2c3d4e5f6a1b2",
+  "outcome": "used",
+  "totalInputChars": 18450,
+  "perSectionCharsJson": "{\"regime\":420,\"breaking24h\":1800,\"news30d\":8000,\"priceReactions\":600,\"sentiment\":540,\"valuation\":2400,\"correlation\":1200,\"candidates\":900}",
+  "holdingsJson": "{\"holdingCount\":8}",
+  "newsJson": "{\"text\":\"NVDA beats earnings, up 6% after-hours. Fed holds rates steady. AAPL new product expected Q3.\",\"breaking24h\":\"NVDA reports record Q1 earnings, data center revenue up 427% YoY.\"}",
+  "sentimentJson": "{\"text\":\"NVDA: bullish (score 0.82, conf 0.91) — \\\"NVDA reports record quarterly earnings\\\"\\nAAPL: neutral (score 0.05, conf 0.72)\\nMSFT: bullish (score 0.65, conf 0.85)\"}",
+  "regimeJson": "{\"riskMode\":\"risk-on\",\"rateTrend\":\"plateau\",\"dollarTrend\":\"stable\",\"vixLevel\":\"normal\",\"sectorLeadership\":\"Growth over Value\",\"summary\":\"Market in risk-on posture with VIX at 16.2, 10Y yield at 4.35%, DXY at 103.8. Growth sectors leading.\",\"aggressionMultiplier\":1.15}",
+  "valuationJson": "{\"text\":\"NVDA: P/E 45x (sector avg 38x), PEG 0.9\"}",
+  "candidatesJson": "{\"text\":\"PLTR: AI platform expansion, high conviction, via screener\",\"candidateCount\":1}",
+  "correlationJson": "{\"text\":\"NVDA-MSFT: 0.72 (high). AAPL-MSFT: 0.58 (moderate).\"}"
+}

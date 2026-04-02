@@ -1,0 +1,25 @@
+{
+  "_fixtureId": "golden_packet_fallback_news",
+  "_description": "Completed run where the primary news fetch failed (gpt-5-search rate limit) and fell back to keyword-only search. usingFallbackNews=true. EvidencePacket outcome=used.",
+  "runId": "run_fixture_003",
+  "snapshotId": "snap_fixture_001",
+  "userId": "user_fixture_001",
+  "schemaVersion": 1,
+  "frozenAt": "2026-04-01T09:00:00.000Z",
+  "promptHash": "c3d4e5f6a1b2c3d4",
+  "outcome": "used",
+  "totalInputChars": 9800,
+  "perSectionCharsJson": "{\"regime\":420,\"breaking24h\":0,\"news30d\":4200,\"priceReactions\":400,\"sentiment\":320,\"valuation\":1800,\"correlation\":900,\"candidates\":0}",
+  "holdingsJson": "{\"holdingCount\":6}",
+  "newsJson": "{\"text\":\"[FALLBACK] Keyword-based news summary: NVDA AI chip demand strong. AAPL iPhone 17 cycle positive.\",\"breaking24h\":\"\"}",
+  "sentimentJson": "{\"text\":\"6 tickers scored via local FinBERT (HuggingFace)\"}",
+  "regimeJson": "{\"riskMode\":\"risk-on\",\"rateTrend\":\"plateau\",\"dollarTrend\":\"stable\",\"vixLevel\":\"suppressed\",\"sectorLeadership\":\"Tech over Energy\",\"summary\":\"Risk-on environment. VIX at 13.8.\",\"aggressionMultiplier\":1.15}",
+  "valuationJson": "{\"text\":\"6 positions valuated\"}",
+  "candidatesJson": "{\"text\":\"\",\"candidateCount\":0}",
+  "correlationJson": "{\"text\":\"Low correlation across portfolio — good diversification.\"}",
+  "_runRecord": {
+    "status": "complete",
+    "alertLevel": "yellow",
+    "qualityMeta": "{\"promptHash\":\"c3d4e5f6a1b2c3d4\",\"usingFallbackNews\":true,\"validationWarningCount\":2,\"totalInputChars\":9800}"
+  }
+}

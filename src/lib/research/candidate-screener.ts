@@ -79,10 +79,23 @@ async function validateCandidatePrice(ticker: string): Promise<number | null> {
 }
 
 function extractJsonArray(raw: string): any[] {
-  const stripped = raw.replace(/^```[\w]*\n?/m, "").replace(/\n?```$/m, "").trim();
-  const s = stripped.indexOf("["), e = stripped.lastIndexOf("]");
-  if (s === -1 || e === -1) return [];
-  try { return JSON.parse(stripped.slice(s, e + 1)); } catch { return []; }
+  const stripped = raw.trim();
+  const s = stripped.indexOf("[");
+  const e = stripped.lastIndexOf("]");
+  if (s !== -1 && e !== -1 && e >= s) {
+    try {
+      const parsed = JSON.parse(stripped.slice(s, e + 1));
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  }
+  const match = stripped.match(/\[\s*\{[\s\S]*?\}\s*\]/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  }
+  return [];
 }
 
 export async function screenCandidates(
@@ -105,26 +118,44 @@ export async function screenCandidates(
   // W28: expand exclusion list with aliases
   const excludedSet = expandAliases(existingTickers);
 
-  const [gapRes, momentumRes] = await Promise.allSettled([
-    // Search C: gap-targeted (JSON format for reliable parsing)
-    openai.chat.completions.create({
-      model: "gpt-5-search-api",
-      max_completion_tokens: 1000,
-      messages: [{ role: "user", content: `Today is ${today}. Find 6-8 stocks that fill this portfolio gap:\n"${searchBrief}"\n\nRequirements:\n- NOT any of these: ${excluded}\n- Asset types: ${permittedAssets}\n- ${liquidityReq}\n- Currently rated Buy or Strong Buy by at least 1 major analyst\n- Must have a specific catalyst from the last 30 days\n\nReturn ONLY a JSON array, no other text:\n[{"ticker":"SYMBOL","companyName":"Name","reason":"why this fills the gap","catalyst":"specific recent event","analystRating":"rating or none"}]` }]
-    }).catch(() => null),
+    async function fetchWithRetry(prompt: string, attempt = 1): Promise<any> {
+      try {
+        const res = await openai.chat.completions.create({
+          model: "gpt-5-search-api",
+          max_completion_tokens: 300,
+          messages: [{ role: "user", content: prompt }]
+        });
+        return res;
+      } catch (err: any) {
+        if (err?.status === 429 && attempt < 8) {
+          emit({ type: "log", message: `Candidate screener rate limit hit, waiting 65s...`, level: "warn" });
+          await new Promise(r => setTimeout(r, 65000));
+          return fetchWithRetry(prompt, attempt + 1);
+        }
+        emit({ type: "log", message: `Candidate screen failed: ${err?.message}`, level: "warn" });
+        return null;
+      }
+    }
 
-    // Search D: Momentum/event-driven (W12: 30 days, not just 7)
-    openai.chat.completions.create({
-      model: "gpt-5-search-api",
-      max_completion_tokens: 1000,
-      messages: [{ role: "user", content: `Today is ${today}. Find 6-8 stocks with significant positive catalysts in the last 30 days.\n\nCatalysts: earnings beats, FDA approvals, major contract wins, analyst upgrades to Buy/Strong Buy, dividend initiations, major product launches.\n\nRequirements:\n- NOT any of these: ${excluded}\n- Any size — do not filter by market cap\n- The catalyst must have occurred in the last 30 days\n\nReturn ONLY a JSON array, no other text:\n[{"ticker":"SYMBOL","companyName":"Name","reason":"why this is worth evaluating","catalyst":"specific event and date","analystRating":"rating or none"}]` }]
-    }).catch(() => null),
-  ]);
+    const unifiedPrompt = `Today is ${today}. Find 3-4 stocks that fill this portfolio gap: "${searchBrief}".
+Find 3-4 MORE stocks with significant positive catalysts (earnings beats, FDA approvals, major contract wins, analyst upgrades) in the last 30 days.
+
+Requirements:
+- NOT any of these: ${excluded}
+- Asset types: ${permittedAssets}
+- ${liquidityReq}
+- Currently rated Buy or Strong Buy by at least 1 major analyst
+- Must have a specific event catalyst from the last 30 days
+
+Return ONLY a JSON array, no other text:
+[{"ticker":"SYMBOL","companyName":"Name","reason":"why this fills the gap OR why it has momentum","catalyst":"specific event and date","analystRating":"rating or none"}]`;
+
+    const unifiedRes = await fetchWithRetry(unifiedPrompt);
 
   const candidates: Candidate[] = [];
   const seenTickers = new Set(excludedSet);
 
-  const parseAndAdd = (res: any, source: "gap_screener" | "momentum") => {
+  const parseAndAdd = (res: any) => {
     if (!res) return;
     const raw = (res as any).choices?.[0]?.message?.content ?? "";
     const items = extractJsonArray(raw);
@@ -145,7 +176,7 @@ export async function screenCandidates(
       candidates.push({
         ticker,
         companyName: String(item.companyName ?? "").slice(0, 60),
-        source,
+        source: "gap_screener", // Unified tag
         reason: String(item.reason ?? "").slice(0, 200),
         catalyst: item.catalyst ? String(item.catalyst).slice(0, 200) : undefined,
         analystRating: item.analystRating ? String(item.analystRating).slice(0, 50) : undefined,
@@ -153,8 +184,7 @@ export async function screenCandidates(
     }
   };
 
-  if (gapRes.status === "fulfilled") parseAndAdd(gapRes.value, "gap_screener");
-  if (momentumRes.status === "fulfilled") parseAndAdd(momentumRes.value, "momentum");
+  parseAndAdd(unifiedRes);
 
   // F2: Validate all candidates with price check (parallel, non-blocking on failure)
   emit({ type: "log", message: `Validating ${candidates.length} candidates via price check...`, level: "info" });

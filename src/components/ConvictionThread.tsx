@@ -169,12 +169,6 @@ export function ConvictionThread({ conviction, onRetire, onMessageSent }: Props)
   const lastMsg = messages[messages.length - 1];
   const awaitingAI = lastMsg?.role === "user" || messages.length === 0;
 
-  useEffect(() => {
-    if (expanded) {
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
-    }
-  }, [messages, expanded]);
-
   const handleSend = async () => {
     const content = replyText.trim();
     if (!content || sending) return;

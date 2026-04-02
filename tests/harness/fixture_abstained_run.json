@@ -1,0 +1,25 @@
+{
+  "_fixtureId": "golden_packet_abstained_run",
+  "_description": "Abstained run: GPT-5 returned finish_reason=length. EvidencePacket outcome=abstained. AnalysisRun status=abstained.",
+  "runId": "run_fixture_002",
+  "snapshotId": "snap_fixture_001",
+  "userId": "user_fixture_001",
+  "schemaVersion": 1,
+  "frozenAt": "2026-04-01T11:00:00.000Z",
+  "promptHash": "b2c3d4e5f6a1b2c3",
+  "outcome": "abstained",
+  "totalInputChars": 31200,
+  "perSectionCharsJson": "{\"regime\":420,\"breaking24h\":3000,\"news30d\":8000,\"priceReactions\":1200,\"sentiment\":800,\"valuation\":3200,\"correlation\":2400,\"candidates\":2100}",
+  "holdingsJson": "{\"holdingCount\":14}",
+  "newsJson": "{\"text\":\"[TRUNCATED — context exceeded 8000 chars limit]\",\"breaking24h\":\"[TRUNCATED — breaking news section truncated at 3000 chars]\"}",
+  "sentimentJson": "{\"text\":\"14 tickers scored\"}",
+  "regimeJson": "{\"riskMode\":\"neutral\",\"rateTrend\":\"rising\",\"dollarTrend\":\"strengthening\",\"vixLevel\":\"elevated\",\"sectorLeadership\":\"Defensive over Growth\",\"summary\":\"Elevated uncertainty. VIX at 24.1, 10Y yield at 4.81%, DXY at 106.2.\",\"aggressionMultiplier\":1.0}",
+  "valuationJson": "{\"text\":\"14 positions valuated\"}",
+  "candidatesJson": "{\"text\":\"No candidates passed pre-filter.\",\"candidateCount\":0}",
+  "correlationJson": "{\"text\":\"High correlation cluster: NVDA-AMD-QCOM (avg 0.81)\"}",
+  "_runRecord": {
+    "status": "abstained",
+    "errorMessage": "finish_reason_length: Model output was truncated (max_completion_tokens=6400). Analysis aborted.",
+    "qualityMeta": "{\"abstainReason\":\"CONTEXT_TOO_LONG\",\"isLengthAbort\":true,\"promptHash\":\"b2c3d4e5f6a1b2c3\",\"usingFallbackNews\":false}"
+  }
+}

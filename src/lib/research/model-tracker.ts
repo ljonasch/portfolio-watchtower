@@ -60,10 +60,10 @@ export async function recordRunStats(
   prisma: any,
   runResults: {
     gpt5Correct?: boolean;
-    o3Correct?: boolean;
+    o3Correct?: boolean;        // kept for legacy stat reads — not written in new pipeline
     sentimentCorrect?: boolean;
     gpt5Confidence: number;
-    o3Confidence: number;
+    o3Confidence?: number;      // optional — o3 no longer runs on every pipeline call (F1 fix)
     divergedTickers: string[];
     totalTickers: number;
   }
@@ -79,9 +79,12 @@ export async function recordRunStats(
     const divergenceRate = runResults.totalTickers > 0 ? runResults.divergedTickers.length / runResults.totalTickers : 0;
 
     for (const stat of stats) {
+      // F1 fix: o3mini removed from active pipeline — skip stat updates for o3mini
+      // Legacy o3mini entries in DB are left inert; new runs never write to them.
+      if (stat.model === "o3mini") continue;
+
       stat.totalPredictions++;
       if (stat.model === "gpt5"      && runResults.gpt5Correct      != null) { if (runResults.gpt5Correct)      stat.correctPredictions++; }
-      if (stat.model === "o3mini"    && runResults.o3Correct        != null) { if (runResults.o3Correct)        stat.correctPredictions++; }
       if (stat.model === "sentiment" && runResults.sentimentCorrect  != null) { if (runResults.sentimentCorrect) stat.correctPredictions++; }
       stat.divergenceRate = (stat.divergenceRate * (stat.totalPredictions - 1) + divergenceRate) / stat.totalPredictions;
     }
@@ -110,26 +113,27 @@ async function maybeUpdateWeights(prisma: any, stats: ModelStats[]): Promise<voi
   };
 
   const gpt5Rate = getHitRate("gpt5");
-  const o3Rate   = getHitRate("o3mini");
+  // o3mini removed from active pipeline (F1 fix) — no longer included in weight computation
   const sentRate = getHitRate("sentiment");
 
-  const total = gpt5Rate + o3Rate + sentRate;
+  const total = gpt5Rate + sentRate;
   if (total === 0) return;
 
-  // W20: Confidence calibration — penalty for high divergence (overconfident models diverge more)
+  // W20: Confidence calibration — penalty for high divergence
   const getDivPenalty = (model: string) => {
     const s = stats.find(s => s.model === model);
     return s ? Math.max(0, 1 - s.divergenceRate * 0.5) : 1.0;
   };
 
   const gpt5Adj  = gpt5Rate * getDivPenalty("gpt5");
-  const o3Adj    = o3Rate   * getDivPenalty("o3mini");
   const sentAdj  = sentRate * getDivPenalty("sentiment");
-  const adjTotal = gpt5Adj + o3Adj + sentAdj;
+  const adjTotal = gpt5Adj + sentAdj;
+
+  if (adjTotal === 0) return;
 
   const newWeights: ModelWeights = {
     gpt5:      Math.round((gpt5Adj  / adjTotal) * 100) / 100,
-    o3mini:    Math.round((o3Adj    / adjTotal) * 100) / 100,
+    o3mini:    0,    // F1 fix: o3 removed from voting; written as 0 to preserve schema compat
     sentiment: Math.round((sentAdj  / adjTotal) * 100) / 100,
     lastUpdated: new Date().toISOString(),
     runCount: totalRuns,

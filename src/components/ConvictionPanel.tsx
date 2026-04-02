@@ -27,10 +27,10 @@ function ConvictionBadge({ onClick }: { onClick: () => void }) {
     <button
       onClick={onClick}
       title="You have a conviction note attached to this position"
-      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 transition-colors cursor-pointer"
+      className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-medium text-slate-400 bg-slate-800/40 hover:bg-slate-800 hover:text-slate-300 transition-colors cursor-pointer"
     >
-      <MessageSquareQuote className="w-2.5 h-2.5" />
-      Conviction
+      <MessageSquareQuote className="w-3 h-3" />
+      Note
     </button>
   );
 }

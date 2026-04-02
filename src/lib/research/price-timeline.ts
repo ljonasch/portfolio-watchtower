@@ -137,9 +137,16 @@ async function fetchIntradayBars(
   exchange: ExchangeInfo & { name: string }
 ): Promise<{ bars: PriceBar[]; prevClose: number; preMarket: number | null; afterHours: number | null }> {
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=5m&range=1d&includePrePost=true`;
+    // F8: Map crypto to Yahoo's required -USD suffix for chart data
+    const cryptoSymbols = ["BTC", "ETH", "SOL", "ADA", "DOGE", "XRP", "DOT", "AVAX", "LINK", "LTC", "MATIC", "UNI"];
+    const yahooTicker = cryptoSymbols.includes(ticker.toUpperCase()) ? `${ticker.toUpperCase()}-USD` : ticker;
+
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooTicker)}?interval=5m&range=1d&includePrePost=true`;
     const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0" },
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+      },
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return { bars: [], prevClose: 0, preMarket: null, afterHours: null };
@@ -180,7 +187,9 @@ async function fetchIntradayBars(
     }
 
     return { bars, prevClose, preMarket: preMarketPrice, afterHours: afterHoursPrice };
-  } catch {
+  } catch (err: any) {
+    // F3: Log the actual error so price fetch failures are visible in server logs
+    console.warn(`[price-timeline] ${ticker}: bar fetch failed — ${err?.message ?? String(err)}`);
     return { bars: [], prevClose: 0, preMarket: null, afterHours: null };
   }
 }
@@ -318,6 +327,13 @@ export async function fetchPriceTimelines(
           exchange: exchange.name,
         };
         result.set(ticker.toUpperCase(), tl);
+
+        // F3: Log bar count per ticker for diagnosability
+        emit({
+          type: "log",
+          message: `${ticker} (${exchange.name}): ${bars.length} price bars${marketClosed ? " [market closed]" : ""}${reactions.length > 0 ? `, ${reactions.length} article reactions` : ""}`,
+          level: bars.length === 0 && !marketClosed ? "warn" : "info",
+        });
 
         if (marketClosed) {
           emit({ type: "log", message: `${ticker}: market closed today (holiday/weekend)`, level: "info" });

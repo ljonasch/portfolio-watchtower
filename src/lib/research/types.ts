@@ -162,13 +162,15 @@ export interface PortfolioReportV3 {
   watchlistIdeas: WatchlistIdeaV3[];
 }
 
-// ─── Validation ───────────────────────────────────────────────────────────────
-
 export interface ValidationError {
   field: string;
-  message: string;
   ticker?: string;
-  corrected?: boolean;
+  expected: string;       // what was expected (added Batch 2)
+  received: string;       // what was received
+  corrected: boolean;
+  correctionApplied?: string;
+  // kept for backward compat with validator layer
+  message?: string;
 }
 
 export interface ValidationResult {
@@ -176,4 +178,79 @@ export interface ValidationResult {
   errors: ValidationError[];
   warnings: ValidationError[];
   correctedReport?: Partial<PortfolioReportV3>;
+}
+
+// ─── New shared types added in Batch 2 ───────────────────────────────────────
+
+// Candidate universe — deterministic output of candidate_universe_filter
+export interface Candidate {
+  ticker: string;
+  companyName: string;
+  reason: string;
+  sectorGap: string | null;
+  weightGap: number | null;
+  source: "sector_gap" | "weight_gap" | "watchlist";
+}
+export type CandidateList = Candidate[]; // max 5 items
+
+// Market regime — gpt-5.4-mini output, schemaVersion enforced at write
+export interface MarketRegime {
+  schemaVersion: 1;
+  trend: "bull" | "bear" | "sideways";
+  volatilityRegime: "low" | "normal" | "high" | "extreme";
+  riskOnOffSignal: "risk-on" | "neutral" | "risk-off";
+  summary: string;       // max 200 chars
+  generatedAt: string;   // ISO timestamp
+  modelUsed: string;
+}
+
+// News types — structured output of news_ingestion_and_dedup
+export interface NewsArticle {
+  title: string;
+  source: string;
+  publishedAt: string;
+  url: string;
+  snippet: string;
+  qualityTag: "high" | "medium" | "low";
+  ticker: string | null;
+}
+
+export interface NewsResult {
+  combinedSummary: string;
+  breaking24h: NewsArticle[];
+  allSources: NewsArticle[];
+  usingFallback: boolean;
+  fetchedAt: string;
+}
+
+// AbstainReason — closed enum; never a freeform string downstream
+export type AbstainReason =
+  | "finish_reason_length"
+  | "empty_response_after_retry"
+  | "schema_validation_failed_after_retry"
+  | "weight_sum_zero"
+  | "incomplete_coverage"
+  | "repair_still_invalid"
+  | "evidence_packet_persist_failed"
+  | "circuit_breaker_open"
+  // Batch 6 additions — orchestrator-level abstain reasons
+  | "CONTEXT_TOO_LONG"          // finish_reason=length from OpenAI
+  | "LLM_FAILURE"               // GPT-5 threw a non-length error
+  | "VALIDATION_HARD_ERROR";    // validation_enforce_block=true + hard errors
+
+export interface AbstainResult {
+  type: "abstain";
+  reason: AbstainReason;           // closed enum — never freeform string
+  stage: string;
+  retryCount: number;
+  validationErrors?: ValidationError[];
+  runId: string;
+  timestamp: string;
+}
+
+// Retry utility config — used by withRetry (implemented Batch 3)
+export interface RetryConfig {
+  maxAttempts: number;
+  backoffMs: number;
+  abortOnLengthError?: boolean;
 }
