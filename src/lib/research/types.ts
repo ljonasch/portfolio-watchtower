@@ -131,6 +131,7 @@ export interface RecommendationV3 {
   thesisSummary: string;
   detailedReasoning: string;
   whyChanged: string;
+  systemNote?: string;
   reasoningSources: Source[];
 }
 

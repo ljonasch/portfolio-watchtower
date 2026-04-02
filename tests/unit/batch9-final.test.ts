@@ -15,6 +15,7 @@ import { projectConvictionMessage } from "@/lib/view-models/index";
 import { getAbstainReasonDisplayString } from "@/lib/view-models/formatters";
 import type { AbstainReason } from "@/lib/research/types";
 import { projectAppSettings } from "@/lib/view-models/index";
+import { applyAntiChurnOverride } from "@/lib/analyzer";
 
 // ─── T04: repairAction — all branches ─────────────────────────────────────────
 
@@ -181,5 +182,45 @@ describe("T59 — getAbstainReasonDisplayString: all enum values covered", () =>
     const strings = ALL_REASONS.map(getAbstainReasonDisplayString);
     const unique = new Set(strings);
     expect(unique.size).toBe(ALL_REASONS.length);
+  });
+});
+
+describe("F4 â€” anti-churn audit field separation", () => {
+  test("anti-churn override keeps whyChanged but writes deterministic note to systemNote", () => {
+    const originalWhyChanged = "LLM rationale: minor rebalance after earnings.";
+    const recommendations = [
+      {
+        ticker: "AAPL",
+        companyName: "Apple Inc.",
+        role: "Core" as const,
+        currentShares: 10,
+        currentPrice: 150,
+        targetShares: 11,
+        shareDelta: 1,
+        dollarDelta: 150,
+        currentWeight: 10,
+        targetWeight: 10.8,
+        acceptableRangeLow: 8,
+        acceptableRangeHigh: 12,
+        valueDelta: 150,
+        action: "Buy" as const,
+        confidence: "high" as const,
+        positionStatus: "underweight" as const,
+        evidenceQuality: "high" as const,
+        thesisSummary: "Thesis",
+        detailedReasoning: "Reasoning",
+        whyChanged: originalWhyChanged,
+        systemNote: undefined,
+        reasoningSources: [],
+      },
+    ];
+
+    const result = applyAntiChurnOverride(recommendations, 1.5);
+    const rec = result[0];
+
+    expect(rec.action).toBe("Hold");
+    expect(rec.whyChanged).toBe(originalWhyChanged);
+    expect(rec.systemNote).toContain("Action normalized to Hold");
+    expect(rec.systemNote).toContain("antichurn threshold 1.5%");
   });
 });

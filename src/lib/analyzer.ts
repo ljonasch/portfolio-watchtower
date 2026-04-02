@@ -40,6 +40,29 @@ import type {
 
 export type RecommendationResult = RecommendationV3;
 
+export function applyAntiChurnOverride(
+  recommendations: RecommendationV3[],
+  antichurnThresholdPct: number
+): RecommendationV3[] {
+  for (const rec of recommendations) {
+    const weightShift = (rec.targetWeight || 0) - (rec.currentWeight || 0);
+    if (
+      (rec.action === "Trim" || rec.action === "Buy") &&
+      Math.abs(weightShift) < antichurnThresholdPct &&
+      rec.targetShares > 0 &&
+      rec.currentShares > 0
+    ) {
+      rec.action = "Hold";
+      const antiChurnNote = `Action normalized to Hold: |Δweight| ${Math.abs(weightShift).toFixed(2)}% < antichurn threshold ${antichurnThresholdPct}%.`;
+      rec.systemNote = rec.systemNote
+        ? `${rec.systemNote} ${antiChurnNote}`
+        : antiChurnNote;
+    }
+  }
+
+  return recommendations;
+}
+
 // ─── Build the structured analysis prompt ─────────────────────────────────────
 
 function buildAnalysisPrompt(
@@ -515,11 +538,39 @@ ${breaking24h}
   // Deterministic Anti-Churn Override:
   // T47: threshold is read from AppSettings at runtime (antichurn_threshold_pct), not a literal.
   // Default 1.5%. If the model labeled Trim/Buy just to fractionally balance < threshold, override to Hold.
+  const originalRecommendationAudit = new Map(
+    recommendations.map((rec) => [
+      rec.ticker,
+      {
+        action: rec.action,
+        whyChanged: rec.whyChanged,
+        systemNote: rec.systemNote,
+      },
+    ])
+  );
   for (const rec of recommendations) {
     const weightShift = (rec.targetWeight || 0) - (rec.currentWeight || 0);
     if ((rec.action === "Trim" || rec.action === "Buy") && Math.abs(weightShift) < safeAntichurnThreshold && rec.targetShares > 0 && rec.currentShares > 0) {
       rec.action = "Hold";
       rec.whyChanged = (rec.whyChanged || "") + ` (Action normalized to Hold: |∆weight| ${Math.abs(weightShift).toFixed(2)}% < antichurn threshold ${safeAntichurnThreshold}%).`;
+    }
+  }
+
+  for (const rec of recommendations) {
+    const original = originalRecommendationAudit.get(rec.ticker);
+    const weightShift = (rec.targetWeight || 0) - (rec.currentWeight || 0);
+    const antiChurnFired = !!original
+      && (original.action === "Trim" || original.action === "Buy")
+      && Math.abs(weightShift) < safeAntichurnThreshold
+      && rec.targetShares > 0
+      && rec.currentShares > 0;
+
+    if (antiChurnFired) {
+      const antiChurnNote = `Action normalized to Hold: |Δweight| ${Math.abs(weightShift).toFixed(2)}% < antichurn threshold ${safeAntichurnThreshold}%.`;
+      rec.whyChanged = original.whyChanged;
+      rec.systemNote = original.systemNote
+        ? `${original.systemNote} ${antiChurnNote}`
+        : antiChurnNote;
     }
   }
 

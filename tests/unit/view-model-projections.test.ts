@@ -119,6 +119,23 @@ describe("T21 — projectRecommendation: derived flags", () => {
     });
     expect(vm.hasStcgWarning).toBe(false);
   });
+
+  test("whyChanged and systemNote remain separate fields", () => {
+    const vm = projectRecommendation({
+      id: "r1",
+      ticker: "AAPL",
+      currentShares: 10,
+      targetShares: 10,
+      shareDelta: 0,
+      currentWeight: 10,
+      targetWeight: 10,
+      action: "Hold",
+      whyChanged: "LLM explanation stays here.",
+      systemNote: "Deterministic anti-churn note stays here.",
+    });
+    expect(vm.whyChanged).toBe("LLM explanation stays here.");
+    expect(vm.systemNote).toBe("Deterministic anti-churn note stays here.");
+  });
 });
 
 // ─── T22: isFractionalRebalance anti-churn detection ─────────────────────────
