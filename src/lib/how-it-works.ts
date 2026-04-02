@@ -49,9 +49,9 @@ If live news is unavailable, the app falls back to Yahoo Finance data and lowers
 
 **Phase 1 — Quantitative Checks**: The system derives binding rules from your profile (maximum position size, speculative caps) and immediately rejects "falling knife" candidates that have dropped organically >10% in 5 days.
 
-**Phase 2 — Parallel AI Reasoning**: We don't rely on just one AI. The app simultaneously boots up two different models (e.g., GPT-5 and o3-mini). GPT-5 writes the detailed portfolio thesis while o3-mini performs a totally independent strict cross-check. 
+**Phase 2 — Primary AI Reasoning**: The app runs one primary structured analysis call to generate the portfolio thesis and recommendation set. That call is the authoritative source of recommendations for the run.
 
-**Phase 3 — Signal Aggregation**: A deterministic engine grades the recommendations. If GPT-5 says "Buy" but o3-mini says "Sell", or if the machine-learning sentiment score clashes with the LLMs, the system flags a "Divergence," strictly lowering confidence and forcing a "Hold" or "Trim" to protect capital.
+**Phase 3 — Deterministic Validation & Diagnostics**: After the primary model responds, deterministic portfolio math checks validate weights, actions, and share deltas. Sentiment scoring is treated as diagnostic enrichment, and any gated adjudicator notes are informational only — they do not vote on recommendations.
 
 **Phase 4 — Tax & Portfolio Math**: The system checks when you last bought a stock. If you bought it under a year ago, it drastically raises the required evidence threshold before recommending a "Sell" to protect against Short-Term Capital Gains tax. Position weights are mathematically capped.
 

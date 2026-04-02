@@ -1,7 +1,7 @@
 /**
  * POST /api/analyze/stream
- * Server-Sent Events (SSE) endpoint that runs the full multi-model analysis
- * pipeline and emits real-time progress events to the client.
+ * Server-Sent Events (SSE) endpoint for the orchestrated analysis pipeline.
+ * Emits real-time progress events while the single primary-model path runs.
  */
 
 import { runFullAnalysis } from "@/lib/research/analysis-orchestrator";

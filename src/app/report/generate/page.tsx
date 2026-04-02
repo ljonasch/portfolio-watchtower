@@ -20,9 +20,9 @@ export default async function GenerateReportPage() {
       <div className="text-center space-y-2 max-w-2xl mx-auto">
         <h1 className="text-2xl font-bold">Portfolio Analysis</h1>
         <p className="text-slate-400 text-sm">
-          Multi-model deep analysis on{" "}
+          Orchestrated portfolio analysis on{" "}
           <span className="text-slate-200 font-medium">{holdingsCount} positions</span> —
-          market regime detection, gap analysis, candidate screening, parallel AI reasoning, and signal aggregation.
+          market regime detection, gap analysis, candidate screening, primary AI reasoning, and deterministic validation.
         </p>
       </div>
 
