@@ -170,8 +170,8 @@ describe("T64 — projectAppSettings: missing keys → safe defaults", () => {
     const vm = projectAppSettings([]);
     expect(vm.antichurnThresholdPct).toBe(1.5);
     expect(vm.validationEnforceBlock).toBe(false);
-    expect(vm.cacheEnabled).toBe(false);
-    expect(vm.emailAutoSend).toBe(true);
+    expect(vm.cacheEnabled).toBe(true);
+    expect(vm.emailAutoSend).toBe(false);
   });
 
   test("non-numeric antichurn falls back to 1.5", () => {

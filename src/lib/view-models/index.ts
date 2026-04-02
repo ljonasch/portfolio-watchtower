@@ -423,8 +423,8 @@ export function projectAppSettings(rows: Array<Record<string, any>>): AppSetting
   return {
     antichurnThresholdPct: parseFloat_("antichurn_threshold_pct", 1.5),
     validationEnforceBlock: parseBool("validation_enforce_block", false),
-    cacheEnabled: parseBool("cache_enabled", false),
-    emailAutoSend: parseBool("email_auto_send", true),
+    cacheEnabled: parseBool("cache_enabled", true),
+    emailAutoSend: parseBool("email_auto_send", false),
   };
 }
 
