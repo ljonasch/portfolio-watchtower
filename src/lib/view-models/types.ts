@@ -1,28 +1,26 @@
 /**
  * src/lib/view-models/types.ts
- * All ViewModel interfaces. Components consume ONLY these types — never raw Prisma objects.
- *
- * Added in Batch 2.
+ * Compatibility shim: canonical contract ownership now lives in @/lib/contracts.
  */
 
+import type {
+  BundleOutcome,
+  ConfidenceBand,
+  ConvictionMarkerType,
+  CurrentBundleRenderState,
+  DeliveryStatus,
+  EvidenceQualityLevel,
+  RecommendationAction,
+  PositionStatus,
+  BundleReasonCode,
+} from "@/lib/contracts";
 import type { AbstainReason } from "@/lib/research/types";
 
-// Action enum — exact strings used in DB and by LLM
-export type ActionEnum = "Buy" | "Sell" | "Hold" | "Exit" | "Trim";
-
-// Confidence enum
-export type ConfidenceEnum = "high" | "medium" | "low";
-
-// Position status
-export type PositionStatusEnum = "underweight" | "overweight" | "on_target" | "unknown";
-
-// Evidence quality
-export type EvidenceQualityEnum = "high" | "medium" | "low" | "mixed" | "unknown";
-
-// Alert level
+export type ActionEnum = RecommendationAction;
+export type ConfidenceEnum = ConfidenceBand;
+export type PositionStatusEnum = PositionStatus;
+export type EvidenceQualityEnum = EvidenceQualityLevel;
 export type AlertLevelEnum = "none" | "low" | "medium" | "high" | "urgent";
-
-// Run status
 export type RunStatusEnum = "pending" | "running" | "complete" | "failed" | "abstained";
 
 // Source for a recommendation
@@ -138,6 +136,11 @@ export interface ReportViewModel {
   isStale: boolean;       // snapshot > 7 days old
   isDegraded: boolean;    // any stage used fallback
   isAbstained: boolean;   // run returned AbstainResult
+  bundleId?: string;
+  bundleOutcome?: BundleOutcome;
+  renderState?: CurrentBundleRenderState;
+  reasonCodes?: Array<{ code: BundleReasonCode; label: string; severity: "info" | "warning" | "error" }>;
+  deliveryStatus?: DeliveryStatus;
 }
 
 // ─── Holdings VM ──────────────────────────────────────────────────────────────
@@ -162,7 +165,7 @@ export interface ConvictionMessageViewModel {
   role: "user" | "ai";
   content: string;       // prefix stripped in projection (render-time)
   rawContent: string;    // original DB value — for debug transcript only
-  marker: "ACKNOWLEDGMENT" | "COUNTERPOINT" | "AGREEMENT" | null;
+  marker: ConvictionMarkerType | null;
   markerBadgeVariant: "acknowledge" | "counter" | "agree" | null;
   createdAt: string;
 }

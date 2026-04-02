@@ -1,8 +1,30 @@
 /**
  * research/types.ts
- * Shared type definitions for the MVP 3 research pipeline.
- * All pipeline stages use these types to ensure consistency.
+ * Shared research-pipeline DTOs.
+ * Canonical outcome/state/reason contracts now live in @/lib/contracts.
  */
+
+export type {
+  BundleReasonCode,
+  DegradedReasonCode,
+  DeliveryErrorCode,
+  RunFailureCode,
+} from "@/lib/contracts";
+
+export type LegacyAbstainReason =
+  | "finish_reason_length"
+  | "empty_response_after_retry"
+  | "schema_validation_failed_after_retry"
+  | "weight_sum_zero"
+  | "incomplete_coverage"
+  | "repair_still_invalid"
+  | "evidence_packet_persist_failed"
+  | "circuit_breaker_open"
+  | "CONTEXT_TOO_LONG"
+  | "LLM_FAILURE"
+  | "VALIDATION_HARD_ERROR";
+
+export type AbstainReason = import("@/lib/contracts").AbstainReasonCode | LegacyAbstainReason;
 
 // ─── Source quality ───────────────────────────────────────────────────────────
 
@@ -224,24 +246,9 @@ export interface NewsResult {
   fetchedAt: string;
 }
 
-// AbstainReason — closed enum; never a freeform string downstream
-export type AbstainReason =
-  | "finish_reason_length"
-  | "empty_response_after_retry"
-  | "schema_validation_failed_after_retry"
-  | "weight_sum_zero"
-  | "incomplete_coverage"
-  | "repair_still_invalid"
-  | "evidence_packet_persist_failed"
-  | "circuit_breaker_open"
-  // Batch 6 additions — orchestrator-level abstain reasons
-  | "CONTEXT_TOO_LONG"          // finish_reason=length from OpenAI
-  | "LLM_FAILURE"               // GPT-5 threw a non-length error
-  | "VALIDATION_HARD_ERROR";    // validation_enforce_block=true + hard errors
-
 export interface AbstainResult {
   type: "abstain";
-  reason: AbstainReason;           // closed enum — never freeform string
+  reason: AbstainReason;
   stage: string;
   retryCount: number;
   validationErrors?: ValidationError[];
