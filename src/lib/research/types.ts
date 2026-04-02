@@ -248,6 +248,16 @@ export interface AbstainResult {
   timestamp: string;
 }
 
+export class AnalysisAbstainedError extends Error {
+  readonly result: AbstainResult;
+
+  constructor(result: AbstainResult, detail?: string) {
+    super(detail ? `Analysis abstained (${result.reason}): ${detail}` : `Analysis abstained (${result.reason})`);
+    this.name = "AnalysisAbstainedError";
+    this.result = result;
+  }
+}
+
 // Retry utility config — used by withRetry (implemented Batch 3)
 export interface RetryConfig {
   maxAttempts: number;

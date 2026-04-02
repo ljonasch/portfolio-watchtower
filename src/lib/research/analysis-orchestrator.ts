@@ -39,6 +39,7 @@ import {
   updateEvidencePacketOutcome,
 } from "./evidence-packet-builder";
 import type { ProgressEvent }      from "./progress-events";
+import { AnalysisAbstainedError, type AbstainResult } from "./types";
 
 // ── W23: Circuit breaker ──────────────────────────────────────────────────────
 
@@ -439,8 +440,17 @@ export async function runFullAnalysis(
       },
     });
 
+    const abstainResult: AbstainResult = {
+      type: "abstain",
+      reason: abstainReason,
+      stage: "stage3",
+      retryCount: 0,
+      runId,
+      timestamp: new Date().toISOString(),
+    };
+
     emit({ type: "log", message: `Analysis abstained: ${abstainReason}. Run marked as abstained.`, level: "warn" });
-    throw new Error(`Analysis abstained (${abstainReason}): ${primaryErr?.message}`);
+    throw new AnalysisAbstainedError(abstainResult, primaryErr?.message);
   }
 
   // EvidencePacket outcome: "used" — primary LLM succeeded

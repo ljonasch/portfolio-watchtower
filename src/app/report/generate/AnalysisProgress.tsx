@@ -41,6 +41,12 @@ interface Regime {
   summary: string;
 }
 
+interface TerminalAbstainState {
+  reason: string;
+  stage: string;
+  message: string;
+}
+
 // ── Pipeline stages definition ─────────────────────────────────────────────────
 
 const PIPELINE_STAGES = [
@@ -96,6 +102,7 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
   const [tickers, setTickers]               = useState<Map<string, LiveTicker>>(new Map());
   const [logs, setLogs]                     = useState<LiveLog[]>([]);
   const [error, setError]                   = useState<string | null>(null);
+  const [terminalAbstain, setTerminalAbstain] = useState<TerminalAbstainState | null>(null);
   const [done, setDone]                     = useState(false);
   const [startTs]                           = useState(Date.now());
   const [elapsed, setElapsed]               = useState(0);
@@ -113,7 +120,7 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
 
   // Navigation guard to prevent accidental cancellation
   useEffect(() => {
-    if (done || error) return;
+    if (done || error || terminalAbstain) return;
 
     // 1. Warn on tab close or page reload
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -140,7 +147,7 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
       window.removeEventListener("beforeunload", handleBeforeUnload);
       document.removeEventListener("click", handleClick, true);
     };
-  }, [done, error]);
+  }, [done, error, terminalAbstain]);
 
   // Stream connection
   useEffect(() => {
@@ -265,6 +272,15 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
         setTimeout(() => router.push(`/report/${ev.reportId}`), 1200);
         break;
 
+      case "abstain":
+        setTerminalAbstain({
+          reason: ev.reason,
+          stage: ev.stage,
+          message: ev.message,
+        });
+        addLog(`ABSTAIN: ${ev.reason} at ${ev.stage} â€” ${ev.message}`, "warn");
+        break;
+
       case "error":
         setError(ev.message);
         addLog(`ERROR: ${ev.message}`, "error");
@@ -278,6 +294,24 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
   const heldTickers = allTickers.filter(t => !t.isCandidate && !t.eliminated);
   const candidateList = allTickers.filter(t => t.isCandidate && !t.eliminated);
   const eliminatedList = allTickers.filter(t => t.eliminated);
+
+  if (terminalAbstain) {
+    const isValidationAbort = terminalAbstain.reason === "VALIDATION_HARD_ERROR";
+    const title = isValidationAbort ? "Analysis Blocked by Validation" : "Analysis Abstained";
+    const detail = isValidationAbort
+      ? "The analysis stopped safely because validation blocked an unreliable output before it could be saved."
+      : "The analysis stopped safely before producing a report because the primary reasoning stage could not complete reliably.";
+
+    return (
+      <div className="max-w-2xl mx-auto mt-8 rounded-2xl border border-amber-900/40 bg-amber-950/10 p-6 text-center space-y-3">
+        <ShieldAlert className="w-8 h-8 text-amber-400 mx-auto" />
+        <p className="text-amber-300 font-semibold">{title}</p>
+        <p className="text-sm text-amber-200">{detail}</p>
+        <p className="text-xs text-amber-500 uppercase tracking-[0.18em]">Stage: {terminalAbstain.stage}</p>
+        <p className="text-sm text-amber-400">{terminalAbstain.message}</p>
+      </div>
+    );
+  }
 
   if (error) {
     return (

@@ -6,6 +6,7 @@
 
 import { runFullAnalysis } from "@/lib/research/analysis-orchestrator";
 import type { ProgressEvent } from "@/lib/research/progress-events";
+import { AnalysisAbstainedError } from "@/lib/research/types";
 
 export const maxDuration = 300; // 5-minute Vercel timeout
 
@@ -28,7 +29,14 @@ export async function POST(req: Request): Promise<Response> {
       try {
         await runFullAnalysis(snapshotId, customPrompt, enqueue);
       } catch (err: any) {
-        enqueue({ type: "error", message: err?.message ?? "Unknown error" });
+        if (err instanceof AnalysisAbstainedError) {
+          enqueue({
+            ...err.result,
+            message: err.message,
+          });
+        } else {
+          enqueue({ type: "error", message: err?.message ?? "Unknown error" });
+        }
       } finally {
         try { controller.close(); } catch { /* already closed */ }
       }
