@@ -538,16 +538,8 @@ ${breaking24h}
   // Deterministic Anti-Churn Override:
   // T47: threshold is read from AppSettings at runtime (antichurn_threshold_pct), not a literal.
   // Default 1.5%. If the model labeled Trim/Buy just to fractionally balance < threshold, override to Hold.
-  const originalRecommendationAudit = new Map(
-    recommendations.map((rec) => [
-      rec.ticker,
-      {
-        action: rec.action,
-        whyChanged: rec.whyChanged,
-        systemNote: rec.systemNote,
-      },
-    ])
-  );
+  recommendations = applyAntiChurnOverride(recommendations, safeAntichurnThreshold);
+  /*
   for (const rec of recommendations) {
     const weightShift = (rec.targetWeight || 0) - (rec.currentWeight || 0);
     if ((rec.action === "Trim" || rec.action === "Buy") && Math.abs(weightShift) < safeAntichurnThreshold && rec.targetShares > 0 && rec.currentShares > 0) {
@@ -573,6 +565,8 @@ ${breaking24h}
         : antiChurnNote;
     }
   }
+
+  */
 
   const portfolioMath = buildPortfolioMathSummary(recommendations, ctx);
 

@@ -16,6 +16,11 @@ import { getAbstainReasonDisplayString } from "@/lib/view-models/formatters";
 import type { AbstainReason } from "@/lib/research/types";
 import { projectAppSettings } from "@/lib/view-models/index";
 import { applyAntiChurnOverride } from "@/lib/analyzer";
+import * as fs from "fs";
+import * as path from "path";
+
+const ANALYZER_PATH = path.resolve(__dirname, "../../src/lib/analyzer.ts");
+const analyzerSource = fs.readFileSync(ANALYZER_PATH, "utf-8");
 
 // ─── T04: repairAction — all branches ─────────────────────────────────────────
 
@@ -222,5 +227,9 @@ describe("F4 â€” anti-churn audit field separation", () => {
     expect(rec.whyChanged).toBe(originalWhyChanged);
     expect(rec.systemNote).toContain("Action normalized to Hold");
     expect(rec.systemNote).toContain("antichurn threshold 1.5%");
+  });
+
+  test("runtime anti-churn path now delegates to applyAntiChurnOverride", () => {
+    expect(analyzerSource).toContain("recommendations = applyAntiChurnOverride(recommendations, safeAntichurnThreshold);");
   });
 });
