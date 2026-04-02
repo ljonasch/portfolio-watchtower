@@ -383,8 +383,31 @@ export async function runFullAnalysis(
     );
     emit({ type: "log", message: `EvidencePacket written: id=${evidencePacketId}`, level: "info" });
   } catch (epErr: any) {
-    // Non-fatal — evidence packet write failure must not abort the pipeline
-    emit({ type: "log", message: `EvidencePacket write failed (non-fatal): ${epErr?.message}`, level: "warn" });
+    await (prisma as any).analysisRun.update({
+      where: { id: runId },
+      data: {
+        status: "abstained",
+        completedAt: new Date(),
+        errorMessage: epErr?.message ?? "Evidence packet persist failed",
+        qualityMeta: JSON.stringify({
+          abstainReason: "evidence_packet_persist_failed",
+          promptHash,
+          usingFallbackNews: newsResult.usingFallback ?? false,
+        }),
+      },
+    });
+
+    const abstainResult: AbstainResult = {
+      type: "abstain",
+      reason: "evidence_packet_persist_failed",
+      stage: "stage3",
+      retryCount: 0,
+      runId,
+      timestamp: new Date().toISOString(),
+    };
+
+    emit({ type: "log", message: `EvidencePacket write failed: ${epErr?.message}. Run marked as abstained.`, level: "error" });
+    throw new AnalysisAbstainedError(abstainResult, epErr?.message);
   }
 
   const convictions = (user.convictions ?? []).filter(c => c.active).map(c => ({

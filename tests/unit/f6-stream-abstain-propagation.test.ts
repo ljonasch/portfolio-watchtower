@@ -39,6 +39,7 @@ describe("F6 - typed abstain propagation on active stream path", () => {
     expect(orchestratorSource).toContain('type: "abstain"');
     expect(orchestratorSource).toContain('stage: "stage3"');
     expect(orchestratorSource).toContain("throw new AnalysisAbstainedError(abstainResult, primaryErr?.message)");
+    expect(orchestratorSource).toContain('reason: "evidence_packet_persist_failed"');
   });
 
   test("stream route forwards typed abstain events and keeps generic error for unexpected failures", () => {
