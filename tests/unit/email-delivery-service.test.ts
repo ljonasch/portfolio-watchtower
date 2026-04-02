@@ -9,11 +9,20 @@ jest.mock("@/lib/mailer", () => ({
   sendMail: jest.fn(),
 }));
 
+jest.mock("@/lib/read-models", () => ({
+  getBundleEmailPayload: jest.fn(),
+}));
+
 import { prisma } from "@/lib/prisma";
 import { sendMail } from "@/lib/mailer";
+import { getBundleEmailPayload } from "@/lib/read-models";
 import { sendEmailNotification } from "@/lib/services";
 
 describe("email-delivery-service", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   test("records notification events for email sends", async () => {
     (sendMail as jest.Mock).mockResolvedValue({ ok: true });
     (prisma.notificationEvent.create as jest.Mock).mockResolvedValue({ id: "evt_1" });
@@ -38,6 +47,10 @@ describe("email-delivery-service", () => {
     (sendMail as jest.Mock).mockResolvedValue({ ok: false, error: "smtp timeout" });
     (prisma.notificationEvent.create as jest.Mock).mockResolvedValue({ id: "evt_2" });
     (prisma.analysisBundle.update as jest.Mock).mockResolvedValue({ id: "bundle_1" });
+    (getBundleEmailPayload as jest.Mock).mockResolvedValue({
+      emailPayload: { subject: "Bundle subject", html: "<p>Bundle body</p>" },
+      eligibility: { isEligibleForInitialSend: true, isEligibleForManualResend: false },
+    });
 
     await sendEmailNotification({
       userId: "user_1",
@@ -56,5 +69,24 @@ describe("email-delivery-service", () => {
         }),
       })
     );
+    expect(getBundleEmailPayload).toHaveBeenCalledWith("bundle_1");
+  });
+
+  test("blocks ineligible bundle delivery", async () => {
+    (getBundleEmailPayload as jest.Mock).mockResolvedValue({
+      emailPayload: { subject: "Bundle subject", html: "<p>Bundle body</p>" },
+      eligibility: { isEligibleForInitialSend: false, isEligibleForManualResend: false },
+    });
+
+    await expect(
+      sendEmailNotification({
+        userId: "user_1",
+        type: "daily_alert",
+        recipient: "user@example.com",
+        subject: "",
+        html: "",
+        analysisBundleId: "bundle_1",
+      })
+    ).rejects.toThrow("Bundle is not eligible for email delivery");
   });
 });

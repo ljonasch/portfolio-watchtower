@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { evaluateAlert, AlertLevel } from "@/lib/alerts";
 import { compareRecommendations } from "@/lib/comparator";
 import { sendEmailNotification } from "@/lib/services";
+import { getCurrentBundleRecord } from "@/lib/read-models";
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -35,6 +36,27 @@ export async function POST(req: Request) {
     if (type === "test") {
       ({ subject, html } = renderTestEmail(appUrl));
     } else if (type === "daily_alert") {
+      const bundleRead = await getCurrentBundleRecord(user.id);
+      if (bundleRead.currentBundle) {
+        const bundle = bundleRead.currentBundle;
+
+        for (const recipient of allRecipients) {
+          const result = await sendEmailNotification({
+            userId: user.id,
+            type,
+            recipient: recipient.email,
+            subject: "",
+            html: "",
+            analysisBundleId: bundle.id,
+            runId: bundle.sourceRunId,
+            isDebug: true,
+          });
+          results.push({ email: recipient.email, ...result });
+        }
+
+        return NextResponse.json({ results });
+      }
+
       const latestReport = await prisma.portfolioReport.findFirst({
         orderBy: { createdAt: "desc" },
         include: { recommendations: true, analysisRun: { include: { changeLogs: true } } },

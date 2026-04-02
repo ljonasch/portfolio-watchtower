@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { sendMail } from "@/lib/mailer";
+import { getBundleEmailPayload } from "@/lib/read-models";
 
 export interface SendEmailNotificationInput {
   userId: string;
@@ -22,10 +23,26 @@ function mapDeliveryErrorCode(error?: string): string | null {
 }
 
 export async function sendEmailNotification(input: SendEmailNotificationInput) {
+  let subject = input.subject;
+  let html = input.html;
+
+  if (input.analysisBundleId) {
+    const { emailPayload, eligibility } = await getBundleEmailPayload(input.analysisBundleId);
+    if (!eligibility.isEligibleForInitialSend && !eligibility.isEligibleForManualResend) {
+      throw new Error("Bundle is not eligible for email delivery");
+    }
+
+    subject = String(emailPayload.subject ?? "");
+    html = String((emailPayload as any).html ?? input.html ?? "");
+    if (!subject || !html) {
+      throw new Error("emailPayloadJson is missing required fields");
+    }
+  }
+
   const result = await sendMail({
     to: input.recipient,
-    subject: input.subject,
-    html: input.html,
+    subject,
+    html,
   });
 
   await prisma.notificationEvent.create({
@@ -37,7 +54,7 @@ export async function sendEmailNotification(input: SendEmailNotificationInput) {
       type: input.type,
       channel: "email",
       recipient: input.recipient,
-      subject: input.subject,
+      subject,
       status: result.ok ? "sent" : "failed",
       errorMessage: result.error,
       isDebug: input.isDebug ?? false,

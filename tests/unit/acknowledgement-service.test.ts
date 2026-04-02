@@ -1,14 +1,34 @@
 jest.mock("@/lib/prisma", () => ({
   prisma: {
-    analysisBundle: { update: jest.fn() },
+    analysisBundle: { findUnique: jest.fn(), update: jest.fn() },
     notificationEvent: { create: jest.fn() },
   },
 }));
 
+jest.mock("@/lib/read-models", () => ({
+  buildDeliveryEligibility: jest.fn(),
+}));
+
 import { prisma } from "@/lib/prisma";
+import { buildDeliveryEligibility } from "@/lib/read-models";
 import { acknowledgeBundle } from "@/lib/services";
 
 describe("acknowledgement-service", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_1",
+      bundleOutcome: "validated",
+      isSuperseded: false,
+      acknowledgedAt: null,
+      deliveryStatus: "awaiting_ack",
+      emailPayloadJson: "{\"subject\":\"hello\"}",
+    });
+    (buildDeliveryEligibility as jest.Mock).mockReturnValue({
+      isValidated: true,
+    });
+  });
+
   test("owns acknowledgment writes for bundle state and notification event", async () => {
     (prisma.analysisBundle.update as jest.Mock).mockResolvedValue({ id: "bundle_1" });
     (prisma.notificationEvent.create as jest.Mock).mockResolvedValue({ id: "evt_1" });
@@ -30,5 +50,27 @@ describe("acknowledgement-service", () => {
         }),
       })
     );
+  });
+
+  test("blocks superseded or non-validated bundles", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_1",
+      bundleOutcome: "abstained",
+      isSuperseded: true,
+      acknowledgedAt: null,
+      deliveryStatus: "not_eligible",
+      emailPayloadJson: null,
+    });
+    (buildDeliveryEligibility as jest.Mock).mockReturnValue({
+      isValidated: false,
+    });
+
+    await expect(
+      acknowledgeBundle({
+        bundleId: "bundle_1",
+        userId: "user_1",
+        runId: "run_1",
+      })
+    ).rejects.toThrow("Bundle is not eligible for acknowledgement");
   });
 });

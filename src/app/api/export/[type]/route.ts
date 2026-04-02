@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { getExportPayload } from "@/lib/read-models";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ type: st
   const { type } = await params;
   const user = await prisma.user.findFirst();
   if (!user) return NextResponse.json({ error: "No user" }, { status: 404 });
+  const url = new URL(req.url);
+  const bundleId = url.searchParams.get("bundleId");
 
   let csv = "";
   let filename = "";
@@ -85,6 +88,18 @@ export async function GET(req: Request, { params }: { params: Promise<{ type: st
       }))
     );
     csv = toCSV(["snapshotDate", "snapshotId", "ticker", "companyName", "shares", "currentPrice", "currentValue", "isCash"], rows);
+  } else if (type === "report") {
+    const bundleExport = await getExportPayload(user.id, bundleId);
+    if (bundleExport.source === "bundle") {
+      filename = `bundle-${bundleExport.bundle.id}.json`;
+      return NextResponse.json(bundleExport.payload, {
+        headers: {
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        },
+      });
+    }
+
+    return NextResponse.json({ error: "No bundle export payload found" }, { status: 404 });
   } else {
     return NextResponse.json({ error: "Unknown export type" }, { status: 400 });
   }

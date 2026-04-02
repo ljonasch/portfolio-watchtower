@@ -13,6 +13,7 @@ import type { ConvictionThreadData } from "@/components/ConvictionThread";
 import type { MarketContext } from "@/lib/analyzer";
 import { projectRecommendation } from "@/lib/view-models";
 import type { SourceViewModel } from "@/lib/view-models/types";
+import { getCurrentBundleReport } from "@/lib/read-models";
 
 function SourceChip({ source }: { source: SourceViewModel }) {
   return (
@@ -87,6 +88,63 @@ function VerRow({ label, value }: { label: string, value: any }) {
 
 export default async function ReportPage(props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
+  const user = await prisma.user.findFirst();
+  if (!user) return notFound();
+
+  const bundleRead = await getCurrentBundleReport(user.id);
+  if (bundleRead.source === "bundle") {
+    const reportViewModel = bundleRead.reportViewModel;
+    const bundle = bundleRead.bundle;
+    if (!bundle || bundle.id !== params.id) {
+      return notFound();
+    }
+
+    return (
+      <div className="space-y-10 max-w-6xl mx-auto">
+        <div className="flex items-center gap-4">
+          <Link href="/" className="p-2 border border-slate-700 rounded-md hover:bg-slate-800 transition-colors">
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
+          <div className="flex-1">
+            <h1 className="text-3xl font-bold">Portfolio Analysis Report</h1>
+            <p className="text-slate-400 mt-1">Generated on {new Date(reportViewModel.finalizedAt).toLocaleDateString()}</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="bg-slate-900/50 p-6 rounded-xl border border-slate-800 space-y-3">
+            <h3 className="font-semibold text-lg flex items-center gap-2 text-slate-200">
+              <Target className="w-5 h-5 text-blue-400" /> Executive Summary
+            </h3>
+            <p className="text-slate-300 leading-relaxed text-sm">{reportViewModel.summaryMessage}</p>
+          </div>
+          <div className="bg-slate-900/50 p-6 rounded-xl border border-slate-800 space-y-3">
+            <h3 className="font-semibold text-lg flex items-center gap-2 text-slate-200">
+              <TrendingUp className="w-5 h-5 text-indigo-400" /> Strategic Reasoning
+            </h3>
+            <p className="text-slate-300 leading-relaxed text-sm">{reportViewModel.reasoning}</p>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <h2 className="text-xl font-bold border-b border-slate-800 pb-2">Recommended Final Holdings</h2>
+          <SortableRecommendationsTable
+            recommendations={reportViewModel.recommendations.map((rec) => ({
+              ...rec,
+              sources: rec.sources as SourceViewModel[],
+            }))}
+            convictions={[]}
+          />
+        </div>
+
+        <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-6">
+          <p className="text-sm text-slate-400">
+            Bundle-backed report view. Outcome: <span className="text-slate-200 font-semibold">{bundle.bundleOutcome}</span>
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const [report, allConvictions] = await Promise.all([
     prisma.portfolioReport.findUnique({
