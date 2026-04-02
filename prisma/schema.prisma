@@ -18,6 +18,7 @@ model User {
   reports                PortfolioReport[]
   extractions            RawExtraction[]
   analysisRuns           AnalysisRun[]
+  analysisBundles        AnalysisBundle[]
   notificationEvents     NotificationEvent[]
   notificationRecipients NotificationRecipient[]
   watchlistIdeas         WatchlistIdea[]
@@ -68,6 +69,7 @@ model PortfolioSnapshot {
   holdings     Holding[]
   reports      PortfolioReport[]
   analysisRuns AnalysisRun[]
+  analysisBundles AnalysisBundle[]
 }
 
 model Holding {
@@ -115,6 +117,8 @@ model HoldingRecommendation {
   id                  String          @id @default(cuid())
   reportId            String
   report              PortfolioReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  analysisBundleId    String?
+  analysisBundle      AnalysisBundle? @relation(fields: [analysisBundleId], references: [id], onDelete: SetNull)
   ticker              String
   companyName         String?
   role                String?
@@ -136,6 +140,8 @@ model HoldingRecommendation {
   whyChanged          String?
   systemNote          String?
   reasoningSources    String?
+
+  @@index([analysisBundleId])
 }
 
 model AnalysisRun {
@@ -144,10 +150,13 @@ model AnalysisRun {
   user                 User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   snapshotId           String
   snapshot             PortfolioSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  bundleScope          String            @default("PRIMARY_PORTFOLIO")
   triggerType          String
   triggeredBy          String?
   status               String            @default("pending")
+  stage                String            @default("queued")
   errorMessage         String?
+  failureCode          String?
   alertLevel           String?
   alertReason          String?
   profileSnapshot      String?
@@ -157,18 +166,84 @@ model AnalysisRun {
   inputTokens          Int?
   outputTokens         Int?
   modelUsed            String?
+  primaryModel         String?
   retryCount           Int               @default(0)
+  attemptNumber        Int               @default(1)
+  repairAttemptUsed    Boolean           @default(false)
+  idempotencyKey       String?
+  evidenceHash         String?
+  promptVersion        String?
+  schemaVersion        String?
   qualityMeta          String?
   sseEventLog          String?
   isCronRun            Boolean           @default(false)
   startedAt            DateTime          @default(now())
   completedAt          DateTime?
 
+  createdBundle      AnalysisBundle?
   reports            PortfolioReport[]
   changeLogs         RecommendationChangeLog[]
   notificationEvents NotificationEvent[]
   watchlistIdeas     WatchlistIdea[]
   evidencePacket     EvidencePacket?
+
+  @@index([userId, bundleScope, startedAt])
+  @@index([stage])
+}
+
+model AnalysisBundle {
+  id                       String              @id @default(cuid())
+  userId                   String
+  user                     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceRunId              String              @unique
+  sourceRun                AnalysisRun         @relation(fields: [sourceRunId], references: [id], onDelete: Cascade)
+  portfolioSnapshotId      String
+  portfolioSnapshot        PortfolioSnapshot   @relation(fields: [portfolioSnapshotId], references: [id], onDelete: Cascade)
+  bundleScope              String              @default("PRIMARY_PORTFOLIO")
+  portfolioSnapshotHash    String
+  userProfileSnapshotJson  String
+  userProfileHash          String
+  convictionSnapshotJson   String
+  convictionHash           String
+  analysisPolicyVersion    String
+  schemaVersion            String
+  promptVersion            String
+  viewModelVersion         String
+  emailTemplateVersion     String
+  modelPolicyVersion       String
+  evidencePacketJson       String
+  evidenceHash             String
+  evidenceFreshnessJson    String
+  sourceListJson           String
+  primaryModel             String
+  llmStructuredScoreJson   String
+  llmResponseHash          String?
+  llmUsageJson             String
+  factorLedgerJson         String
+  recommendationDecisionJson String
+  positionSizingJson       String
+  bundleOutcome            String
+  validationSummaryJson    String
+  abstainReasonCodesJson   String              @default("[]")
+  degradedReasonCodesJson  String              @default("[]")
+  reportViewModelJson      String
+  emailPayloadJson         String?
+  exportPayloadJson        String
+  isSuperseded             Boolean             @default(false)
+  supersededAt             DateTime?
+  acknowledgedAt           DateTime?
+  deliveryStatus           String              @default("not_eligible")
+  deliveryLastErrorCode    String?
+  deliveryAttemptCount     Int                 @default(0)
+  createdAt                DateTime            @default(now())
+  finalizedAt              DateTime
+
+  holdingRecommendations   HoldingRecommendation[]
+  notificationEvents       NotificationEvent[]
+
+  @@index([userId, bundleScope, isSuperseded, finalizedAt])
+  @@index([portfolioSnapshotId])
+  @@index([bundleOutcome])
 }
 
 model EvidencePacket {
@@ -226,6 +301,8 @@ model NotificationEvent {
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   runId        String?
   run          AnalysisRun? @relation(fields: [runId], references: [id])
+  analysisBundleId String?
+  analysisBundle   AnalysisBundle? @relation(fields: [analysisBundleId], references: [id], onDelete: SetNull)
   reportId     String?
   type         String
   channel      String
@@ -235,6 +312,8 @@ model NotificationEvent {
   errorMessage String?
   isDebug      Boolean      @default(false)
   createdAt    DateTime     @default(now())
+
+  @@index([analysisBundleId])
 }
 
 model NotificationRecipient {
