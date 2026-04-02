@@ -1,18 +1,338 @@
+import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
-import { runFullAnalysis } from "@/lib/research/analysis-orchestrator";
-import { renderDailyAlertEmail } from "@/lib/email-templates";
-import { sendEmailNotification } from "./email-delivery-service";
+import type { ProgressEvent } from "@/lib/research/progress-events";
+import type { DeliveryStatus } from "@/lib/contracts";
 
 export interface RunStreamAnalysisInput {
   snapshotId: string;
   customPrompt?: string;
-  emit: (event: any) => void;
+  emit: (event: ProgressEvent) => void;
   triggerType?: "manual" | "scheduled" | "debug";
   triggeredBy?: string;
   existingRunId?: string;
 }
 
+export interface TerminalRecommendationInput {
+  ticker: string;
+  companyName: string;
+  role: string | null;
+  currentShares: number;
+  currentPrice: number;
+  targetShares: number;
+  shareDelta: number;
+  dollarDelta: number;
+  currentWeight: number;
+  targetWeight: number;
+  acceptableRangeLow: number;
+  acceptableRangeHigh: number;
+  valueDelta: number;
+  action: string;
+  confidence: string;
+  positionStatus: string;
+  evidenceQuality: string;
+  thesisSummary: string;
+  detailedReasoning: string;
+  whyChanged: string;
+  systemNote?: string;
+  reasoningSources: Array<Record<string, unknown>>;
+}
+
+export interface FinalizeAnalysisRunInput {
+  runId: string;
+  userId: string;
+  snapshotId: string;
+  bundleScope?: string;
+  outcome: "validated" | "abstained" | "degraded" | "failed";
+  completedAt?: Date;
+  reportSummary?: string | null;
+  reportReasoning?: string | null;
+  reportMarketContext?: Record<string, unknown> | null;
+  recommendations: TerminalRecommendationInput[];
+  alertLevel?: string | null;
+  alertReason?: string | null;
+  errorMessage?: string | null;
+  failureCode?: string | null;
+  profileSnapshot: Record<string, unknown>;
+  convictionsSnapshot: Array<Record<string, unknown>>;
+  evidencePacket: Record<string, unknown>;
+  evidenceHash: string;
+  evidenceFreshness: Record<string, unknown>;
+  sourceList: Array<Record<string, unknown>>;
+  versions: {
+    analysisPolicyVersion: string;
+    schemaVersion: string;
+    promptVersion: string;
+    viewModelVersion: string;
+    emailTemplateVersion: string;
+    modelPolicyVersion: string;
+  };
+  llm: {
+    primaryModel: string;
+    structuredScore: Record<string, unknown>;
+    responseHash?: string | null;
+    usage: Record<string, unknown>;
+  };
+  deterministic: {
+    factorLedger: Record<string, unknown>;
+    recommendationDecision: Record<string, unknown>;
+    positionSizing: Record<string, unknown>;
+  };
+  validationSummary: {
+    hardErrorCount: number;
+    warningCount: number;
+    reasonCodes: string[];
+    debugDetailsRef?: string | null;
+  };
+  abstainReasonCodes?: string[];
+  degradedReasonCodes?: string[];
+  reportViewModel: Record<string, unknown>;
+  emailPayload?: Record<string, unknown> | null;
+  exportPayload: Record<string, unknown>;
+  qualityMeta?: Record<string, unknown>;
+  changeLogs?: Array<Record<string, unknown>>;
+}
+
+interface FinalizeAnalysisRunResult {
+  runId: string;
+  bundleId: string | null;
+  reportId: string | null;
+  outcome: FinalizeAnalysisRunInput["outcome"];
+}
+
+function hashJson(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function toDeliveryStatus(outcome: FinalizeAnalysisRunInput["outcome"]): DeliveryStatus {
+  if (outcome === "validated") return "awaiting_ack";
+  return "not_eligible";
+}
+
+function buildBundlePayload(input: FinalizeAnalysisRunInput, completedAt: Date) {
+  const profileSnapshotJson = JSON.stringify(input.profileSnapshot);
+  const convictionSnapshotJson = JSON.stringify(input.convictionsSnapshot);
+  const reportViewModelJson = JSON.stringify(input.reportViewModel);
+  const exportPayloadJson = JSON.stringify(input.exportPayload);
+  const emailPayloadJson = input.outcome === "validated" ? JSON.stringify(input.emailPayload ?? null) : null;
+  const recommendationRows = input.outcome === "validated" ? input.recommendations : [];
+
+  return {
+    bundleScope: input.bundleScope ?? "PRIMARY_PORTFOLIO",
+    portfolioSnapshotHash: hashJson({
+      snapshotId: input.snapshotId,
+      recommendations: recommendationRows.map((row) => ({
+        ticker: row.ticker,
+        targetShares: row.targetShares,
+        action: row.action,
+      })),
+    }),
+    userProfileSnapshotJson: profileSnapshotJson,
+    userProfileHash: hashJson(input.profileSnapshot),
+    convictionSnapshotJson,
+    convictionHash: hashJson(input.convictionsSnapshot),
+    analysisPolicyVersion: input.versions.analysisPolicyVersion,
+    schemaVersion: input.versions.schemaVersion,
+    promptVersion: input.versions.promptVersion,
+    viewModelVersion: input.versions.viewModelVersion,
+    emailTemplateVersion: input.versions.emailTemplateVersion,
+    modelPolicyVersion: input.versions.modelPolicyVersion,
+    evidencePacketJson: JSON.stringify(input.evidencePacket),
+    evidenceHash: input.evidenceHash,
+    evidenceFreshnessJson: JSON.stringify(input.evidenceFreshness),
+    sourceListJson: JSON.stringify(input.sourceList),
+    primaryModel: input.llm.primaryModel,
+    llmStructuredScoreJson: JSON.stringify(input.llm.structuredScore),
+    llmResponseHash: input.llm.responseHash ?? null,
+    llmUsageJson: JSON.stringify(input.llm.usage),
+    factorLedgerJson: JSON.stringify(input.deterministic.factorLedger),
+    recommendationDecisionJson: JSON.stringify(input.deterministic.recommendationDecision),
+    positionSizingJson: JSON.stringify(input.deterministic.positionSizing),
+    bundleOutcome: input.outcome === "failed" ? "abstained" : input.outcome,
+    validationSummaryJson: JSON.stringify(input.validationSummary),
+    abstainReasonCodesJson: JSON.stringify(input.abstainReasonCodes ?? []),
+    degradedReasonCodesJson: JSON.stringify(input.degradedReasonCodes ?? []),
+    reportViewModelJson,
+    emailPayloadJson,
+    exportPayloadJson,
+    deliveryStatus: toDeliveryStatus(input.outcome),
+    finalizedAt: completedAt,
+  };
+}
+
+function withPersistedBundleId<T extends Record<string, unknown> | null | undefined>(payload: T, bundleId: string): T {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    bundleId,
+  } as T;
+}
+
+function buildLegacyRecommendationRows(recommendations: TerminalRecommendationInput[], analysisBundleId: string, reportId: string) {
+  return recommendations.map((row) => ({
+    reportId,
+    analysisBundleId,
+    ticker: row.ticker,
+    companyName: row.companyName,
+    role: row.role,
+    currentShares: row.currentShares,
+    targetShares: row.targetShares,
+    shareDelta: row.shareDelta,
+    currentWeight: row.currentWeight,
+    targetWeight: row.targetWeight,
+    valueDelta: row.valueDelta ?? 0,
+    dollarDelta: row.dollarDelta ?? null,
+    acceptableRangeLow: row.acceptableRangeLow ?? null,
+    acceptableRangeHigh: row.acceptableRangeHigh ?? null,
+    action: row.action,
+    confidence: row.confidence ?? null,
+    positionStatus: row.positionStatus ?? null,
+    evidenceQuality: row.evidenceQuality ?? null,
+    thesisSummary: row.thesisSummary ?? null,
+    detailedReasoning: row.detailedReasoning ?? null,
+    whyChanged: row.whyChanged ?? null,
+    systemNote: row.systemNote ?? null,
+    reasoningSources: JSON.stringify(row.reasoningSources ?? []),
+  }));
+}
+
+export async function finalizeAnalysisRun(input: FinalizeAnalysisRunInput): Promise<FinalizeAnalysisRunResult> {
+  const existingBundle = await prisma.analysisBundle.findUnique({
+    where: { sourceRunId: input.runId },
+    include: { holdingRecommendations: { select: { id: true } } },
+  });
+
+  if (existingBundle) {
+    const existingReport = await prisma.portfolioReport.findFirst({
+      where: { analysisRunId: input.runId },
+      select: { id: true },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return {
+      runId: input.runId,
+      bundleId: existingBundle.id,
+      reportId: existingReport?.id ?? null,
+      outcome: input.outcome,
+    };
+  }
+
+  if (input.outcome === "failed") {
+    await prisma.analysisRun.update({
+      where: { id: input.runId },
+      data: {
+        status: "failed",
+        stage: "failed",
+        failureCode: input.failureCode ?? "UNHANDLED_EXCEPTION",
+        errorMessage: input.errorMessage ?? "Analysis failed before terminal bundle creation",
+        completedAt: input.completedAt ?? new Date(),
+        qualityMeta: input.qualityMeta ? JSON.stringify(input.qualityMeta) : undefined,
+      },
+    });
+
+    return {
+      runId: input.runId,
+      bundleId: null,
+      reportId: null,
+      outcome: input.outcome,
+    };
+  }
+
+  const completedAt = input.completedAt ?? new Date();
+  const bundlePayload = buildBundlePayload(input, completedAt);
+
+  return prisma.$transaction(async (tx) => {
+    await tx.analysisBundle.updateMany({
+      where: {
+        userId: input.userId,
+        bundleScope: bundlePayload.bundleScope,
+        isSuperseded: false,
+      },
+      data: {
+        isSuperseded: true,
+        supersededAt: completedAt,
+      },
+    });
+
+    const bundle = await tx.analysisBundle.create({
+      data: {
+        userId: input.userId,
+        sourceRunId: input.runId,
+        portfolioSnapshotId: input.snapshotId,
+        ...bundlePayload,
+        reportViewModelJson: JSON.stringify(withPersistedBundleId(input.reportViewModel, "pending")),
+        emailPayloadJson: input.outcome === "validated"
+          ? JSON.stringify(withPersistedBundleId(input.emailPayload ?? null, "pending"))
+          : null,
+      },
+    });
+
+    await tx.analysisBundle.update({
+      where: { id: bundle.id },
+      data: {
+        reportViewModelJson: JSON.stringify(withPersistedBundleId(input.reportViewModel, bundle.id)),
+        emailPayloadJson: input.outcome === "validated"
+          ? JSON.stringify(withPersistedBundleId(input.emailPayload ?? null, bundle.id))
+          : null,
+      },
+    });
+
+    let reportId: string | null = null;
+    if (input.outcome === "validated") {
+      const report = await tx.portfolioReport.create({
+        data: {
+          userId: input.userId,
+          snapshotId: input.snapshotId,
+          analysisRunId: input.runId,
+          summary: input.reportSummary ?? null,
+          reasoning: input.reportReasoning ?? null,
+          marketContext: JSON.stringify(input.reportMarketContext ?? {}),
+        },
+      });
+      reportId = report.id;
+
+      if (input.recommendations.length > 0) {
+        await tx.holdingRecommendation.createMany({
+          data: buildLegacyRecommendationRows(input.recommendations, bundle.id, report.id),
+        });
+      }
+    }
+
+    await tx.analysisRun.update({
+      where: { id: input.runId },
+      data: {
+        status: input.outcome === "validated" ? "complete" : input.outcome,
+        stage: input.outcome === "validated" ? "finalized_validated" : input.outcome === "abstained" ? "finalized_abstained" : "finalized_degraded",
+        completedAt,
+        alertLevel: input.alertLevel ?? null,
+        alertReason: input.alertReason ?? null,
+        errorMessage: input.errorMessage ?? null,
+        failureCode: null,
+        profileSnapshot: JSON.stringify(input.profileSnapshot),
+        qualityMeta: input.qualityMeta ? JSON.stringify(input.qualityMeta) : undefined,
+        createdBundle: {
+          connect: { id: bundle.id },
+        },
+        changeLogs: input.outcome === "validated" && input.changeLogs && input.changeLogs.length > 0
+          ? { create: input.changeLogs as any[] }
+          : undefined,
+      },
+    });
+
+    return {
+      runId: input.runId,
+      bundleId: bundle.id,
+      reportId,
+      outcome: input.outcome,
+    };
+  });
+}
+
 export async function runStreamAnalysis(input: RunStreamAnalysisInput) {
+  const { runFullAnalysis } = await import("@/lib/research/analysis-orchestrator");
+
   return runFullAnalysis(
     input.snapshotId,
     input.customPrompt,
@@ -103,6 +423,8 @@ export async function runDailyCheck(opts: {
 
       const today = new Date().toISOString().split("T")[0];
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+      const { renderDailyAlertEmail } = await import("@/lib/email-templates");
+      const { sendEmailNotification } = await import("./email-delivery-service");
 
       for (const recipient of recipients) {
         const alreadySent = await prisma.notificationEvent.findFirst({

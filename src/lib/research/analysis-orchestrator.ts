@@ -32,6 +32,7 @@ import { evaluateAlert }           from "@/lib/alerts";
 import { fetchValuationForAll, formatValuationSection } from "./valuation-fetcher";
 import { buildCorrelationMatrix, formatCorrelationSection } from "./correlation-matrix";
 import { recordRunStats } from "./model-tracker";
+import { finalizeAnalysisRun, type FinalizeAnalysisRunInput } from "@/lib/services/analysis-lifecycle-service";
 import {
   buildPromptHash,
   buildPerSectionChars,
@@ -154,6 +155,9 @@ export async function runFullAnalysis(
       });
   if (!stagingRun) throw new Error("Failed to create staging AnalysisRun record");
   const runId = stagingRun.id;
+  let finalizedBundleId: string | null = null;
+
+  try {
 
   const ctx = buildResearchContext({ profile: user.profile, holdings: snapshot.holdings, priorRecommendations: latestReport?.recommendations, customPrompt });
   const today = ctx.today;
@@ -383,19 +387,66 @@ export async function runFullAnalysis(
     );
     emit({ type: "log", message: `EvidencePacket written: id=${evidencePacketId}`, level: "info" });
   } catch (epErr: any) {
-    await (prisma as any).analysisRun.update({
-      where: { id: runId },
-      data: {
-        status: "abstained",
-        completedAt: new Date(),
-        errorMessage: epErr?.message ?? "Evidence packet persist failed",
-        qualityMeta: JSON.stringify({
-          abstainReason: "evidence_packet_persist_failed",
-          promptHash,
-          usingFallbackNews: newsResult.usingFallback ?? false,
-        }),
+    const finalizedAt = new Date();
+    const finalization = await finalizeAnalysisRun({
+      runId,
+      userId: snapshot.userId,
+      snapshotId: snapshot.id,
+      outcome: "abstained",
+      completedAt: finalizedAt,
+      reportSummary: "Analysis incomplete. No recommendations were saved.",
+      reportReasoning: epErr?.message ?? "Evidence packet persist failed",
+      recommendations: [],
+      errorMessage: epErr?.message ?? "Evidence packet persist failed",
+      profileSnapshot: user.profile as Record<string, unknown>,
+      convictionsSnapshot: [],
+      evidencePacket: {
+        evidencePacketId: null,
+        promptHash,
+        stage: "stage3",
+      },
+      evidenceHash: promptHash,
+      evidenceFreshness: {
+        usingFallbackNews: newsResult.usingFallback ?? false,
+      },
+      sourceList: [],
+      versions: TERMINAL_CONTRACT_VERSIONS,
+      llm: {
+        primaryModel: "gpt-5.4",
+        structuredScore: {},
+        usage: {},
+      },
+      deterministic: {
+        factorLedger: {},
+        recommendationDecision: { outcome: "abstained" },
+        positionSizing: {},
+      },
+      validationSummary: {
+        hardErrorCount: 1,
+        warningCount: 0,
+        reasonCodes: ["evidence_packet_persist_failed"],
+        debugDetailsRef: null,
+      },
+      abstainReasonCodes: ["evidence_packet_persist_failed"],
+      reportViewModel: buildReportViewModel({
+        bundleId: "pending",
+        outcome: "abstained",
+        finalizedAt: finalizedAt.toISOString(),
+        summaryMessage: "Analysis incomplete. No recommendations were saved.",
+        reasoning: epErr?.message ?? "Evidence packet persist failed",
+        reasonCodes: ["evidence_packet_persist_failed"],
+        recommendations: [],
+        deliveryStatus: "not_eligible",
+      }),
+      emailPayload: null,
+      exportPayload: { recommendations: [] },
+      qualityMeta: {
+        abstainReason: "evidence_packet_persist_failed",
+        promptHash,
+        usingFallbackNews: newsResult.usingFallback ?? false,
       },
     });
+    finalizedBundleId = finalization.bundleId;
 
     const abstainResult: AbstainResult = {
       type: "abstain",
@@ -448,20 +499,67 @@ export async function runFullAnalysis(
 
     if (evidencePacketId) await updateEvidencePacketOutcome(evidencePacketId, "abstained");
 
-    await (prisma as any).analysisRun.update({
-      where: { id: runId },
-      data: {
-        status: "abstained",
-        completedAt: new Date(),
-        errorMessage: primaryErr?.message ?? "Analysis aborted",
-        qualityMeta: JSON.stringify({
-          abstainReason,
-          isLengthAbort,
-          promptHash,
-          usingFallbackNews: newsResult.usingFallback ?? false,
-        }),
+    const finalizedAt = new Date();
+    const finalization = await finalizeAnalysisRun({
+      runId,
+      userId: snapshot.userId,
+      snapshotId: snapshot.id,
+      outcome: "abstained",
+      completedAt: finalizedAt,
+      reportSummary: "Analysis incomplete. No recommendations were saved.",
+      reportReasoning: primaryErr?.message ?? "Analysis aborted",
+      recommendations: [],
+      errorMessage: primaryErr?.message ?? "Analysis aborted",
+      profileSnapshot: user.profile as Record<string, unknown>,
+      convictionsSnapshot: convictions as Array<Record<string, unknown>>,
+      evidencePacket: {
+        evidencePacketId,
+        promptHash,
+        stage: "stage3",
+      },
+      evidenceHash: promptHash,
+      evidenceFreshness: {
+        usingFallbackNews: newsResult.usingFallback ?? false,
+      },
+      sourceList: [],
+      versions: TERMINAL_CONTRACT_VERSIONS,
+      llm: {
+        primaryModel: "gpt-5.4",
+        structuredScore: {},
+        usage: {},
+      },
+      deterministic: {
+        factorLedger: {},
+        recommendationDecision: { outcome: "abstained" },
+        positionSizing: {},
+      },
+      validationSummary: {
+        hardErrorCount: 1,
+        warningCount: 0,
+        reasonCodes: [abstainReason],
+        debugDetailsRef: null,
+      },
+      abstainReasonCodes: [abstainReason],
+      reportViewModel: buildReportViewModel({
+        bundleId: "pending",
+        outcome: "abstained",
+        finalizedAt: finalizedAt.toISOString(),
+        summaryMessage: "Analysis incomplete. No recommendations were saved.",
+        reasoning: primaryErr?.message ?? "Analysis aborted",
+        reasonCodes: [abstainReason],
+        recommendations: [],
+        deliveryStatus: "not_eligible",
+      }),
+      emailPayload: null,
+      exportPayload: { recommendations: [] },
+      qualityMeta: {
+        abstainReason,
+        isLengthAbort,
+        promptHash,
+        usingFallbackNews: newsResult.usingFallback ?? false,
       },
     });
+    finalizedBundleId = finalization.bundleId;
 
     const abstainResult: AbstainResult = {
       type: "abstain",
@@ -587,92 +685,160 @@ export async function runFullAnalysis(
   const validationWarningCount = typeof llmMeta.validationWarningCount === "number" ? llmMeta.validationWarningCount : 0;
   const usingFallbackNews = newsResult.usingFallback ?? false;
 
-  // Build qualityMeta JSON for this run
-  const qualityMetaPayload = JSON.stringify({
-    promptHash,
-    usingFallbackNews,
-    validationWarningCount,
-    perSectionChars,
-    totalInputChars: additionalContext.length,
-    evidencePacketId,
-    adjudicatorInvoked,
-    adjudicatorTickers: Object.keys(adjudicatorNotes),
-    adjudicatorNotes,
-  });
-
-  // Stage 5: Always UPDATE the staging run (created before LLM call in Batch 5)
-  const runData = {
-    status: "complete",
+  const finalizedAt = new Date();
+  const validatedFinalizationInput: FinalizeAnalysisRunInput = {
+    runId,
+    userId: snapshot.userId,
+    snapshotId: snapshot.id,
+    outcome: "validated",
+    completedAt: finalizedAt,
+    reportSummary: reportData.summary,
+    reportReasoning: reportData.reasoning,
+    reportMarketContext: reportData.marketContext ?? {},
+    recommendations: reportData.recommendations.map((r: any) => ({
+      ticker: r.ticker,
+      companyName: r.companyName,
+      role: r.role ?? null,
+      currentShares: r.currentShares,
+      currentPrice: r.currentPrice,
+      targetShares: r.targetShares,
+      shareDelta: r.shareDelta,
+      dollarDelta: r.dollarDelta ?? 0,
+      currentWeight: r.currentWeight,
+      targetWeight: r.targetWeight,
+      acceptableRangeLow: r.acceptableRangeLow ?? 0,
+      acceptableRangeHigh: r.acceptableRangeHigh ?? 0,
+      valueDelta: r.valueDelta ?? 0,
+      action: r.action,
+      confidence: r.confidence ?? "medium",
+      positionStatus: r.positionStatus ?? "on_target",
+      evidenceQuality: r.evidenceQuality ?? "medium",
+      thesisSummary: r.thesisSummary ?? "",
+      detailedReasoning: r.detailedReasoning ?? "",
+      whyChanged: r.whyChanged ?? "",
+      systemNote: r.systemNote ?? null,
+      reasoningSources: r.reasoningSources ?? [],
+    })),
     alertLevel: alert.level,
     alertReason: alert.reason,
-    profileSnapshot: JSON.stringify(user.profile),
-    researchCoverage: JSON.stringify(systemVerification),
-    modelUsed,
-    inputTokens,
-    outputTokens,
-    retryCount,
-    startedAt: new Date(t0),
-    completedAt: new Date(),
-    changeLogs: {
-      create: changes.map(c => ({
-        ticker: c.ticker,
-        companyName: c.companyName,
-        priorAction: c.priorAction,
-        newAction: c.newAction,
-        priorTargetShares: c.priorTargetShares,
-        newTargetShares: c.newTargetShares,
-        sharesDelta: c.sharesDelta,
-        deltaDollar: c.dollarDelta ?? null,   // D6: map comparator.dollarDelta → schema.deltaDollar
-        priorWeight: c.priorWeight,
-        newWeight: c.newWeight,
-        deltaWeight: (c.newWeight != null && c.priorWeight != null) ? (c.newWeight - c.priorWeight) : null, // D6
-        changed: c.changed,
-        changeReason: c.changeReason,
-      }))
-    }
+    profileSnapshot: user.profile as Record<string, unknown>,
+    convictionsSnapshot: convictions as Array<Record<string, unknown>>,
+    evidencePacket: {
+      evidencePacketId,
+      promptHash,
+      additionalContextLength: additionalContext.length,
+      perSectionChars,
+      usingFallbackNews,
+      priceDataMissing,
+      regime: finalRegime,
+    },
+    evidenceHash: promptHash,
+    evidenceFreshness: {
+      usingFallbackNews,
+      priceDataMissing,
+      generatedAt: finalizedAt.toISOString(),
+    },
+    sourceList: (newsResult.allSources ?? []).map((source: any) => ({
+      title: source.title ?? source.source ?? "Untitled",
+      url: source.url ?? null,
+      publishedAt: source.publishedAt ?? null,
+      source: source.source ?? null,
+    })),
+    versions: {
+      ...TERMINAL_CONTRACT_VERSIONS,
+      promptVersion: promptHash,
+    },
+    llm: {
+      primaryModel: modelUsed,
+      structuredScore: reportData as Record<string, unknown>,
+      responseHash: hashPromptPayload(reportData),
+      usage: {
+        modelUsed,
+        inputTokens,
+        outputTokens,
+        retryCount,
+      },
+    },
+    deterministic: {
+      factorLedger: {
+        alertLevel: alert.level,
+        alertReason: alert.reason,
+        changesCount: changes.length,
+      },
+      recommendationDecision: {
+        recommendationsCount: reportData.recommendations.length,
+        watchlistIdeasCount: reportData.watchlistIdeas?.length ?? 0,
+      },
+      positionSizing: {
+        recommendations: reportData.recommendations.map((r: any) => ({
+          ticker: r.ticker,
+          targetShares: r.targetShares,
+          targetWeight: r.targetWeight,
+        })),
+      },
+    },
+    validationSummary: {
+      hardErrorCount: 0,
+      warningCount: validationWarningCount,
+      reasonCodes: [],
+      debugDetailsRef: evidencePacketId ?? null,
+    },
+    reportViewModel: buildReportViewModel({
+      bundleId: "pending",
+      outcome: "validated",
+      finalizedAt: finalizedAt.toISOString(),
+      summaryMessage: reportData.summary,
+      reasoning: reportData.reasoning,
+      reasonCodes: [],
+      recommendations: reportData.recommendations,
+      deliveryStatus: "awaiting_ack",
+    }),
+    emailPayload: {
+      bundleId: "pending",
+      generatedAt: finalizedAt.toISOString(),
+      subject: `Portfolio update for ${today}`,
+      summary: reportData.summary,
+      recommendations: reportData.recommendations.map((r: any) => ({
+        ticker: r.ticker,
+        action: r.action,
+        targetShares: r.targetShares,
+        targetWeight: r.targetWeight,
+        reasoning: r.thesisSummary ?? "",
+      })),
+    },
+    exportPayload: buildExportPayload(reportData, alert.level, alert.reason),
+    qualityMeta: {
+      promptHash,
+      usingFallbackNews,
+      validationWarningCount,
+      perSectionChars,
+      totalInputChars: additionalContext.length,
+      evidencePacketId,
+      adjudicatorInvoked,
+      adjudicatorTickers: Object.keys(adjudicatorNotes),
+      adjudicatorNotes,
+      systemVerification,
+    },
+    changeLogs: changes.map(c => ({
+      ticker: c.ticker,
+      companyName: c.companyName,
+      priorAction: c.priorAction,
+      newAction: c.newAction,
+      priorTargetShares: c.priorTargetShares,
+      newTargetShares: c.newTargetShares,
+      sharesDelta: c.sharesDelta,
+      deltaDollar: c.dollarDelta ?? null,
+      priorWeight: c.priorWeight,
+      newWeight: c.newWeight,
+      deltaWeight: (c.newWeight != null && c.priorWeight != null) ? (c.newWeight - c.priorWeight) : null,
+      changed: c.changed,
+      changeReason: c.changeReason,
+    })),
   };
 
-  // Batch 5: Always update the staging run (qualityMeta cast to any — TS server lag after prisma generate)
-  const run = await (prisma as any).analysisRun.update({
-    where: { id: runId },
-    data: { ...runData, qualityMeta: qualityMetaPayload },
-  });
-
-  const report = await prisma.portfolioReport.create({
-    data: {
-      userId: snapshot.userId,
-      snapshotId: snapshot.id,
-      analysisRunId: run.id,
-      summary: reportData.summary,
-      reasoning: reportData.reasoning,
-      marketContext: JSON.stringify(reportData.marketContext ?? {}),
-      recommendations: {
-        create: reportData.recommendations.map((r: any) => ({
-          ticker: r.ticker,
-          companyName: r.companyName,
-          role: r.role,
-          currentShares: r.currentShares,
-          targetShares: r.targetShares,
-          shareDelta: r.shareDelta,
-          currentWeight: r.currentWeight,
-          targetWeight: r.targetWeight,
-          valueDelta: r.valueDelta ?? 0,
-          dollarDelta: r.dollarDelta ?? null,          // F9: was omitted
-          acceptableRangeLow: r.acceptableRangeLow ?? null,   // F9: was omitted
-          acceptableRangeHigh: r.acceptableRangeHigh ?? null, // F9: was omitted
-          action: r.action,
-          confidence: r.confidence ?? null,
-          positionStatus: r.positionStatus ?? null,    // F9: was omitted
-          evidenceQuality: r.evidenceQuality ?? null,  // F9: was omitted
-          thesisSummary: r.thesisSummary ?? null,
-          detailedReasoning: r.detailedReasoning ?? null,
-          whyChanged: r.whyChanged ?? null,            // F9: was omitted
-          systemNote: r.systemNote ?? null,            // F9: new field (Batch 0)
-          reasoningSources: JSON.stringify(r.reasoningSources ?? []),
-        }))
-      }
-    }
-  });
+  const finalizedRun = await finalizeAnalysisRun(validatedFinalizationInput);
+  finalizedBundleId = finalizedRun.bundleId;
+  const report = { id: finalizedRun.reportId! };
 
   // Non-blocking model performance tracking (o3 removed from active pipeline)
   recordRunStats(prisma, {
@@ -698,13 +864,57 @@ export async function runFullAnalysis(
   emit({ type: "complete", reportId: report.id, totalMs: Date.now() - t0 });
 
   return {
-    runId: run.id,
+    runId,
     reportId: report.id,
     alertLevel: alert.level,
     alertReason: alert.reason,
     changes,
     report: reportData,
   };
+  } catch (err: any) {
+    if (err instanceof AnalysisAbstainedError) {
+      throw err;
+    }
+
+    await finalizeAnalysisRun({
+      runId,
+      userId: snapshot.userId,
+      snapshotId: snapshot.id,
+      outcome: "failed",
+      completedAt: new Date(),
+      recommendations: [],
+      errorMessage: err?.message ?? "Analysis failed",
+      failureCode: "UNHANDLED_EXCEPTION",
+      profileSnapshot: user.profile as Record<string, unknown>,
+      convictionsSnapshot: [],
+      evidencePacket: {
+        finalizedBundleId,
+      },
+      evidenceHash: promptHash ?? `run:${runId}`,
+      evidenceFreshness: {},
+      sourceList: [],
+      versions: TERMINAL_CONTRACT_VERSIONS,
+      llm: {
+        primaryModel: "gpt-5.4",
+        structuredScore: {},
+        usage: {},
+      },
+      deterministic: {
+        factorLedger: {},
+        recommendationDecision: {},
+        positionSizing: {},
+      },
+      validationSummary: {
+        hardErrorCount: 1,
+        warningCount: 0,
+        reasonCodes: [],
+        debugDetailsRef: null,
+      },
+      reportViewModel: {},
+      exportPayload: {},
+    });
+    throw err;
+  }
 }
 
 // ── Gated adjudicator types ───────────────────────────────────────────────────
@@ -722,6 +932,65 @@ interface AdjudicatorNote {
   confidenceAssessment: string;
   /** What could change the recommendation thesis. */
   keyUncertainty: string;
+}
+
+const TERMINAL_CONTRACT_VERSIONS = {
+  analysisPolicyVersion: "v1",
+  schemaVersion: "v1",
+  promptVersion: "legacy-primary-prompt-v1",
+  viewModelVersion: "v1",
+  emailTemplateVersion: "v1",
+  modelPolicyVersion: "gpt-5.4-primary-v1",
+} as const;
+
+function buildReasonCodeBadges(reasonCodes: string[]) {
+  return reasonCodes.map((code) => ({
+    code,
+    label: code,
+    tone: "warning" as const,
+  }));
+}
+
+function buildReportViewModel(params: {
+  bundleId: string;
+  outcome: "validated" | "abstained" | "degraded";
+  finalizedAt: string;
+  summaryMessage: string;
+  reasoning: string;
+  reasonCodes: string[];
+  recommendations: any[];
+  deliveryStatus: "awaiting_ack" | "not_eligible";
+}) {
+  return {
+    bundleId: params.bundleId,
+    bundleOutcome: params.outcome,
+    renderState: params.outcome === "validated" ? "validated_awaiting_ack" : params.outcome === "abstained" ? "abstained_summary_only" : "degraded_summary_only",
+    createdAt: params.finalizedAt,
+    finalizedAt: params.finalizedAt,
+    summaryMessage: params.summaryMessage,
+    reasoning: params.reasoning,
+    reasonCodes: buildReasonCodeBadges(params.reasonCodes),
+    recommendations: params.recommendations,
+    deliveryStatus: params.deliveryStatus,
+    isActionable: params.outcome === "validated",
+    isSuperseded: false,
+    historicalValidatedContextBundleId: null,
+  };
+}
+
+function buildExportPayload(reportData: any, alertLevel: string | null, alertReason: string | null) {
+  return {
+    summary: reportData.summary ?? "",
+    reasoning: reportData.reasoning ?? "",
+    alertLevel,
+    alertReason,
+    recommendations: reportData.recommendations ?? [],
+    marketContext: reportData.marketContext ?? {},
+  };
+}
+
+function hashPromptPayload(value: unknown): string {
+  return buildPromptHash(JSON.stringify(value));
 }
 
 // ── Gated o3-mini adjudicator (diagnostic only) ───────────────────────────────
