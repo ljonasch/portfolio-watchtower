@@ -186,3 +186,21 @@ describe("T47 — AbstainReason enum coverage", () => {
     expect(isValidationBlock).toBe(true);
   });
 });
+
+describe("F7 â€” validator action normalization", () => {
+  test("existing-position increase is normalized to Buy, not Add", () => {
+    const rec = makeRec({
+      currentShares: 10,
+      targetShares: 12,
+      shareDelta: 2,
+      action: "Add",
+    });
+
+    const result = validatePortfolioReport(makeReport([rec]), 0);
+    const corrected = result.correctedReport?.recommendations?.[0];
+
+    expect(result.valid).toBe(true);
+    expect(corrected?.action).toBe("Buy");
+    expect(corrected?.action).not.toBe("Add");
+  });
+});

@@ -22,7 +22,7 @@ const VALID_ROLES: HoldingRole[] = [
   "Core", "Growth", "Tactical", "Hedge", "Speculative", "Income", "Watchlist",
 ];
 
-const VALID_ACTIONS = new Set(["Buy", "Sell", "Hold", "Exit", "Add", "Trim"]);
+const VALID_ACTIONS = new Set(["Buy", "Sell", "Hold", "Exit", "Trim"]);
 
 const VALID_CONFIDENCE: ConfidenceLevel[] = ["high", "medium", "low"];
 
@@ -47,8 +47,9 @@ function normalizeRole(raw: string | undefined | null): HoldingRole {
 }
 
 function normalizeAction(raw: string | undefined | null): RecommendationV3["action"] {
-  const candidates = ["Buy", "Sell", "Hold", "Exit", "Add", "Trim"];
   if (!raw) return "Hold";
+  if (raw.trim().toLowerCase() === "add") return "Buy";
+  const candidates = ["Buy", "Sell", "Hold", "Exit", "Trim"];
   const found = candidates.find((a) => a.toLowerCase() === raw.trim().toLowerCase());
   return (found as RecommendationV3["action"]) ?? "Hold";
 }
@@ -105,7 +106,7 @@ function validateRecommendation(
   // Action normalization & Hard Math Override
   let correctedAction = normalizeAction(rec.action);
   if (expectedDelta > 0 && (rec.currentShares ?? 0) === 0) correctedAction = "Buy";
-  else if (expectedDelta > 0 && (rec.currentShares ?? 0) > 0) correctedAction = "Add";
+  else if (expectedDelta > 0 && (rec.currentShares ?? 0) > 0) correctedAction = "Buy";
   else if (expectedDelta < 0 && (rec.targetShares ?? 0) === 0) correctedAction = "Exit";
   else if (expectedDelta < 0 && (rec.targetShares ?? 0) > 0) correctedAction = "Trim";
   else if (expectedDelta === 0) correctedAction = "Hold";

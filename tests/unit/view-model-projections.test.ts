@@ -59,8 +59,15 @@ describe("T20 — projectRecommendation: action coercion", () => {
     expect(vm.sortPriority).toBe(4);
   });
 
-  test("Unknown action coerces to Hold", () => {
-    const vm = projectRecommendation({ ...BASE, action: "Add" }); // "Add" not allowed in strict enum
+  test("legacy Add action is explicitly normalized to Buy", () => {
+    const vm = projectRecommendation({ ...BASE, action: "Add" });
+    expect(vm.action).toBe("Buy");
+    expect(vm.actionBadgeVariant).toBe("buy");
+    expect(vm.sortPriority).toBe(3);
+  });
+
+  test("truly unknown action still coerces to Hold", () => {
+    const vm = projectRecommendation({ ...BASE, action: "Increase" });
     expect(vm.action).toBe("Hold");
     expect(vm.actionBadgeVariant).toBe("hold");
   });

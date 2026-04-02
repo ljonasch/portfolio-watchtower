@@ -46,6 +46,7 @@ import {
 
 function coerceAction(raw: string | null | undefined): ActionEnum {
   const allowed: ActionEnum[] = ["Buy", "Sell", "Hold", "Exit", "Trim"];
+  if (raw?.trim() === "Add") return "Buy";
   const v = raw?.trim() as ActionEnum;
   return allowed.includes(v) ? v : "Hold";
 }
