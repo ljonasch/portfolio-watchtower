@@ -73,6 +73,7 @@ describe("bundle-read-service", () => {
   test("requested report artifact resolves historical bundle by id", async () => {
     (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
       id: "bundle_historical",
+      userId: "user_1",
       reportViewModelJson: JSON.stringify({
         bundleId: "bundle_historical",
         bundleOutcome: "validated",
@@ -100,9 +101,30 @@ describe("bundle-read-service", () => {
     );
   });
 
+  test("requested report artifact ignores bundles owned by a different user", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_foreign",
+      userId: "user_2",
+      reportViewModelJson: JSON.stringify({
+        bundleId: "bundle_foreign",
+      }),
+    });
+    (prisma.portfolioReport.findFirst as jest.Mock).mockResolvedValue(null);
+
+    const result = await getRequestedReportArtifact("user_1", "bundle_foreign");
+
+    expect(result).toBeNull();
+    expect(prisma.portfolioReport.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "bundle_foreign", userId: "user_1" },
+      })
+    );
+  });
+
   test("requested report artifact fails closed when bundle payload is invalid", async () => {
     (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
       id: "bundle_1",
+      userId: "user_1",
       reportViewModelJson: "",
     });
 
@@ -175,6 +197,82 @@ describe("bundle-read-service", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].source).toBe("bundle");
+  });
+
+  test("history keeps the bundle row over a matching newer legacy row", async () => {
+    (prisma.analysisBundle.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "bundle_1",
+        sourceRunId: "run_1",
+        bundleOutcome: "validated",
+        bundleScope: "PRIMARY_PORTFOLIO",
+        portfolioSnapshotId: "snapshot_1",
+        finalizedAt: new Date("2026-04-02T00:00:00.000Z"),
+        isSuperseded: false,
+        deliveryStatus: "awaiting_ack",
+      },
+    ]);
+    (prisma.portfolioReport.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "report_duplicate_newer",
+        analysisRunId: "run_1",
+        snapshotId: "snapshot_1",
+        createdAt: new Date("2026-04-03T00:00:00.000Z"),
+      },
+    ]);
+
+    const result = await getHistoryBundles("user_1");
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(
+      expect.objectContaining({
+        source: "bundle",
+        bundle: expect.objectContaining({ id: "bundle_1" }),
+      })
+    );
+  });
+
+  test("history keeps the bundle row over a matching legacy row regardless of source order", async () => {
+    (prisma.analysisBundle.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "bundle_1",
+        sourceRunId: "run_1",
+        bundleOutcome: "validated",
+        bundleScope: "PRIMARY_PORTFOLIO",
+        portfolioSnapshotId: "snapshot_1",
+        finalizedAt: new Date("2026-04-02T00:00:00.000Z"),
+        isSuperseded: false,
+        deliveryStatus: "awaiting_ack",
+      },
+    ]);
+    (prisma.portfolioReport.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "report_duplicate_first",
+        analysisRunId: "run_1",
+        snapshotId: "snapshot_1",
+        createdAt: new Date("2026-04-01T00:00:00.000Z"),
+      },
+      {
+        id: "report_distinct",
+        analysisRunId: "run_2",
+        snapshotId: "snapshot_2",
+        createdAt: new Date("2026-04-04T00:00:00.000Z"),
+      },
+    ]);
+
+    const result = await getHistoryBundles("user_1");
+
+    expect(result).toHaveLength(2);
+    expect(result).toEqual([
+      expect.objectContaining({
+        source: "legacy",
+        report: expect.objectContaining({ id: "report_distinct" }),
+      }),
+      expect.objectContaining({
+        source: "bundle",
+        bundle: expect.objectContaining({ id: "bundle_1" }),
+      }),
+    ]);
   });
 
   test("history is globally ordered by effective timestamp", async () => {

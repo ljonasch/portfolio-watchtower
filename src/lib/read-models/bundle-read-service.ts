@@ -121,7 +121,7 @@ export async function getRequestedReportArtifact(userId: string, requestedId: st
     where: { id: requestedId },
   });
 
-  if (bundle) {
+  if (bundle && bundle.userId === userId) {
     return {
       source: "bundle" as const,
       bundle,
