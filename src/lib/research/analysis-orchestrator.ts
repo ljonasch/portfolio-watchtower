@@ -573,6 +573,7 @@ function buildMacroExposureBridgeDiagnostics(input: {
         themeId: hit.themeId,
         ruleId: hit.ruleId,
         matchedToken: hit.matchedToken,
+        environmentalGapHints: hit.environmentalGapHints,
         laneHints: hit.laneHints,
         exposureTags: hit.exposureTags,
       })),

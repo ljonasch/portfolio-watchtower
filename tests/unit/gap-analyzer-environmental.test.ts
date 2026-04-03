@@ -66,6 +66,7 @@ describe("environmental gap derivation", () => {
           themeId: "macro_theme:defense_fiscal_upcycle",
           matchedToken: "nato",
           exposureTags: ["defense_spending", "industrial_policy"],
+          environmentalGapHints: ["procurement_beneficiary_review", "industrial_policy_beneficiary_review"],
           laneHints: ["defense_fiscal_beneficiaries"],
           sectorTags: ["Defense"],
           sensitivityTags: ["policy_beneficiary"],

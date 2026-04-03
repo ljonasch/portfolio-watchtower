@@ -198,6 +198,7 @@ export interface MacroExposureBridgeRule {
   themeKeys: MacroThemeKey[];
   matchTokens: string[];
   emittedExposureTags: string[];
+  emittedEnvironmentalGapHints: string[];
   emittedLaneHints: MacroCandidateLaneKey[];
   emittedSectorTags: string[];
   emittedSensitivityTags: string[];
@@ -209,6 +210,7 @@ export interface MacroExposureBridgeHit {
   themeId: string;
   matchedToken: string;
   exposureTags: string[];
+  environmentalGapHints: string[];
   laneHints: MacroCandidateLaneKey[];
   sectorTags: string[];
   sensitivityTags: string[];
