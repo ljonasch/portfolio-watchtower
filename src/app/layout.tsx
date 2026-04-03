@@ -1,12 +1,9 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
 import Link from "next/link";
 import { GlobalWorkflowNav } from "@/components/GlobalWorkflowNav";
 
 import { prisma } from "@/lib/prisma";
-
-const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Portfolio Watchtower",
@@ -25,7 +22,11 @@ export default async function RootLayout({
 
   return (
     <html lang="en" className="dark">
-      <body suppressHydrationWarning className={`${inter.className} min-h-screen bg-slate-950 text-slate-50 antialiased`}>
+      <body
+        suppressHydrationWarning
+        className="min-h-screen bg-slate-950 text-slate-50 antialiased"
+        style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}
+      >
         <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur-xl sticky top-0 z-50">
           <div className="container mx-auto px-4 h-14 flex items-center gap-6">
             <Link href="/" className="font-bold text-base tracking-tight bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent flex-shrink-0">
