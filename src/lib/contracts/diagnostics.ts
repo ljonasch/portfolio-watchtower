@@ -23,6 +23,7 @@ export interface DiagnosticsSourceRefContract {
 }
 
 export interface DiagnosticsWarningContract {
+  warningId: string;
   code: string;
   message: string;
   severity: "info" | "warning" | "error";

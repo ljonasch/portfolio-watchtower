@@ -22,6 +22,7 @@ describe("report verification grid", () => {
     expect(source).toContain("Sources (");
     expect(source).toContain("No diagnostics details were persisted for this section.");
     expect(source.indexOf('title="Key Inputs"')).toBeLessThan(source.indexOf('title="Hashes"'));
+    expect(source).toContain("key={warning.warningId");
   });
 
   test("bundle-backed report page restores normal holdings and changes sections", () => {

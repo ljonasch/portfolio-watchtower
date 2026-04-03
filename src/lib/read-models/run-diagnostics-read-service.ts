@@ -54,7 +54,7 @@ function buildMetrics(rows: Array<[string, string, string | number | boolean | n
 }
 
 function buildWarnings(rows: Array<[string, string, "info" | "warning" | "error"]>): DiagnosticsWarningContract[] {
-  return rows.map(([code, message, severity]) => ({ code, message, severity }));
+  return rows.map(([code, message, severity]) => ({ warningId: "", code, message, severity }));
 }
 
 function toSourceRef(source: any): DiagnosticsSourceRefContract {
@@ -180,7 +180,55 @@ function ensureStepSections(
     ...step,
     inputs: ensureSection(step.inputs, notes.inputs),
     outputs: ensureSection(step.outputs, notes.outputs),
+    warnings: aggregateAndAssignWarningIds(step.stepKey, step.warnings ?? []),
   };
+}
+
+function normalizeWarningMessageFamily(message: string): string {
+  return message
+    .toLowerCase()
+    .replace(/\b\d+\b/g, "#")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function aggregateAndAssignWarningIds(
+  stepKey: DiagnosticsStepContract["stepKey"],
+  warnings: DiagnosticsWarningContract[]
+): DiagnosticsWarningContract[] {
+  if (warnings.length === 0) return warnings;
+
+  let normalizedWarnings = warnings;
+
+  if (stepKey === "news_sources") {
+    const aggregated: DiagnosticsWarningContract[] = [];
+    const rateLimitWarnings = warnings.filter((warning) => warning.code === "primary_rate_limited");
+    const nonRateLimitWarnings = warnings.filter((warning) => warning.code !== "primary_rate_limited");
+
+    if (rateLimitWarnings.length > 0) {
+      const fallbackWarning = warnings.find((warning) => warning.code === "fallback_used" || warning.code === "fallback_news");
+      aggregated.push({
+        warningId: "",
+        code: "primary_rate_limited",
+        message: `Primary live-news search was rate-limited ${rateLimitWarnings.length} time(s) during this run.${fallbackWarning ? " Yahoo Finance fallback headlines were used afterward." : ""}`,
+        severity: rateLimitWarnings.some((warning) => warning.severity === "error") ? "error" : "warning",
+      });
+    }
+
+    normalizedWarnings = [...aggregated, ...nonRateLimitWarnings];
+  }
+
+  const duplicateOrdinals = new Map<string, number>();
+  return normalizedWarnings.map((warning) => {
+    const family = normalizeWarningMessageFamily(warning.message);
+    const ordinalKey = `${stepKey}:${warning.code}:${family}`;
+    const ordinal = duplicateOrdinals.get(ordinalKey) ?? 0;
+    duplicateOrdinals.set(ordinalKey, ordinal + 1);
+    return {
+      ...warning,
+      warningId: `${stepKey}:${warning.code}:${family}:${ordinal}`,
+    };
+  });
 }
 
 function normalizeArtifactSections(
@@ -442,6 +490,7 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
       ]),
       sources: [],
       warnings: (validationSummary.reasonCodes ?? []).map((code: string) => ({
+        warningId: "",
         code,
         message: code,
         severity: validationSummary.hardErrorCount > 0 ? "error" : "warning",

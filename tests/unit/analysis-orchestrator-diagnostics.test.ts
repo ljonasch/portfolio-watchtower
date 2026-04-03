@@ -88,6 +88,9 @@ describe("analysis orchestrator diagnostics", () => {
       expect(Object.keys(step.outputs).length).toBeGreaterThan(0);
       expect(Object.keys(step.inputs).some((key) => key !== "note")).toBe(true);
       expect(Object.keys(step.outputs).some((key) => key !== "note")).toBe(true);
+      for (const warning of step.warnings) {
+        expect(warning.warningId).toBeTruthy();
+      }
     }
     expect(artifact.steps.find((step) => step.stepKey === "candidate_screening")?.inputs).toEqual(
       expect.objectContaining({
@@ -320,6 +323,62 @@ describe("analysis orchestrator diagnostics", () => {
         outputs: expect.objectContaining({
           outcomeExplanation: "Primary live-news search failed due to a connection/provider issue, so Yahoo Finance fallback headlines were used.",
         }),
+      })
+    );
+  });
+
+  test("repeated news rate-limit warnings are aggregated and assigned stable ids", () => {
+    const artifact = buildRunDiagnosticsArtifact({
+      bundleId: "pending",
+      runId: "run_news_rate_limit",
+      outcome: "validated",
+      generatedAt: "2026-04-02T00:00:00.000Z",
+      evidencePacketId: "packet_1",
+      evidenceHash: "evidence_hash",
+      promptHash: "prompt_hash",
+      versions: {
+        schemaVersion: "v1",
+        analysisPolicyVersion: "v1",
+        viewModelVersion: "v1",
+      },
+      primaryModel: "gpt-5.4",
+      responseHash: "response_hash",
+      usingFallbackNews: true,
+      newsResult: {
+        availabilityStatus: "fallback_success",
+        degradedReason: "primary_rate_limited",
+        statusSummary: "Primary live-news search was rate-limited, so Yahoo Finance fallback headlines were used.",
+        issues: [
+          { kind: "primary_rate_limited", message: "Rate limit (429) hit for model gpt-5-search-api. Waiting 65 seconds before retrying." },
+          { kind: "primary_rate_limited", message: "Rate limit (429) hit for model gpt-5-search-api. Waiting 65 seconds before retrying." },
+          { kind: "fallback_used", message: "Yahoo Finance fallback headlines supplied usable coverage for this run." },
+        ],
+        signals: {
+          articleCount: 2,
+          sourceDiversityCount: 1,
+          confidence: "low",
+          directionalSupport: "neutral",
+        },
+        breaking24h: "",
+        combinedSummary: "Fallback summary",
+        allSources: [{ title: "Fallback item", url: "https://finance.yahoo.com/apple", source: "yahoo", publishedAt: null }],
+      },
+      reportData: { recommendations: [] },
+      validationSummary: {
+        hardErrorCount: 0,
+        warningCount: 0,
+        reasonCodes: [],
+      },
+      allTickers: ["AAPL"],
+    });
+
+    const newsStep = artifact.steps.find((step) => step.stepKey === "news_sources");
+    expect(newsStep?.warnings).toHaveLength(2);
+    expect(newsStep?.warnings[0]).toEqual(
+      expect.objectContaining({
+        code: "primary_rate_limited",
+        message: "Primary live-news search was rate-limited 2 time(s) during this run. Yahoo Finance fallback headlines were used afterward.",
+        warningId: expect.stringContaining("news_sources:primary_rate_limited:"),
       })
     );
   });

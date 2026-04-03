@@ -18,7 +18,7 @@ describe("run diagnostics contracts", () => {
           outputs: { riskMode: "risk_on" },
           metrics: [{ key: "source_count", label: "Source Count", value: 3 }],
           sources: [{ title: "Source", url: "https://example.com", source: "example", publishedAt: null }],
-          warnings: [{ code: "none", message: "No warnings", severity: "info" }],
+          warnings: [{ warningId: "market_regime:none:no warnings:0", code: "none", message: "No warnings", severity: "info" }],
           model: {
             name: "gpt-5.4",
             promptVersion: "prompt_hash",

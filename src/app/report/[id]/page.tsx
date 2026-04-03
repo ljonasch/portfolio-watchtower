@@ -222,7 +222,7 @@ function DiagnosticStepCard({ step }: { step: DiagnosticsStepContract }) {
             <h5 className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Warnings & Reasons</h5>
             <div className="space-y-2">
               {step.warnings.map((warning) => (
-                <div key={`${warning.code}-${warning.message}`} className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
+                <div key={warning.warningId ?? `${warning.code}-${warning.message}-${warning.severity}`} className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
                   <div className="font-semibold">{warning.code}</div>
                   <div className="mt-1">{warning.message}</div>
                 </div>

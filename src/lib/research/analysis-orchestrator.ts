@@ -103,10 +103,68 @@ function buildDiagnosticsWarnings(
   rows: Array<[string, string, DiagnosticsWarningContract["severity"]]>
 ): DiagnosticsWarningContract[] {
   return rows.map(([code, message, severity]) => ({
+    warningId: "",
     code,
     message,
     severity,
   }));
+}
+
+function normalizeWarningMessageFamily(message: string): string {
+  return message
+    .toLowerCase()
+    .replace(/\b\d+\b/g, "#")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function aggregateAndAssignWarningIds(
+  stepKey: DiagnosticsStepContract["stepKey"],
+  warnings: DiagnosticsWarningContract[]
+): DiagnosticsWarningContract[] {
+  if (warnings.length === 0) return warnings;
+
+  let normalizedWarnings = warnings;
+
+  if (stepKey === "news_sources") {
+    const aggregated: DiagnosticsWarningContract[] = [];
+    const rateLimitWarnings = warnings.filter((warning) => warning.code === "primary_rate_limited");
+    const nonRateLimitWarnings = warnings.filter((warning) => warning.code !== "primary_rate_limited");
+
+    if (rateLimitWarnings.length > 0) {
+      const fallbackWarning = warnings.find((warning) => warning.code === "fallback_used");
+      const transportWarning = warnings.find((warning) => warning.code === "primary_transport_failure");
+      const summary = `Primary live-news search was rate-limited ${rateLimitWarnings.length} time(s) during this run.${fallbackWarning ? " Yahoo Finance fallback headlines were used afterward." : transportWarning ? " The run remained degraded after the retry loop." : " Retries eventually continued without a separate fallback warning."}`;
+
+      aggregated.push({
+        warningId: "",
+        code: "primary_rate_limited",
+        message: summary,
+        severity: rateLimitWarnings.some((warning) => warning.severity === "error") ? "error" : "warning",
+      });
+    }
+
+    normalizedWarnings = [...aggregated, ...nonRateLimitWarnings];
+  }
+
+  const duplicateOrdinals = new Map<string, number>();
+  return normalizedWarnings.map((warning) => {
+    const family = normalizeWarningMessageFamily(warning.message);
+    const ordinalKey = `${stepKey}:${warning.code}:${family}`;
+    const ordinal = duplicateOrdinals.get(ordinalKey) ?? 0;
+    duplicateOrdinals.set(ordinalKey, ordinal + 1);
+    return {
+      ...warning,
+      warningId: `${stepKey}:${warning.code}:${family}:${ordinal}`,
+    };
+  });
+}
+
+function normalizeStepWarnings(step: DiagnosticsStepContract): DiagnosticsStepContract {
+  return {
+    ...step,
+    warnings: aggregateAndAssignWarningIds(step.stepKey, step.warnings ?? []),
+  };
 }
 
 function buildStepBase(
@@ -155,11 +213,11 @@ function ensureStepSections(
     outputs: string;
   }
 ): DiagnosticsStepContract {
-  return {
+  return normalizeStepWarnings({
     ...step,
     inputs: ensureSection(step.inputs, notes.inputs),
     outputs: ensureSection(step.outputs, notes.outputs),
-  };
+  });
 }
 
 function truncateText(value: string | null | undefined, maxLength = 240): string | null {
@@ -449,6 +507,7 @@ function buildNewsSourceDiagnostics(input: {
     sources: input.sourceRefs,
     warnings: Array.isArray(input.newsResult?.issues) && input.newsResult.issues.length > 0
       ? input.newsResult.issues.map((issue: any) => ({
+          warningId: "",
           code: issue.kind ?? "news_issue",
           message: issue.message ?? "News fetch issue",
           severity: issue.kind === "primary_transport_failure" || issue.kind === "primary_rate_limited" || issue.kind === "no_usable_news"
@@ -658,6 +717,7 @@ function buildValidationDiagnostics(input: {
       ["warning_count", "Warnings", input.validationSummary.warningCount],
     ]),
     warnings: (input.validationSummary.reasonCodes ?? []).map((code) => ({
+      warningId: "",
       code,
       message: code,
       severity: input.validationSummary.hardErrorCount > 0 ? "error" as const : "warning" as const,
