@@ -256,13 +256,21 @@ export async function getRunDiagnostics(bundleId: string) {
   if (!bundle) {
     return null;
   }
+  let artifact: RunDiagnosticsArtifact;
+  let artifactSource: "persisted" | "fallback" | "invalid";
+  let hasPersistedArtifact = false;
+  let note: string | null = null;
 
-  const evidencePacket = parseJsonField<Record<string, unknown>>(bundle.evidencePacketJson, "evidencePacketJson");
-  const persistedDiagnostics = (evidencePacket as { diagnosticsArtifact?: unknown }).diagnosticsArtifact;
+  try {
+    const evidencePacket = parseJsonField<Record<string, unknown>>(bundle.evidencePacketJson, "evidencePacketJson");
+    const persistedDiagnostics = (evidencePacket as { diagnosticsArtifact?: unknown }).diagnosticsArtifact;
+    hasPersistedArtifact = persistedDiagnostics !== undefined;
 
-  const artifact = isRunDiagnosticsArtifact(persistedDiagnostics)
-    ? persistedDiagnostics
-    : buildFallbackDiagnosticsArtifact(
+    if (isRunDiagnosticsArtifact(persistedDiagnostics)) {
+      artifact = persistedDiagnostics;
+      artifactSource = "persisted";
+    } else {
+      artifact = buildFallbackDiagnosticsArtifact(
         bundle,
         bundle.sourceRunId
           ? await prisma.analysisRun.findUnique({
@@ -271,6 +279,23 @@ export async function getRunDiagnostics(bundleId: string) {
             })
           : null
       );
+      artifactSource = hasPersistedArtifact ? "invalid" : "fallback";
+      note = hasPersistedArtifact
+        ? "Persisted diagnostics artifact was present but invalid; using synthesized fallback diagnostics."
+        : "Persisted diagnostics artifact was absent; using synthesized fallback diagnostics.";
+    }
+  } catch (error) {
+    artifact = {
+      bundleId: bundle.id,
+      runId: bundle.sourceRunId,
+      outcome: bundle.bundleOutcome as RunDiagnosticsArtifact["outcome"],
+      generatedAt: bundle.finalizedAt.toISOString(),
+      evidencePacketId: null,
+      steps: [],
+    };
+    artifactSource = "invalid";
+    note = error instanceof Error ? error.message : "Diagnostics artifact could not be loaded.";
+  }
 
   return {
     artifactMeta: {
@@ -282,5 +307,12 @@ export async function getRunDiagnostics(bundleId: string) {
     },
     steps: artifact.steps,
     downloadHref: null,
+    diagnosticsState: {
+      bundleExists: true,
+      hasPersistedArtifact,
+      artifactSource,
+      stepCount: artifact.steps.length,
+      note,
+    },
   };
 }

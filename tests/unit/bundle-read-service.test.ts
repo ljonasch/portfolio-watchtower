@@ -2,6 +2,7 @@ jest.mock("@/lib/prisma", () => ({
   prisma: {
     analysisBundle: {
       findMany: jest.fn(),
+      findFirst: jest.fn(),
       findUnique: jest.fn(),
     },
     analysisRun: {
@@ -117,6 +118,49 @@ describe("bundle-read-service", () => {
     expect(prisma.portfolioReport.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "bundle_foreign", userId: "user_1" },
+      })
+    );
+  });
+
+  test("requested legacy report id resolves to the matching bundle when a bundle-backed artifact exists", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.portfolioReport.findFirst as jest.Mock).mockResolvedValue({
+      id: "report_1",
+      userId: "user_1",
+      analysisRunId: "run_1",
+      snapshotId: "snapshot_1",
+      analysisRun: {},
+      recommendations: [],
+      snapshot: { holdings: [] },
+    });
+    (prisma.analysisBundle.findFirst as jest.Mock).mockResolvedValue({
+      id: "bundle_1",
+      userId: "user_1",
+      sourceRunId: "run_1",
+      reportViewModelJson: JSON.stringify({
+        bundleId: "bundle_1",
+        bundleOutcome: "validated",
+        renderState: "validated_actionable",
+        createdAt: "2026-04-02T00:00:00.000Z",
+        finalizedAt: "2026-04-02T00:00:00.000Z",
+        summaryMessage: "Summary",
+        reasoning: "Reasoning",
+        reasonCodes: [],
+        recommendations: [],
+        deliveryStatus: "awaiting_ack",
+        isActionable: true,
+        isSuperseded: false,
+        historicalValidatedContextBundleId: null,
+      }),
+    });
+
+    const result = await getRequestedReportArtifact("user_1", "report_1");
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        source: "bundle",
+        resolution: "legacy_report_to_bundle",
+        bundle: expect.objectContaining({ id: "bundle_1" }),
       })
     );
   });

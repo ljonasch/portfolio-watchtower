@@ -61,6 +61,13 @@ describe("run diagnostics read service", () => {
 
     expect(result?.artifactMeta.bundleId).toBe("bundle_1");
     expect(result?.steps).toHaveLength(1);
+    expect(result?.diagnosticsState).toEqual(
+      expect.objectContaining({
+        hasPersistedArtifact: true,
+        artifactSource: "persisted",
+        stepCount: 1,
+      })
+    );
     expect(prisma.analysisRun.findUnique).not.toHaveBeenCalled();
   });
 
@@ -113,6 +120,13 @@ describe("run diagnostics read service", () => {
 
     expect(result?.artifactMeta.bundleId).toBe("bundle_legacy");
     expect(result?.steps).toHaveLength(7);
+    expect(result?.diagnosticsState).toEqual(
+      expect.objectContaining({
+        hasPersistedArtifact: false,
+        artifactSource: "fallback",
+        stepCount: 7,
+      })
+    );
     expect(result?.steps.find((step) => step.stepKey === "news_sources")?.sources).toHaveLength(1);
     expect(result?.steps.find((step) => step.stepKey === "validation_finalization")?.warnings).toEqual([
       expect.objectContaining({ code: "low_source_density" }),

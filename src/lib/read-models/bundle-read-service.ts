@@ -131,6 +131,7 @@ export async function getRequestedReportArtifact(userId: string, requestedId: st
   if (bundle && bundle.userId === userId) {
     return {
       source: "bundle" as const,
+      resolution: "bundle_id" as const,
       origin: extractBundleOrigin(bundle),
       bundle,
       reportViewModel: parseJsonField<ReportViewModelContract>(bundle.reportViewModelJson, "reportViewModelJson"),
@@ -150,8 +151,28 @@ export async function getRequestedReportArtifact(userId: string, requestedId: st
     return null;
   }
 
+  if (legacyReport.analysisRunId) {
+    const matchingBundle = await prisma.analysisBundle.findFirst({
+      where: {
+        userId,
+        sourceRunId: legacyReport.analysisRunId,
+      },
+    });
+
+    if (matchingBundle) {
+      return {
+        source: "bundle" as const,
+        resolution: "legacy_report_to_bundle" as const,
+        origin: extractBundleOrigin(matchingBundle),
+        bundle: matchingBundle,
+        reportViewModel: parseJsonField<ReportViewModelContract>(matchingBundle.reportViewModelJson, "reportViewModelJson"),
+      };
+    }
+  }
+
   return {
     source: "legacy" as const,
+    resolution: "legacy_only" as const,
     classification: classifyLegacyReadOnlyArtifact(),
     report: legacyReport,
   };

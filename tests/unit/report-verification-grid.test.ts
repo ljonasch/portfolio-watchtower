@@ -9,6 +9,7 @@ describe("report verification grid", () => {
 
     expect(source).toContain('import { getRequestedReportArtifact, getRunDiagnostics } from "@/lib/read-models"');
     expect(source).toContain("const diagnostics = await getRunDiagnostics(bundle.id);");
+    expect(source).toContain("resolution={artifact.resolution}");
   });
 
   test("bundle-backed report page renders step-level diagnostics sections", () => {
@@ -19,5 +20,14 @@ describe("report verification grid", () => {
     expect(source).toContain("Key Outputs");
     expect(source).toContain("Warnings & Reasons");
     expect(source).toContain("Sources (");
+  });
+
+  test("report page renders explicit unavailable-state messaging instead of a silent blank diagnostics section", () => {
+    const source = fs.readFileSync(REPORT_PAGE, "utf-8");
+
+    expect(source).toContain("Diagnostics were unavailable for this bundle-backed report.");
+    expect(source).toContain("This report resolved through the legacy report branch.");
+    expect(source).toContain("No legacy verification snapshot was persisted for this report.");
+    expect(source).toContain("Diagnostics State");
   });
 });

@@ -229,6 +229,44 @@ function DiagnosticStepCard({ step }: { step: DiagnosticsStepContract }) {
   );
 }
 
+function DiagnosticsStatePanel({
+  branch,
+  resolution,
+  bundleId,
+  diagnosticsState,
+}: {
+  branch: "bundle" | "legacy";
+  resolution: string;
+  bundleId?: string | null;
+  diagnosticsState?: {
+    bundleExists: boolean;
+    hasPersistedArtifact: boolean;
+    artifactSource: string;
+    stepCount: number;
+    note: string | null;
+  } | null;
+}) {
+  if (process.env.NODE_ENV === "production" && diagnosticsState?.stepCount && diagnosticsState.stepCount > 0) {
+    return null;
+  }
+
+  return (
+    <details className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-400">
+      <summary className="cursor-pointer list-none font-semibold text-slate-300">Diagnostics State</summary>
+      <div className="mt-3 space-y-1">
+        <div>branch: {branch}</div>
+        <div>resolution: {resolution}</div>
+        <div>bundleId: {bundleId ?? "none"}</div>
+        <div>bundleExists: {diagnosticsState?.bundleExists ? "true" : "false"}</div>
+        <div>hasPersistedArtifact: {diagnosticsState?.hasPersistedArtifact ? "true" : "false"}</div>
+        <div>artifactSource: {diagnosticsState?.artifactSource ?? "none"}</div>
+        <div>stepCount: {diagnosticsState?.stepCount ?? 0}</div>
+        {diagnosticsState?.note && <div>note: {diagnosticsState.note}</div>}
+      </div>
+    </details>
+  );
+}
+
 export default async function ReportPage(props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const user = await prisma.user.findFirst();
@@ -241,6 +279,7 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
     const reportViewModel = artifact.reportViewModel;
     const bundle = artifact.bundle;
     const diagnostics = await getRunDiagnostics(bundle.id);
+    const diagnosticsUnavailable = !diagnostics || diagnostics.steps.length === 0;
 
     return (
       <div className="space-y-10 max-w-6xl mx-auto">
@@ -258,7 +297,7 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
           <h3 className="text-xl font-bold border-b border-slate-800 pb-2 flex items-center gap-2 text-slate-200">
             <ShieldCheck className="w-5 h-5 text-emerald-400" /> Deep Analysis Verification
           </h3>
-          {diagnostics ? (
+          {diagnostics && diagnostics.steps.length > 0 ? (
             <>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
@@ -285,10 +324,30 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
                   <DiagnosticStepCard key={step.stepKey} step={step} />
                 ))}
               </div>
+              <DiagnosticsStatePanel
+                branch="bundle"
+                resolution={artifact.resolution}
+                bundleId={bundle.id}
+                diagnosticsState={diagnostics.diagnosticsState}
+              />
             </>
           ) : (
-            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-6 text-sm text-slate-400">
-              Diagnostics were not available for this run.
+            <div className="space-y-3">
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-6 text-sm text-amber-200">
+                Diagnostics were unavailable for this bundle-backed report. This usually means the persisted diagnostics artifact was missing or invalid and fallback synthesis did not produce any step rows.
+              </div>
+              <DiagnosticsStatePanel
+                branch="bundle"
+                resolution={artifact.resolution}
+                bundleId={bundle.id}
+                diagnosticsState={diagnostics?.diagnosticsState ?? {
+                  bundleExists: true,
+                  hasPersistedArtifact: false,
+                  artifactSource: "missing",
+                  stepCount: 0,
+                  note: "The diagnostics read service returned no usable step rows.",
+                }}
+              />
             </div>
           )}
         </div>
@@ -366,6 +425,7 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
     try { return JSON.parse((report.analysisRun as any)?.researchCoverage ?? "{}"); }
     catch { return {}; }
   })();
+  const hasLegacyVerificationRows = Object.values(sysVer).some((value) => value !== undefined && value !== null);
 
   // Build holding value map for current weights
   const holdingValueByTicker = new Map<string, number>();
@@ -464,14 +524,24 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
         <h3 className="text-xl font-bold border-b border-slate-800 pb-2 flex items-center gap-2 text-slate-200">
           <ShieldCheck className="w-5 h-5 text-emerald-400" /> Deep Analysis Verification
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          <VerRow label="Market Regime" value={sysVer.marketRegime} />
-          <VerRow label="Portfolio Gap Scan" value={sysVer.gapAnalysis} />
-          <VerRow label="Candidate Screening" value={sysVer.candidateScreening} />
-          <VerRow label="News & Event Sources" value={sysVer.fastSearchResearch} />
-          <VerRow label="FinBERT Sentiment" value={sysVer.finbertSentiment} />
-          <VerRow label="GPT-5 Reasoning" value={sysVer.gpt5Strategic} />
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-200">
+          This report resolved through the legacy report branch. Bundle-backed typed diagnostics were not available for the requested report id.
         </div>
+        {hasLegacyVerificationRows ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <VerRow label="Market Regime" value={sysVer.marketRegime} />
+            <VerRow label="Portfolio Gap Scan" value={sysVer.gapAnalysis} />
+            <VerRow label="Candidate Screening" value={sysVer.candidateScreening} />
+            <VerRow label="News & Event Sources" value={sysVer.fastSearchResearch} />
+            <VerRow label="FinBERT Sentiment" value={sysVer.finbertSentiment} />
+            <VerRow label="GPT-5 Reasoning" value={sysVer.gpt5Strategic} />
+          </div>
+        ) : (
+          <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-6 text-sm text-slate-400">
+            No legacy verification snapshot was persisted for this report.
+          </div>
+        )}
+        <DiagnosticsStatePanel branch="legacy" resolution={artifact.resolution} bundleId={null} diagnosticsState={null} />
       </div>
 
       {/* Summary + Reasoning */}
