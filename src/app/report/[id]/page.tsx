@@ -234,44 +234,6 @@ function DiagnosticStepCard({ step }: { step: DiagnosticsStepContract }) {
   );
 }
 
-function DiagnosticsStatePanel({
-  branch,
-  resolution,
-  bundleId,
-  diagnosticsState,
-}: {
-  branch: "bundle" | "legacy";
-  resolution: string;
-  bundleId?: string | null;
-  diagnosticsState?: {
-    bundleExists: boolean;
-    hasPersistedArtifact: boolean;
-    artifactSource: string;
-    stepCount: number;
-    note: string | null;
-  } | null;
-}) {
-  if (process.env.NODE_ENV === "production" && diagnosticsState?.stepCount && diagnosticsState.stepCount > 0) {
-    return null;
-  }
-
-  return (
-    <details className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-400">
-      <summary className="cursor-pointer list-none font-semibold text-slate-300">Diagnostics State</summary>
-      <div className="mt-3 space-y-1">
-        <div>branch: {branch}</div>
-        <div>resolution: {resolution}</div>
-        <div>bundleId: {bundleId ?? "none"}</div>
-        <div>bundleExists: {diagnosticsState?.bundleExists ? "true" : "false"}</div>
-        <div>hasPersistedArtifact: {diagnosticsState?.hasPersistedArtifact ? "true" : "false"}</div>
-        <div>artifactSource: {diagnosticsState?.artifactSource ?? "none"}</div>
-        <div>stepCount: {diagnosticsState?.stepCount ?? 0}</div>
-        {diagnosticsState?.note && <div>note: {diagnosticsState.note}</div>}
-      </div>
-    </details>
-  );
-}
-
 export default async function ReportPage(props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const user = await prisma.user.findFirst();
@@ -283,8 +245,20 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
   if (artifact.source === "bundle") {
     const reportViewModel = artifact.reportViewModel;
     const bundle = artifact.bundle;
-    const diagnostics = await getRunDiagnostics(bundle.id);
-    const diagnosticsUnavailable = !diagnostics || diagnostics.steps.length === 0;
+    const [diagnostics, snapshot] = await Promise.all([
+      getRunDiagnostics(bundle.id),
+      prisma.portfolioSnapshot.findUnique({
+        where: { id: bundle.portfolioSnapshotId },
+        include: { holdings: true },
+      }),
+    ]);
+    const changedRecommendations = reportViewModel.recommendations
+      .map((rec) => ({
+        ...rec,
+        sources: rec.sources as SourceViewModel[],
+      }))
+      .filter((rec) => rec.shareDelta !== 0 || rec.actionBadgeVariant !== "hold");
+    const totalValue = snapshot?.holdings.reduce((sum, h) => sum + (h.currentValue || 0), 0) ?? 0;
 
     return (
       <div className="space-y-10 max-w-6xl mx-auto">
@@ -329,30 +303,10 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
                   <DiagnosticStepCard key={step.stepKey} step={step} />
                 ))}
               </div>
-              <DiagnosticsStatePanel
-                branch="bundle"
-                resolution={artifact.resolution}
-                bundleId={bundle.id}
-                diagnosticsState={diagnostics.diagnosticsState}
-              />
             </>
           ) : (
-            <div className="space-y-3">
-              <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-6 text-sm text-amber-200">
-                Diagnostics were unavailable for this bundle-backed report. This usually means the persisted diagnostics artifact was missing or invalid and fallback synthesis did not produce any step rows.
-              </div>
-              <DiagnosticsStatePanel
-                branch="bundle"
-                resolution={artifact.resolution}
-                bundleId={bundle.id}
-                diagnosticsState={diagnostics?.diagnosticsState ?? {
-                  bundleExists: true,
-                  hasPersistedArtifact: false,
-                  artifactSource: "missing",
-                  stepCount: 0,
-                  note: "The diagnostics read service returned no usable step rows.",
-                }}
-              />
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-6 text-sm text-amber-200">
+              Diagnostics were unavailable for this bundle-backed report.
             </div>
           )}
         </div>
@@ -383,11 +337,80 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
           />
         </div>
 
-        <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-6">
-          <p className="text-sm text-slate-400">
-            Bundle-backed report view. Outcome: <span className="text-slate-200 font-semibold">{bundle.bundleOutcome}</span>
-          </p>
-        </div>
+        {snapshot && snapshot.holdings.length > 0 && (
+          <div className="space-y-4">
+            <h2 className="text-xl font-bold border-b border-slate-800 pb-2">Current Holdings</h2>
+            <SortableHoldingsTable holdings={snapshot.holdings} totalValue={totalValue} />
+          </div>
+        )}
+
+        {changedRecommendations.length > 0 && (
+          <div className="space-y-4">
+            <h2 className="text-xl font-bold border-b border-slate-800 pb-2 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" /> Required Changes
+            </h2>
+            <div className="bg-slate-900/20 border border-slate-800 rounded-lg overflow-hidden">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-900/50 text-slate-400">
+                  <tr>
+                    <th className="px-4 py-2 font-medium">Ticker</th>
+                    <th className="px-4 py-2 font-medium">Action</th>
+                    <th className="px-4 py-2 font-medium text-right">Δ Shares</th>
+                    <th className="px-4 py-2 font-medium text-right">Δ Dollars</th>
+                    <th className="px-4 py-2 font-medium">Reasoning & Sources</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/50">
+                  {changedRecommendations.map((rec) => (
+                    <tr key={`bundle-change-${rec.id}`} className="align-top">
+                      <td className="px-4 py-3 font-bold">
+                        {rec.ticker === "CASH" ? (
+                          <span>{rec.ticker}</span>
+                        ) : (
+                          <a
+                            href={`https://finance.yahoo.com/quote/${rec.ticker}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors group"
+                          >
+                            {rec.ticker}
+                            <ExternalLink className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </a>
+                        )}
+                      </td>
+                      <td className={`px-4 py-3 font-medium ${
+                        rec.actionBadgeVariant === "buy" ? "text-green-400"
+                        : rec.actionBadgeVariant === "hold" ? "text-slate-400" : "text-red-400"
+                      }`}>
+                        {rec.action}
+                      </td>
+                      <td className={`px-4 py-3 text-right font-medium tabular-nums ${
+                        rec.shareDelta > 0 ? "text-green-400" : rec.shareDelta < 0 ? "text-red-400" : "text-slate-500"
+                      }`}>
+                        {rec.shareDelta === 0 ? "—" : `${rec.shareDelta > 0 ? "+" : ""}${rec.shareDelta} shrs`}
+                      </td>
+                      <td className={`px-4 py-3 text-right font-medium tabular-nums ${
+                        rec.dollarDelta > 0 ? "text-green-400" : rec.dollarDelta < 0 ? "text-red-400" : "text-slate-500"
+                      }`}>
+                        {!rec.dollarDelta || rec.dollarDelta === 0 ? "—" : (
+                          `${rec.dollarDelta > 0 ? "+" : ""}$${Math.abs(rec.dollarDelta).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-xs text-slate-400 leading-relaxed mb-1.5">{rec.detailedReasoning}</p>
+                        {rec.sources.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5">
+                            {rec.sources.map((source, index) => <SourceChip key={index} source={source} />)}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -546,7 +569,6 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
             No legacy verification snapshot was persisted for this report.
           </div>
         )}
-        <DiagnosticsStatePanel branch="legacy" resolution={artifact.resolution} bundleId={null} diagnosticsState={null} />
       </div>
 
       {/* Summary + Reasoning */}
