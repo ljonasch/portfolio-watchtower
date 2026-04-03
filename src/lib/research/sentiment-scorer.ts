@@ -1,11 +1,18 @@
 /**
  * Stage 2: Sentiment Scoring
  * Fixes applied:
- *   F6  — Per-headline scoring (not combined)
- *   W14 — Price context injected into HF input
- *   W25 — Graceful empty / no-HF-key fallback
+ *   F6 - Per-headline scoring (not combined)
+ *   W14 - Price context injected into HF input
+ *   W25 - Graceful empty / no-HF-key fallback
  */
 
+import { createHash } from "crypto";
+import {
+  SENTIMENT_EXTRACTION_PROMPT_VERSION,
+  buildRuntimeVersionTag,
+  buildSentimentExtractionCacheKey,
+  getOrLoadRuntimeCache,
+} from "@/lib/cache";
 import type { ProgressEvent } from "./progress-events";
 import type { ArticleReaction } from "./price-timeline";
 
@@ -30,26 +37,42 @@ const HF_BASE = "https://router.huggingface.co/hf-inference/models";
  * when a model hasn't been used recently. Retry up to 3 times.
  */
 async function callHuggingFace(model: string, inputs: string, apiKey: string, maxRetries = 6): Promise<any> {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const res = await fetch(`${HF_BASE}/${model}`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ inputs }),
-      signal: AbortSignal.timeout(15000),
-    });
+  const articleChecksum = createHash("sha256").update(inputs).digest("hex");
 
-    if (res.ok) return res.json();
+  return getOrLoadRuntimeCache({
+    domain: "sentiment_extraction_cache",
+    key: buildSentimentExtractionCacheKey({
+      articleChecksum,
+      extractionPromptVersion: SENTIMENT_EXTRACTION_PROMPT_VERSION,
+      model,
+    }),
+    versionTag: buildRuntimeVersionTag([model, SENTIMENT_EXTRACTION_PROMPT_VERSION]),
+    loader: async () => {
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const res = await fetch(`${HF_BASE}/${model}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ inputs }),
+          signal: AbortSignal.timeout(15000),
+        });
 
-    // 503 = model loading — wait and retry
-    if (res.status === 503 && attempt < maxRetries - 1) {
-      const waitMs = (attempt + 1) * 4000; // 4s, 8s, 12s, 16s, 20s
-      console.warn(`[HF API] Model ${model} is loading (503). Retrying in ${waitMs/1000}s...`);
-      await new Promise(r => setTimeout(r, waitMs));
-      continue;
-    }
+        if (res.ok) {
+          return res.json();
+        }
 
-    throw new Error(`HF ${model}: ${res.status}`);
-  }
+        if (res.status === 503 && attempt < maxRetries - 1) {
+          const waitMs = (attempt + 1) * 4000;
+          console.warn(`[HF API] Model ${model} is loading (503). Retrying in ${waitMs / 1000}s...`);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue;
+        }
+
+        throw new Error(`HF ${model}: ${res.status}`);
+      }
+
+      throw new Error(`HF ${model}: exceeded retry budget`);
+    },
+  });
 }
 
 function parseHFLabels(raw: any): number {
@@ -59,7 +82,6 @@ function parseHFLabels(raw: any): number {
     const lw = l.label?.toLowerCase() ?? "";
     if (lw === "positive" || lw.includes("bullish")) score += l.score;
     if (lw === "negative" || lw.includes("bearish")) score -= l.score;
-    // neutral contributes 0
   }
   return Math.max(-1, Math.min(1, score));
 }
@@ -67,7 +89,7 @@ function parseHFLabels(raw: any): number {
 export function priceVerdictToScore(verdicts: ArticleReaction["verdict"][]): number {
   if (verdicts.length === 0) return 0;
   const scoreMap: Record<string, number> = {
-    confirmed_bullish: +1.0,
+    confirmed_bullish: 1.0,
     confirmed_bearish: -1.0,
     overreaction_faded: -0.3,
     pre_event_stale: 0,
@@ -76,7 +98,7 @@ export function priceVerdictToScore(verdicts: ArticleReaction["verdict"][]): num
     ignored: 0,
     conflicted: -0.2,
   };
-  const scores = verdicts.map(v => scoreMap[v] ?? 0).filter(s => s !== 0);
+  const scores = verdicts.map((v) => scoreMap[v] ?? 0).filter((s) => s !== 0);
   if (scores.length === 0) return 0;
   return scores.reduce((a, b) => a + b, 0) / scores.length;
 }
@@ -101,10 +123,10 @@ async function scoreHeadlinesWithHF(
   let finbertSum = 0;
   let distilrobertaSum = 0;
 
-  // Score each headline individually (F6)
   for (const headline of headlines.slice(0, 5)) {
     const rw = recencyWeight(headline.publishedAt);
-    const input = headline.title;
+    const pricePrefix = dayChangePct === undefined ? "" : `[day_change_pct=${dayChangePct.toFixed(2)}] `;
+    const input = `${pricePrefix}${headline.title}`;
 
     try {
       const [fbRaw, drRaw] = await Promise.allSettled([
@@ -121,7 +143,9 @@ async function scoreHeadlinesWithHF(
       finbertSum += fbScore * rw;
       distilrobertaSum += drScore * rw;
       totalWeight += rw;
-    } catch { /* skip failed headline */ }
+    } catch {
+      // Skip failed headline.
+    }
   }
 
   if (totalWeight === 0) return { finbert: 0, distilroberta: 0 };
@@ -142,30 +166,29 @@ export async function scoreTickerSentiment(
 ): Promise<SentimentSignal> {
   const hasHF = !!hfApiKey;
 
-  // Determine driving article (most recent)
   const sorted = [...articles].sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
   const driving = sorted[0];
 
   let finbertScore = 0;
-  let fingptScore = 0; // now distilroberta
+  let fingptScore = 0;
 
   if (hasHF && articles.length > 0) {
     try {
       const scores = await scoreHeadlinesWithHF(
-        articles.map(a => ({ title: a.title, publishedAt: a.publishedAt })),
+        articles.map((a) => ({ title: a.title, publishedAt: a.publishedAt })),
         dayChangePct,
-        hfApiKey!
+        hfApiKey
       );
       finbertScore = scores.finbert;
       fingptScore = scores.distilroberta;
-    } catch { /* HF unavailable, scores remain 0 */ }
+    } catch {
+      // HF unavailable, scores remain 0.
+    }
   }
 
-  // Price reaction score
-  const verdicts = priceReactions.map(r => r.verdict);
+  const verdicts = priceReactions.map((r) => r.verdict);
   const mktScore = priceVerdictToScore(verdicts);
 
-  // When market and text disagree, elevate market weight
   const textScore = hasHF ? (finbertScore + fingptScore) / 2 : 0;
   const textMarketDisagree = textScore !== 0 && mktScore !== 0 && Math.sign(textScore) !== Math.sign(mktScore);
 
@@ -173,23 +196,17 @@ export async function scoreTickerSentiment(
   if (!hasHF && mktScore === 0) {
     finalScore = 0;
   } else if (textMarketDisagree) {
-    finalScore = finbertScore * 0.15 + fingptScore * 0.10 + mktScore * 0.75;
+    finalScore = finbertScore * 0.15 + fingptScore * 0.1 + mktScore * 0.75;
   } else {
-    finalScore = finbertScore * 0.35 + fingptScore * 0.25 + mktScore * 0.40;
+    finalScore = finbertScore * 0.35 + fingptScore * 0.25 + mktScore * 0.4;
   }
 
   const magnitude = Math.abs(finalScore);
-  const confidence = hasHF
-    ? magnitude * (1 - Math.abs(finbertScore - fingptScore) * 0.3)
-    : magnitude * 0.7;
-
-  // F2: Confidence floor — suppress directional labels when signal is too weak to trust.
-  // With mktScore = 0 (no price bars), confidence is driven entirely by HF scores which
-  // vary run-to-run on identical articles. Floor prevents boundary-case flips.
+  const confidence = hasHF ? magnitude * (1 - Math.abs(finbertScore - fingptScore) * 0.3) : magnitude * 0.7;
   const CONFIDENCE_FLOOR = 0.15;
 
   const direction: "buy" | "hold" | "sell" =
-    confidence < CONFIDENCE_FLOOR ? "hold" :   // low-confidence → neutral unconditionally
+    confidence < CONFIDENCE_FLOOR ? "hold" :
     finalScore > 0.2 ? "buy" :
     finalScore < -0.2 ? "sell" : "hold";
 
@@ -205,8 +222,12 @@ export async function scoreTickerSentiment(
   });
 
   return {
-    ticker, direction, magnitude, confidence,
-    finbertScore, fingptScore,
+    ticker,
+    direction,
+    magnitude,
+    confidence,
+    finbertScore,
+    fingptScore,
     marketReactionScore: mktScore,
     finalScore,
     drivingArticle: driving?.title,
@@ -221,17 +242,24 @@ export async function scoreSentimentForAll(
   emit: (e: ProgressEvent) => void,
   tickerDayChangePct?: Map<string, number>
 ): Promise<Map<string, SentimentSignal>> {
-  emit({ type: "stage_start", stage: "sentiment", label: "Sentiment Scoring", detail: hfApiKey ? "FinBERT + DistilRoBERTa per-headline + price reaction cross-reference" : "Price reaction analysis (add HUGGINGFACE_API_KEY for FinBERT/DistilRoBERTa)" });
+  emit({
+    type: "stage_start",
+    stage: "sentiment",
+    label: "Sentiment Scoring",
+    detail: hfApiKey
+      ? "FinBERT + DistilRoBERTa per-headline + price reaction cross-reference"
+      : "Price reaction analysis (add HUGGINGFACE_API_KEY for FinBERT/DistilRoBERTa)",
+  });
   const t0 = Date.now();
 
   const result = new Map<string, SentimentSignal>();
   const tickers = Array.from(tickerArticles.keys());
+  const chunk = (arr: string[], size: number) =>
+    Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, (i + 1) * size));
 
-  // Process in parallel batches of 4 (HF rate limit friendly)
-  const chunk = (arr: string[], size: number) => Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, (i + 1) * size));
   for (const batch of chunk(tickers, 4)) {
     await Promise.all(
-      batch.map(async ticker => {
+      batch.map(async (ticker) => {
         const articles = tickerArticles.get(ticker) ?? [];
         const reactions = tickerReactions.get(ticker.toUpperCase()) ?? [];
         const dayPct = tickerDayChangePct?.get(ticker.toUpperCase());

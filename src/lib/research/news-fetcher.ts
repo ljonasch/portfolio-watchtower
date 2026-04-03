@@ -7,6 +7,12 @@
 
 import type { EvidenceItem, Source } from "./types";
 import { deduplicateSources, rankSources } from "./source-ranker";
+import {
+  NEWS_SEARCH_FETCHER_VERSION,
+  buildNewsSearchCacheKey,
+  buildRuntimeVersionTag,
+  getOrLoadRuntimeCache,
+} from "@/lib/cache";
 
 interface RawNewsResult {
   summary: string;
@@ -28,17 +34,38 @@ export async function fetchYahooFinanceFallback(
     await Promise.all(
       nonCash.map(async (ticker) => {
         try {
-          const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${ticker}&newsCount=3`;
-          const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-          if (!res.ok) return;
-          const json: any = await res.json();
-          const news = json?.news ?? [];
-          for (const item of news) {
-            if (item?.title && item?.link) {
-              allTitles.push(`- [${ticker}] ${item.title}`);
-              sources.push({ title: item.title, url: item.link, quality: "medium" });
-            }
-          }
+          const fallback = await getOrLoadRuntimeCache<RawNewsResult>({
+            domain: "news_search_cache",
+            key: buildNewsSearchCacheKey({
+              ticker,
+              lookbackWindow: "yahoo_fallback_3",
+              fetcherVersion: NEWS_SEARCH_FETCHER_VERSION,
+            }),
+            versionTag: buildRuntimeVersionTag(["yahoo_fallback", NEWS_SEARCH_FETCHER_VERSION]),
+            loader: async () => {
+              const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${ticker}&newsCount=3`;
+              const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+              if (!res.ok) return { summary: "", sources: [] };
+              const json: any = await res.json();
+              const news = json?.news ?? [];
+              const titles: string[] = [];
+              const fetchedSources: Source[] = [];
+              for (const item of news) {
+                if (item?.title && item?.link) {
+                  titles.push(`- [${ticker}] ${item.title}`);
+                  fetchedSources.push({ title: item.title, url: item.link, quality: "medium" });
+                }
+              }
+              return {
+                summary: titles.length > 0 ? `Recent headlines (Yahoo Finance fallback):\n${titles.join("\n")}` : "",
+                sources: fetchedSources,
+              };
+            },
+          });
+
+          if (!fallback.summary) return;
+          allTitles.push(...fallback.summary.split("\n").slice(1));
+          sources.push(...fallback.sources);
         } catch {
           /* ignore individual ticker failures */
         }
@@ -239,7 +266,16 @@ Search for specific news (earnings, product launches, downgrades) for EACH indiv
 Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) for every claim.`;
     }
 
-    const result = await openaiSearchCall(openai, prompt);
+    const result = await getOrLoadRuntimeCache<RawNewsResult>({
+      domain: "news_search_cache",
+      key: buildNewsSearchCacheKey({
+        ticker: chunkTickers,
+        lookbackWindow: i === 0 ? "primary_unified_30d_and_24h" : "primary_unified_followup_30d",
+        fetcherVersion: NEWS_SEARCH_FETCHER_VERSION,
+      }),
+      versionTag: buildRuntimeVersionTag(["openai_search", NEWS_SEARCH_FETCHER_VERSION]),
+      loader: () => openaiSearchCall(openai, prompt),
+    });
     let breakingChunk = "";
     let combinedChunk = result.summary;
 

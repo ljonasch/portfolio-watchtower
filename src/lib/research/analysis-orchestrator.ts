@@ -17,6 +17,7 @@
  */
 
 import OpenAI from "openai";
+import { freezeRuntimeEvidence } from "@/lib/cache";
 import { prisma } from "@/lib/prisma";
 import { detectMarketRegime }      from "./market-regime";
 import { runGapAnalysis }          from "./gap-analyzer";
@@ -73,6 +74,10 @@ function guardContextLength(text: string, maxChars: number, label: string): stri
   const lastPeriod = truncated.lastIndexOf(".");
   const safe = lastPeriod > maxChars * 0.8 ? truncated.slice(0, lastPeriod + 1) : truncated;
   return safe + `\n[${label} truncated at ${maxChars} chars to prevent JSON overflow]`;
+}
+
+export function freezeRunEvidenceSet<T>(value: T): T {
+  return freezeRuntimeEvidence(value);
 }
 
 // ── Main orchestrator ─────────────────────────────────────────────────────────
@@ -302,11 +307,19 @@ export async function runFullAnalysis(
   // ══════════════════════════════════════════════════════════════════════════════
   emit({ type: "stage_start", stage: "stage3", label: "Stage 3 · Primary AI Reasoning", detail: "Single gpt-5.4 call with json_schema — authoritative recommendations" });
 
-  const breaking24hSection = newsResult.breaking24h?.trim()
-    ? `=== ⚡ BREAKING NEWS (last 24 hours — ${today}) ===\n${guardContextLength(newsResult.breaking24h, 3000, "breaking")}\n=== END BREAKING NEWS ===\n\n24-HOUR WEIGHTING RULES:\n- STRONG signal: override 30-day thesis\n- MODERATE: adjust weight ±3-5%\n- NOISE: log but don't change recommendation`
+  const frozenNewsResult = freezeRunEvidenceSet(newsResult);
+  const frozenValuations = freezeRunEvidenceSet(valuations);
+  const frozenCorrelationMatrix = freezeRunEvidenceSet(correlationMatrix);
+  const frozenTimelines = new Map(freezeRunEvidenceSet(Array.from(timelines.entries())));
+  const frozenSentimentSignals = new Map(freezeRunEvidenceSet(Array.from(sentimentSignals.entries())));
+  const frozenTickerArticles = new Map(freezeRunEvidenceSet(Array.from(tickerArticles.entries())));
+  const frozenFinalRegime = freezeRunEvidenceSet(finalRegime);
+
+  const breaking24hSection = frozenNewsResult.breaking24h?.trim()
+    ? `=== ⚡ BREAKING NEWS (last 24 hours — ${today}) ===\n${guardContextLength(frozenNewsResult.breaking24h, 3000, "breaking")}\n=== END BREAKING NEWS ===\n\n24-HOUR WEIGHTING RULES:\n- STRONG signal: override 30-day thesis\n- MODERATE: adjust weight ±3-5%\n- NOISE: log but don't change recommendation`
     : "";
 
-  const priceReactionSection = Array.from(timelines.values())
+  const priceReactionSection = Array.from(frozenTimelines.values())
     .filter(tl => tl.reactions.length > 0)
     .map(tl => `${tl.ticker} (${tl.exchange}): day ${tl.dayChangePct > 0 ? "+" : ""}${tl.dayChangePct.toFixed(1)}%${tl.marketClosed ? " [MARKET CLOSED]" : ""} | reactions: ${tl.reactions.map(r => r.verdict).join(", ")}`)
     .join("\n");
@@ -314,7 +327,7 @@ export async function runFullAnalysis(
   // F2: Replace directional prose ("NVDA: buy") with bounded numeric fields only.
   // Low-confidence entries (conf < 0.15) are filtered out entirely — they add noise, not signal.
   // The "buy"/"sell" label is removed; the primary model sees numeric scores it must interpret itself.
-  const sentimentSection = Array.from(sentimentSignals.entries())
+  const sentimentSection = Array.from(frozenSentimentSignals.entries())
     .filter(([, s]) => s.confidence >= 0.15 && s.magnitude >= 0.10)
     .map(([t, s]) =>
       `${t}: NLP score=${s.finalScore.toFixed(2)} | conf=${s.confidence.toFixed(2)} | mag=${s.magnitude.toFixed(2)}` +
@@ -329,12 +342,12 @@ export async function runFullAnalysis(
       }).join("\n")}\n=== END CANDIDATES ===`
     : "";
 
-  const regimeSection = `=== MARKET REGIME ===\nRisk mode: ${finalRegime.riskMode} | Rates: ${finalRegime.rateTrend} | Dollar: ${finalRegime.dollarTrend} | VIX: ${finalRegime.vixLevel}\n${finalRegime.summary}\n=== END REGIME ===`;
+  const regimeSection = `=== MARKET REGIME ===\nRisk mode: ${frozenFinalRegime.riskMode} | Rates: ${frozenFinalRegime.rateTrend} | Dollar: ${frozenFinalRegime.dollarTrend} | VIX: ${frozenFinalRegime.vixLevel}\n${frozenFinalRegime.summary}\n=== END REGIME ===`;
 
   // W19: Guard all sections against context overflow
-  const newsSection = guardContextLength(newsResult.combinedSummary, 8000, "30-day news");
-  const valuationSection = formatValuationSection(valuations);
-  const correlationSection = formatCorrelationSection(correlationMatrix);
+  const newsSection = guardContextLength(frozenNewsResult.combinedSummary, 8000, "30-day news");
+  const valuationSection = formatValuationSection(frozenValuations);
+  const correlationSection = formatCorrelationSection(frozenCorrelationMatrix);
 
   const additionalContext = [
     regimeSection,
@@ -368,12 +381,12 @@ export async function runFullAnalysis(
         snapshotId: snapshot.id,
         userId: snapshot.userId,
         runId,
-        regime: finalRegime,
+        regime: frozenFinalRegime,
         newsText: newsSection,
-        breaking24h: newsResult.breaking24h ?? "",
+        breaking24h: frozenNewsResult.breaking24h ?? "",
         // F2: pass structured signal map + articleTitles (replaces prior prose string)
-        sentimentSignals,
-        articleTitles: new Map(Array.from(tickerArticles.entries()).map(([t, arts]) => [t, arts.map(a => a.title)])),
+        sentimentSignals: frozenSentimentSignals,
+        articleTitles: new Map(Array.from(frozenTickerArticles.entries()).map(([t, arts]) => [t, arts.map(a => a.title)])),
         priceReactionText: priceReactionSection,
         valuationText: valuationSection,
         correlationText: correlationSection,
@@ -408,7 +421,7 @@ export async function runFullAnalysis(
       },
       evidenceHash: promptHash,
       evidenceFreshness: {
-        usingFallbackNews: newsResult.usingFallback ?? false,
+        usingFallbackNews: frozenNewsResult.usingFallback ?? false,
       },
       sourceList: [],
       versions: TERMINAL_CONTRACT_VERSIONS,
@@ -444,7 +457,7 @@ export async function runFullAnalysis(
       qualityMeta: {
         abstainReason: "evidence_packet_persist_failed",
         promptHash,
-        usingFallbackNews: newsResult.usingFallback ?? false,
+        usingFallbackNews: frozenNewsResult.usingFallback ?? false,
       },
     });
     finalizedBundleId = finalization.bundleId;
@@ -520,7 +533,7 @@ export async function runFullAnalysis(
       },
       evidenceHash: promptHash,
       evidenceFreshness: {
-        usingFallbackNews: newsResult.usingFallback ?? false,
+        usingFallbackNews: frozenNewsResult.usingFallback ?? false,
       },
       sourceList: [],
       versions: TERMINAL_CONTRACT_VERSIONS,
@@ -557,7 +570,7 @@ export async function runFullAnalysis(
         abstainReason,
         isLengthAbort,
         promptHash,
-        usingFallbackNews: newsResult.usingFallback ?? false,
+        usingFallbackNews: frozenNewsResult.usingFallback ?? false,
       },
     });
     finalizedBundleId = finalization.bundleId;
@@ -596,9 +609,9 @@ export async function runFullAnalysis(
   const sentimentOverlay: SentimentOverlay[] = buildSentimentOverlay(
     allTickers,
     gpt5Roles,
-    sentimentSignals,
+    frozenSentimentSignals,
     candidateTickerSet,
-    finalRegime,
+    frozenFinalRegime,
     emit,
     priceDataMissing
   );
@@ -633,11 +646,11 @@ export async function runFullAnalysis(
   // and re-thrown as an AbstainResult before reaching this point.
 
   (reportData as any)._runMeta = {
-    regime: finalRegime,
+    regime: frozenFinalRegime,
     gaps: gapReport.gaps,
     candidates: candidates.map(c => c.ticker),
     sentimentOverlay,
-    correlationClusters: correlationMatrix.clusters,
+    correlationClusters: frozenCorrelationMatrix.clusters,
     priceDataMissing,
   };
 
@@ -646,8 +659,8 @@ export async function runFullAnalysis(
 
   const systemVerification = {
     marketRegime: {
-      status: finalRegime.summary !== "Regime data unavailable." ? `${finalRegime.riskMode}, ${finalRegime.rateTrend}` : "!Unavailable",
-      rationale: finalRegime.summary
+      status: frozenFinalRegime.summary !== "Regime data unavailable." ? `${frozenFinalRegime.riskMode}, ${frozenFinalRegime.rateTrend}` : "!Unavailable",
+      rationale: frozenFinalRegime.summary
     },
     gapAnalysis: {
       status: Array.isArray(gapReport.gaps) && gapReport.gaps.length > 0 ? `${gapReport.gaps.length} gaps` : "!0 gaps",
@@ -658,11 +671,11 @@ export async function runFullAnalysis(
       rationale: candidates.map(c => `${c.ticker} (${c.companyName}): ${c.reason}`).join("\n") || "No candidates found."
     },
     fastSearchResearch: {
-      status: (newsResult.combinedSummary?.length ?? 0) > 10 || (newsResult.breaking24h?.length ?? 0) > 10 ? `${newsResult.allSources?.length ?? 0} sources` : "!0 sources",
+      status: (frozenNewsResult.combinedSummary?.length ?? 0) > 10 || (frozenNewsResult.breaking24h?.length ?? 0) > 10 ? `${frozenNewsResult.allSources?.length ?? 0} sources` : "!0 sources",
       rationale: ""
     },
     finbertSentiment: {
-      status: Array.from(sentimentSignals.values()).some(s => (s.finbertScore ?? 0) !== 0 || (s.fingptScore ?? 0) !== 0) ? `${Array.from(sentimentSignals.values()).filter(s => (s.finbertScore ?? 0) !== 0 || (s.fingptScore ?? 0) !== 0).length} scored` : "!0 scored",
+      status: Array.from(frozenSentimentSignals.values()).some(s => (s.finbertScore ?? 0) !== 0 || (s.fingptScore ?? 0) !== 0) ? `${Array.from(frozenSentimentSignals.values()).filter(s => (s.finbertScore ?? 0) !== 0 || (s.fingptScore ?? 0) !== 0).length} scored` : "!0 scored",
       rationale: ""
     },
     gpt5Strategic: {
@@ -684,7 +697,7 @@ export async function runFullAnalysis(
   const outputTokens = typeof llmMeta.outputTokens === "number" ? llmMeta.outputTokens : null;
   const retryCount = typeof llmMeta.retryCount === "number" ? llmMeta.retryCount : 0;
   const validationWarningCount = typeof llmMeta.validationWarningCount === "number" ? llmMeta.validationWarningCount : 0;
-  const usingFallbackNews = newsResult.usingFallback ?? false;
+  const usingFallbackNews = frozenNewsResult.usingFallback ?? false;
 
   const finalizedAt = new Date();
   const validatedFinalizationInput: FinalizeAnalysisRunInput = {
@@ -731,7 +744,7 @@ export async function runFullAnalysis(
       perSectionChars,
       usingFallbackNews,
       priceDataMissing,
-      regime: finalRegime,
+      regime: frozenFinalRegime,
     },
     evidenceHash: promptHash,
     evidenceFreshness: {
@@ -739,7 +752,7 @@ export async function runFullAnalysis(
       priceDataMissing,
       generatedAt: finalizedAt.toISOString(),
     },
-    sourceList: (newsResult.allSources ?? []).map((source: any) => ({
+    sourceList: (frozenNewsResult.allSources ?? []).map((source: any) => ({
       title: source.title ?? source.source ?? "Untitled",
       url: source.url ?? null,
       publishedAt: source.publishedAt ?? null,

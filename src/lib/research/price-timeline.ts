@@ -7,6 +7,12 @@
  */
 
 import type { ProgressEvent } from "./progress-events";
+import {
+  PRICE_SNAPSHOT_PROVIDER_VERSION,
+  buildPriceSnapshotCacheKey,
+  buildRuntimeVersionTag,
+  getOrLoadRuntimeCache,
+} from "@/lib/cache";
 
 export interface PriceBar {
   time: string;
@@ -134,59 +140,69 @@ function findPriceAtTime(bars: PriceBar[], targetMinutes: number): number | null
 
 async function fetchIntradayBars(
   ticker: string,
-  exchange: ExchangeInfo & { name: string }
+  exchange: ExchangeInfo & { name: string },
+  today: string
 ): Promise<{ bars: PriceBar[]; prevClose: number; preMarket: number | null; afterHours: number | null }> {
   try {
-    // F8: Map crypto to Yahoo's required -USD suffix for chart data
-    const cryptoSymbols = ["BTC", "ETH", "SOL", "ADA", "DOGE", "XRP", "DOT", "AVAX", "LINK", "LTC", "MATIC", "UNI"];
-    const yahooTicker = cryptoSymbols.includes(ticker.toUpperCase()) ? `${ticker.toUpperCase()}-USD` : ticker;
+    return await getOrLoadRuntimeCache({
+      domain: "price_snapshot_cache",
+      key: buildPriceSnapshotCacheKey({
+        ticker,
+        marketDate: today,
+        providerVersion: PRICE_SNAPSHOT_PROVIDER_VERSION,
+      }),
+      versionTag: buildRuntimeVersionTag(["price_snapshot", PRICE_SNAPSHOT_PROVIDER_VERSION]),
+      loader: async () => {
+        const cryptoSymbols = ["BTC", "ETH", "SOL", "ADA", "DOGE", "XRP", "DOT", "AVAX", "LINK", "LTC", "MATIC", "UNI"];
+        const yahooTicker = cryptoSymbols.includes(ticker.toUpperCase()) ? `${ticker.toUpperCase()}-USD` : ticker;
 
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooTicker)}?interval=5m&range=1d&includePrePost=true`;
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooTicker)}?interval=5m&range=1d&includePrePost=true`;
+        const res = await fetch(url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+          },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!res.ok) return { bars: [], prevClose: 0, preMarket: null, afterHours: null };
+        const json: any = await res.json();
+        const result = json?.chart?.result?.[0];
+        if (!result) return { bars: [], prevClose: 0, preMarket: null, afterHours: null };
+
+        const timestamps: number[] = result.timestamp ?? [];
+        const closes: number[] = result.indicators?.quote?.[0]?.close ?? [];
+        const volumes: number[] = result.indicators?.quote?.[0]?.volume ?? [];
+        const prevClose: number = result.meta?.previousClose ?? result.meta?.chartPreviousClose ?? 0;
+        const regularStart: number = result.meta?.tradingPeriods?.regular?.[0]?.[0]?.start ?? 0;
+        const regularEnd: number = result.meta?.tradingPeriods?.regular?.[0]?.[0]?.end ?? 0;
+
+        const bars: PriceBar[] = [];
+        let preMarketPrice: number | null = null;
+        let afterHoursPrice: number | null = null;
+
+        for (let i = 0; i < timestamps.length; i++) {
+          const ts = timestamps[i];
+          const price = closes[i];
+          if (!price || price === 0) continue;
+
+          const d = new Date(ts * 1000);
+          const hhmm = new Intl.DateTimeFormat("en-US", {
+            timeZone: exchange.timezone,
+            hour: "2-digit", minute: "2-digit", hour12: false,
+          }).format(d);
+
+          if (ts < regularStart) {
+            preMarketPrice = price;
+          } else if (ts > regularEnd) {
+            afterHoursPrice = price;
+          } else {
+            bars.push({ time: hhmm, price, volume: volumes[i] ?? 0 });
+          }
+        }
+
+        return { bars, prevClose, preMarket: preMarketPrice, afterHours: afterHoursPrice };
       },
-      signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return { bars: [], prevClose: 0, preMarket: null, afterHours: null };
-    const json: any = await res.json();
-    const result = json?.chart?.result?.[0];
-    if (!result) return { bars: [], prevClose: 0, preMarket: null, afterHours: null };
-
-    const timestamps: number[] = result.timestamp ?? [];
-    const closes: number[] = result.indicators?.quote?.[0]?.close ?? [];
-    const volumes: number[] = result.indicators?.quote?.[0]?.volume ?? [];
-    const prevClose: number = result.meta?.previousClose ?? result.meta?.chartPreviousClose ?? 0;
-    const regularStart: number = result.meta?.tradingPeriods?.regular?.[0]?.[0]?.start ?? 0;
-    const regularEnd: number = result.meta?.tradingPeriods?.regular?.[0]?.[0]?.end ?? 0;
-
-    const bars: PriceBar[] = [];
-    let preMarketPrice: number | null = null;
-    let afterHoursPrice: number | null = null;
-
-    for (let i = 0; i < timestamps.length; i++) {
-      const ts = timestamps[i];
-      const price = closes[i];
-      if (!price || price === 0) continue;
-
-      // F7: Use IANA timezone for correct local time string
-      const d = new Date(ts * 1000);
-      const hhmm = new Intl.DateTimeFormat("en-US", {
-        timeZone: exchange.timezone,
-        hour: "2-digit", minute: "2-digit", hour12: false,
-      }).format(d);
-
-      if (ts < regularStart) {
-        preMarketPrice = price;
-      } else if (ts > regularEnd) {
-        afterHoursPrice = price;
-      } else {
-        bars.push({ time: hhmm, price, volume: volumes[i] ?? 0 });
-      }
-    }
-
-    return { bars, prevClose, preMarket: preMarketPrice, afterHours: afterHoursPrice };
   } catch (err: any) {
     // F3: Log the actual error so price fetch failures are visible in server logs
     console.warn(`[price-timeline] ${ticker}: bar fetch failed — ${err?.message ?? String(err)}`);
@@ -306,7 +322,7 @@ export async function fetchPriceTimelines(
         // W26: Detect market holiday or weekend
         const marketClosed = exchange.name !== "CRYPTO" && (isMarketHoliday(today, exchange.name) || isWeekend(today));
 
-        const { bars, prevClose, preMarket, afterHours } = await fetchIntradayBars(ticker, exchange);
+        const { bars, prevClose, preMarket, afterHours } = await fetchIntradayBars(ticker, exchange, today);
         const articles = articleMap.get(ticker.toUpperCase()) ?? [];
         const reactions = assessReactions(bars, prevClose, articles, exchange.timezone, sessionStartMin, sessionEndMin, marketClosed);
 
