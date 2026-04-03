@@ -15,6 +15,7 @@ import { projectRecommendation } from "@/lib/view-models";
 import type { SourceViewModel } from "@/lib/view-models/types";
 import type { DiagnosticsStepContract } from "@/lib/contracts";
 import { getRequestedReportArtifact, getRunDiagnostics } from "@/lib/read-models";
+import { normalizeBundleRecommendationRows } from "./bundle-report-normalization";
 
 function SourceChip({ source }: { source: SourceViewModel }) {
   return (
@@ -252,12 +253,9 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
         include: { holdings: true },
       }),
     ]);
-    const changedRecommendations = reportViewModel.recommendations
-      .map((rec) => ({
-        ...rec,
-        sources: rec.sources as SourceViewModel[],
-      }))
+    const normalizedRecommendations = normalizeBundleRecommendationRows(reportViewModel.recommendations)
       .filter((rec) => rec.shareDelta !== 0 || rec.actionBadgeVariant !== "hold");
+    const changedRecommendations = normalizedRecommendations;
     const totalValue = snapshot?.holdings.reduce((sum, h) => sum + (h.currentValue || 0), 0) ?? 0;
 
     return (
@@ -329,10 +327,7 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
         <div className="space-y-4">
           <h2 className="text-xl font-bold border-b border-slate-800 pb-2">Recommended Final Holdings</h2>
           <SortableRecommendationsTable
-            recommendations={reportViewModel.recommendations.map((rec) => ({
-              ...rec,
-              sources: rec.sources as SourceViewModel[],
-            }))}
+            recommendations={normalizeBundleRecommendationRows(reportViewModel.recommendations)}
             convictions={[]}
           />
         </div>

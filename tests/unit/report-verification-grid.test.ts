@@ -30,6 +30,7 @@ describe("report verification grid", () => {
     expect(source).toContain("Required Changes");
     expect(source).toContain("SortableHoldingsTable holdings={snapshot.holdings}");
     expect(source).toContain("changedRecommendations.length > 0");
+    expect(source).toContain("normalizeBundleRecommendationRows(reportViewModel.recommendations)");
   });
 
   test("report page renders explicit unavailable-state messaging without exposing diagnostics state internals", () => {
