@@ -29,6 +29,7 @@ import {
   validateWeightSum,
   normalizeWeights,
 } from "./research/portfolio-constructor";
+import { applyLowChurnRecommendationPolicy } from "./policy/low-churn-recommendation-policy";
 import { validatePortfolioReport } from "./research/recommendation-validator";
 import type {
   ResearchContext,
@@ -521,23 +522,45 @@ ${breaking24h}
     recommendations = normalizeWeights(recommendations);
   }
 
-  // Fix currentWeight for all holdings using authoritative snapshot values
-  const holdingValueMap = new Map(ctx.holdings.map(h => [h.ticker, h.computedValue]));
-  for (const rec of recommendations) {
-    const actualValue = holdingValueMap.get(rec.ticker);
-    if (actualValue !== undefined && ctx.totalValue > 0) {
-      rec.currentWeight = Number(((actualValue / ctx.totalValue) * 100).toFixed(2));
-    } else if (!holdingValueMap.has(rec.ticker)) {
-      rec.currentShares = 0;
-      rec.currentWeight = 0;
-      if (!rec.shareDelta || rec.shareDelta === 0) rec.shareDelta = rec.targetShares;
+  const applyAuthoritativeCurrentWeights = (rows: RecommendationV3[]) => {
+    const holdingValueMap = new Map(ctx.holdings.map(h => [h.ticker, h.computedValue]));
+
+    for (const rec of rows) {
+      const actualValue = holdingValueMap.get(rec.ticker);
+      if (actualValue !== undefined && ctx.totalValue > 0) {
+        rec.currentWeight = Number(((actualValue / ctx.totalValue) * 100).toFixed(2));
+      } else if (!holdingValueMap.has(rec.ticker)) {
+        rec.currentShares = 0;
+        rec.currentWeight = 0;
+        if (!rec.shareDelta || rec.shareDelta === 0) rec.shareDelta = rec.targetShares;
+      }
     }
-  }
+  };
+
+  // Fix currentWeight for all holdings using authoritative snapshot values
+  applyAuthoritativeCurrentWeights(recommendations);
 
   // Deterministic Anti-Churn Override:
   // T47: threshold is read from AppSettings at runtime (antichurn_threshold_pct), not a literal.
   // Default 1.5%. If the model labeled Trim/Buy just to fractionally balance < threshold, override to Hold.
   recommendations = applyAntiChurnOverride(recommendations, safeAntichurnThreshold);
+
+  const lowChurnResult = applyLowChurnRecommendationPolicy(recommendations, ctx, safeAntichurnThreshold);
+  recommendations = lowChurnResult.recommendations;
+
+  const { valid: postPolicyWeightValid, sum: postPolicyWeightSum } = validateWeightSum(recommendations);
+  if (!postPolicyWeightValid || Math.abs(postPolicyWeightSum - 100) > 0.05) {
+    if (Math.abs(postPolicyWeightSum - 100) > 0.05) {
+      console.warn(`[analyzer] Low-churn policy left weight sum at ${postPolicyWeightSum}% — normalizing through the existing balance path.`);
+    }
+    recommendations = normalizeWeights(recommendations);
+  }
+
+  applyAuthoritativeCurrentWeights(recommendations);
+  recommendations = enrichRecommendationsWithMath(recommendations, ctx).map((rec) => ({
+    ...rec,
+    valueDelta: rec.dollarDelta,
+  }));
 
   const portfolioMath = buildPortfolioMathSummary(recommendations, ctx);
 
@@ -558,6 +581,7 @@ ${breaking24h}
     usingFallback,
     validationErrors: validation.errors,
     validationWarnings: validation.warnings,
+    lowChurnPolicy: lowChurnResult.meta,
     // Batch 5: token telemetry wired from OpenAI response.usage
     modelUsed: response?.model ?? "gpt-4.1",
     inputTokens: response?.usage?.prompt_tokens ?? null,

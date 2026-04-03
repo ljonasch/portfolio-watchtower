@@ -125,6 +125,44 @@ describe("analysis outcome finalization", () => {
     expect(result.reportId).toBe("report_1");
   });
 
+  test("validated persists already-trimmed hold rows without re-expanding suppressed changes", async () => {
+    const input = buildBaseInput("validated");
+    input.recommendations = [
+      {
+        ...input.recommendations[0],
+        ticker: "MSFT",
+        action: "Hold",
+        targetShares: 1,
+        shareDelta: 0,
+        dollarDelta: 0,
+        currentWeight: 10,
+        targetWeight: 10,
+        valueDelta: 0,
+        whyChanged: "Low-churn policy deferred this action.",
+      },
+    ];
+    input.reportViewModel = {
+      bundleId: "pending",
+      recommendations: [{ ticker: "MSFT", action: "Hold", shareDelta: 0 }],
+    };
+
+    await finalizeAnalysisRun(input);
+
+    expect(prisma.holdingRecommendation.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            ticker: "MSFT",
+            action: "Hold",
+            shareDelta: 0,
+            dollarDelta: 0,
+            whyChanged: "Low-churn policy deferred this action.",
+          }),
+        ],
+      })
+    );
+  });
+
   test("abstained creates a bundle and no recommendation rows", async () => {
     await finalizeAnalysisRun(buildBaseInput("abstained"));
 
