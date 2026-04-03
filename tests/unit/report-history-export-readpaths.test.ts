@@ -10,6 +10,13 @@ describe("report/history/export read paths", () => {
     expect(source).toContain("await getRequestedReportArtifact(");
   });
 
+  test("report page wires the bundle archive action near the report surface", () => {
+    const source = fs.readFileSync(path.join(ROOT, "app/report/[id]/page.tsx"), "utf-8");
+    expect(source).toContain('import { archiveReportAction } from "./actions"');
+    expect(source).toContain('form action={archiveReportAction}');
+    expect(source).toContain("Archive Report");
+  });
+
   test("history page uses bundle-backed history reads", () => {
     const source = fs.readFileSync(path.join(ROOT, "app/history/page.tsx"), "utf-8");
     expect(source).toContain('import { getHistoryBundles } from "@/lib/read-models"');

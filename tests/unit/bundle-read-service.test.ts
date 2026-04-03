@@ -75,6 +75,7 @@ describe("bundle-read-service", () => {
     (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
       id: "bundle_historical",
       userId: "user_1",
+      archivedAt: new Date("2026-04-03T00:00:00.000Z"),
       reportViewModelJson: JSON.stringify({
         bundleId: "bundle_historical",
         bundleOutcome: "validated",
@@ -98,6 +99,41 @@ describe("bundle-read-service", () => {
       expect.objectContaining({
         source: "bundle",
         bundle: expect.objectContaining({ id: "bundle_historical" }),
+      })
+    );
+  });
+
+  test("requested report artifact still resolves archived bundles by id", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_archived",
+      userId: "user_1",
+      archivedAt: new Date("2026-04-03T12:00:00.000Z"),
+      reportViewModelJson: JSON.stringify({
+        bundleId: "bundle_archived",
+        bundleOutcome: "validated",
+        renderState: "validated_actionable",
+        createdAt: "2026-04-03T00:00:00.000Z",
+        finalizedAt: "2026-04-03T00:00:00.000Z",
+        summaryMessage: "Archived",
+        reasoning: "Still readable",
+        reasonCodes: [],
+        recommendations: [],
+        deliveryStatus: "sent",
+        isActionable: false,
+        isSuperseded: false,
+        historicalValidatedContextBundleId: null,
+      }),
+    });
+
+    const result = await getRequestedReportArtifact("user_1", "bundle_archived");
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        source: "bundle",
+        bundle: expect.objectContaining({
+          id: "bundle_archived",
+          archivedAt: expect.any(Date),
+        }),
       })
     );
   });
@@ -345,6 +381,63 @@ describe("bundle-read-service", () => {
 
     expect(result[0]).toEqual(expect.objectContaining({ source: "legacy" }));
     expect(result[1]).toEqual(expect.objectContaining({ source: "bundle" }));
+  });
+
+  test("history excludes archived bundles and suppresses matching legacy duplicates", async () => {
+    (prisma.analysisBundle.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "bundle_archived",
+        userId: "user_1",
+        sourceRunId: "run_archived",
+        bundleOutcome: "validated",
+        bundleScope: "PRIMARY_PORTFOLIO",
+        portfolioSnapshotId: "snapshot_archived",
+        finalizedAt: new Date("2026-04-03T00:00:00.000Z"),
+        isSuperseded: false,
+        deliveryStatus: "sent",
+        archivedAt: new Date("2026-04-03T12:00:00.000Z"),
+      },
+      {
+        id: "bundle_active",
+        userId: "user_1",
+        sourceRunId: "run_active",
+        bundleOutcome: "validated",
+        bundleScope: "PRIMARY_PORTFOLIO",
+        portfolioSnapshotId: "snapshot_active",
+        finalizedAt: new Date("2026-04-02T00:00:00.000Z"),
+        isSuperseded: false,
+        deliveryStatus: "awaiting_ack",
+        archivedAt: null,
+      },
+    ]);
+    (prisma.portfolioReport.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "legacy_duplicate_of_archived_bundle",
+        analysisRunId: "run_archived",
+        snapshotId: "snapshot_archived",
+        createdAt: new Date("2026-04-03T00:00:00.000Z"),
+      },
+      {
+        id: "legacy_distinct",
+        analysisRunId: "run_legacy_distinct",
+        snapshotId: "snapshot_legacy_distinct",
+        createdAt: new Date("2026-04-01T00:00:00.000Z"),
+      },
+    ]);
+
+    const result = await getHistoryBundles("user_1");
+
+    expect(result).toHaveLength(2);
+    expect(result).toEqual([
+      expect.objectContaining({
+        source: "bundle",
+        bundle: expect.objectContaining({ id: "bundle_active" }),
+      }),
+      expect.objectContaining({
+        source: "legacy",
+        report: expect.objectContaining({ id: "legacy_distinct" }),
+      }),
+    ]);
   });
 
   test("bundle email payload reads from the bundle snapshot only", async () => {

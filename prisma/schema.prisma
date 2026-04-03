@@ -231,6 +231,7 @@ model AnalysisBundle {
   exportPayloadJson        String
   isSuperseded             Boolean             @default(false)
   supersededAt             DateTime?
+  archivedAt               DateTime?
   acknowledgedAt           DateTime?
   deliveryStatus           String              @default("not_eligible")
   deliveryLastErrorCode    String?

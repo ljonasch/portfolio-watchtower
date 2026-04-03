@@ -16,6 +16,7 @@ import type { SourceViewModel } from "@/lib/view-models/types";
 import type { DiagnosticsStepContract } from "@/lib/contracts";
 import { getRequestedReportArtifact, getRunDiagnostics } from "@/lib/read-models";
 import { normalizeBundleRecommendationRows } from "./bundle-report-normalization";
+import { archiveReportAction } from "./actions";
 
 function SourceChip({ source }: { source: SourceViewModel }) {
   return (
@@ -268,6 +269,11 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
             <h1 className="text-3xl font-bold">Portfolio Analysis Report</h1>
             <p className="text-slate-400 mt-1">Generated on {new Date(reportViewModel.finalizedAt).toLocaleDateString()}</p>
           </div>
+          {bundle.archivedAt && (
+            <div className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-slate-300">
+              Archived {new Date(bundle.archivedAt).toLocaleDateString()}
+            </div>
+          )}
         </div>
 
         <div className="space-y-4">
@@ -406,6 +412,32 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
             </div>
           </div>
         )}
+
+        <div className="border-t border-slate-800 pt-6">
+          <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+            <h3 className="text-sm font-semibold text-slate-100">Report Archive</h3>
+            {bundle.archivedAt ? (
+              <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                This report was archived on {new Date(bundle.archivedAt).toLocaleString()}. Direct access still works, but it no longer appears in the normal report history list.
+              </p>
+            ) : (
+              <>
+                <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                  Archive this report to remove it from the normal history list without deleting the underlying bundle, diagnostics, or notification history.
+                </p>
+                <form action={archiveReportAction} className="mt-4">
+                  <input type="hidden" name="requestedId" value={params.id} />
+                  <button
+                    type="submit"
+                    className="inline-flex items-center rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 transition-colors hover:bg-slate-800"
+                  >
+                    Archive Report
+                  </button>
+                </form>
+              </>
+            )}
+          </div>
+        </div>
       </div>
     );
   }

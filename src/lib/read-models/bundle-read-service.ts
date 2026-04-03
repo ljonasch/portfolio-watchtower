@@ -228,7 +228,9 @@ export async function getHistoryBundles(userId: string): Promise<Array<
     orderBy: { finalizedAt: "desc" },
   });
 
-  const historyItems = bundles.map((bundle) => ({
+  const visibleBundles = bundles.filter((bundle) => !bundle.archivedAt);
+
+  const historyItems = visibleBundles.map((bundle) => ({
     source: "bundle" as const,
     origin: extractBundleOrigin(bundle),
     artifactIdentityKey: buildBundleArtifactIdentityKey({
@@ -249,7 +251,14 @@ export async function getHistoryBundles(userId: string): Promise<Array<
   }));
 
   const bundleArtifactKeys = new Set(
-    historyItems.map((item) => item.artifactIdentityKey)
+    bundles.map((bundle) =>
+      buildBundleArtifactIdentityKey({
+        userId: bundle.userId ?? userId,
+        bundleScope: bundle.bundleScope,
+        sourceRunId: bundle.sourceRunId,
+        portfolioSnapshotId: bundle.portfolioSnapshotId,
+      })
+    )
   );
   const legacyReports = await prisma.portfolioReport.findMany({
     where: {
