@@ -1,6 +1,11 @@
 export type DiagnosticsStepKey =
   | "market_regime"
   | "gap_scan"
+  | "macro_news_collection"
+  | "macro_theme_consensus"
+  | "macro_exposure_bridge"
+  | "environmental_gaps"
+  | "macro_candidate_lanes"
   | "candidate_screening"
   | "news_sources"
   | "sentiment"

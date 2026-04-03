@@ -20,13 +20,20 @@ import OpenAI from "openai";
 import { freezeRuntimeEvidence } from "@/lib/cache";
 import { prisma } from "@/lib/prisma";
 import { detectMarketRegime }      from "./market-regime";
-import { runGapAnalysis }          from "./gap-analyzer";
+import { deriveEnvironmentalGaps, runStructuralGapAnalysis } from "./gap-analyzer";
 import { screenCandidates }        from "./candidate-screener";
 import { fetchAllNewsWithFallback } from "./news-fetcher";
 import { fetchPriceTimelines }     from "./price-timeline";
 import { scoreSentimentForAll }    from "./sentiment-scorer";
 import { buildSentimentOverlay, type SentimentOverlay } from "./signal-aggregator";
 import { buildResearchContext }    from "./context-loader";
+import { collectMacroNewsEnvironment } from "./macro-news-environment";
+import {
+  deriveMacroThemeConsensus,
+  MACRO_THEME_CONSENSUS_THRESHOLDS,
+} from "./macro-theme-consensus";
+import { applyMacroExposureBridge, MACRO_EXPOSURE_BRIDGE_RULES } from "./macro-exposure-bridge";
+import { deriveMacroCandidateSearchLanes, PHASE1_MACRO_LANE_REGISTRY } from "./macro-candidate-lanes";
 import { generatePortfolioReport } from "@/lib/analyzer";
 import { compareRecommendations }  from "@/lib/comparator";
 import { evaluateAlert }           from "@/lib/alerts";
@@ -41,7 +48,15 @@ import {
   updateEvidencePacketOutcome,
 } from "./evidence-packet-builder";
 import type { ProgressEvent }      from "./progress-events";
-import { AnalysisAbstainedError, type AbstainResult } from "./types";
+import {
+  AnalysisAbstainedError,
+  type AbstainResult,
+  type CandidateSearchLane,
+  type EnvironmentalGap,
+  type MacroExposureBridgeResult,
+  type MacroNewsEnvironmentResult,
+  type MacroThemeConsensusResult,
+} from "./types";
 import type {
   DiagnosticsMetricContract,
   DiagnosticsSourceRefContract,
@@ -295,7 +310,11 @@ function buildGapScanDiagnostics(input: {
   gapReport?: any;
   existingHoldingsCount?: number | null;
 }): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
-  const gapRows = Array.isArray(input.gapReport?.gaps) ? input.gapReport.gaps : [];
+  const gapRows = Array.isArray(input.gapReport?.structuralGaps)
+    ? input.gapReport.structuralGaps
+    : Array.isArray(input.gapReport?.gaps)
+      ? input.gapReport.gaps
+      : [];
   const holdingsReviewed = input.existingHoldingsCount ?? null;
   const hasHoldingsInput = typeof holdingsReviewed === "number" && holdingsReviewed > 0;
   const hasSearchBasis = Boolean(input.gapReport?.searchBrief || input.gapReport?.profilePreferences);
@@ -325,6 +344,7 @@ function buildGapScanDiagnostics(input: {
         : "Holdings-scan scope was not fully persisted for this run.",
       searchBasis: input.gapReport?.searchBrief ?? "No explicit gap-search brief was persisted for this run.",
       profilePreferenceContext: input.gapReport?.profilePreferences ?? "No additional profile-preference gap context was persisted for this run.",
+      authorityRule: "Structural gaps remain more authoritative than environmental gaps in phase 1.",
       inputAvailability: hasMeaningfulInputs
         ? "Enough portfolio context was available to run the gap scan."
         : "Portfolio gap scan inputs were incomplete, so the empty result may reflect degraded telemetry rather than a clean no-gap outcome.",
@@ -338,6 +358,7 @@ function buildGapScanDiagnostics(input: {
         affectedTickers: gap?.affectedTickers ?? [],
         priority: gap?.priority ?? null,
       })),
+      environmentalGapCount: Array.isArray(input.gapReport?.environmentalGaps) ? input.gapReport.environmentalGaps.length : 0,
       emptyResultReason: foundGaps
         ? null
         : ranMeaningfully
@@ -366,6 +387,8 @@ function buildCandidateScreeningDiagnostics(input: {
   const candidatePoolCount = Math.max(0, allTickers.length - (holdingsCount ?? 0));
   const hasScreeningContext = typeof holdingsCount === "number" || Boolean(input.gapReport?.searchBrief);
   const foundCandidates = candidateRows.length > 0;
+  const macroOriginCount = candidateRows.filter((candidate) => candidate?.candidateOrigin === "macro_lane").length;
+  const structuralOriginCount = candidateRows.filter((candidate) => candidate?.candidateOrigin !== "macro_lane").length;
 
   const status: DiagnosticsStepContract["status"] = foundCandidates
     ? "ok"
@@ -393,14 +416,21 @@ function buildCandidateScreeningDiagnostics(input: {
       rankingBasis: candidateRows.some((candidate) => candidate?.catalyst || candidate?.analystRating)
         ? "Gap fit, recent catalyst strength, analyst support, and live-price validation."
         : "Gap fit and externally screened candidate reasoning.",
+      macroLaneCount: Array.isArray(input.gapReport?.candidateSearchLanes) ? input.gapReport.candidateSearchLanes.length : 0,
     },
     outputs: {
       outcomeExplanation,
       screenedInCount: candidateRows.length,
+      screenedInByOrigin: {
+        structural: structuralOriginCount,
+        macroLane: macroOriginCount,
+      },
       screenedOutCount: candidatePoolCount > candidateRows.length ? candidatePoolCount - candidateRows.length : null,
       topCandidates: candidateRows.slice(0, 10).map((candidate: any) => ({
         ticker: candidate?.ticker ?? null,
         companyName: candidate?.companyName ?? null,
+        candidateOrigin: candidate?.candidateOrigin ?? "structural",
+        discoveryLaneId: candidate?.discoveryLaneId ?? null,
         reason: candidate?.reason ?? null,
         catalyst: candidate?.catalyst ?? null,
         analystRating: candidate?.analystRating ?? null,
@@ -420,6 +450,240 @@ function buildCandidateScreeningDiagnostics(input: {
       ["estimated_external_pool", "Estimated External Pool", candidatePoolCount],
     ]),
   };
+}
+
+function buildMacroNewsCollectionDiagnostics(input: {
+  macroEnvironment?: MacroNewsEnvironmentResult | null;
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics" | "sources"> {
+  const environment = input.macroEnvironment;
+  const issues = Array.isArray(environment?.issues) ? environment.issues : [];
+  const articles = Array.isArray(environment?.articles) ? environment.articles : [];
+  const hasArticles = articles.length > 0;
+  const status: DiagnosticsStepContract["status"] =
+    environment?.availabilityStatus === "primary_rate_limited" || environment?.availabilityStatus === "primary_transport_failure" || environment?.availabilityStatus === "no_usable_news"
+      ? "warning"
+      : hasArticles
+        ? "ok"
+        : "warning";
+
+  return {
+    status,
+    summary: environment?.statusSummary ?? "Macro-news collection did not persist a usable summary.",
+    inputs: {
+      queryFamilies: [
+        "rates / inflation / central banks",
+        "recession / labor / growth slowdown",
+        "energy / commodities",
+        "geopolitics / war / shipping / supply chain",
+        "regulation / export controls / AI policy",
+        "credit stress / liquidity / banking stress",
+        "defense / fiscal / industrial policy",
+      ],
+      collectionMode: "Portfolio-neutral fixed global macro query families.",
+      freshnessWindow: "Last 7 days with last 72 hours emphasized.",
+      sortRule: "Trusted first, newest first, canonical URL ascending.",
+      degradedReason: environment?.degradedReason ?? null,
+    },
+    outputs: {
+      outcomeExplanation: environment?.statusSummary ?? "Macro-news collection produced no persisted summary.",
+      articleCount: environment?.articleCount ?? 0,
+      trustedArticleCount: environment?.trustedArticleCount ?? 0,
+      distinctPublisherCount: environment?.distinctPublisherCount ?? 0,
+      issueSummary: issues.slice(0, 5).map((issue) => issue.message),
+      topArticleIds: articles.slice(0, 5).map((article) => article.articleId),
+      emptyResultReason: hasArticles ? null : "No usable macro-news environment articles were persisted for this run.",
+    },
+    metrics: buildDiagnosticsMetrics([
+      ["macro_article_count", "Macro Articles", environment?.articleCount ?? 0],
+      ["trusted_macro_articles", "Trusted Macro Articles", environment?.trustedArticleCount ?? 0],
+      ["macro_distinct_publishers", "Distinct Publishers", environment?.distinctPublisherCount ?? 0],
+    ]),
+    sources: articles.slice(0, 10).map((article) => ({
+      title: article.title,
+      url: article.canonicalUrl,
+      source: article.publisher,
+      publishedAt: article.publishedAt,
+    })),
+    warnings: issues.map((issue) => ({
+      warningId: "",
+      code: issue.kind,
+      message: issue.message,
+      severity: issue.kind === "primary_rate_limited" || issue.kind === "primary_transport_failure" || issue.kind === "no_usable_news" ? "warning" : "info",
+    })),
+  };
+}
+
+function buildMacroThemeConsensusDiagnostics(input: {
+  macroConsensus?: MacroThemeConsensusResult | null;
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
+  const consensus = input.macroConsensus;
+  const themes = Array.isArray(consensus?.themes) ? consensus.themes : [];
+  const actionableThemes = themes.filter((theme) => theme.actionable);
+
+  return {
+    status: actionableThemes.length > 0 ? "ok" : themes.length > 0 ? "warning" : "warning",
+    summary: consensus?.statusSummary ?? "Macro-theme consensus did not persist a usable summary.",
+    inputs: {
+      thresholds: consensus?.thresholds ?? MACRO_THEME_CONSENSUS_THRESHOLDS,
+      classificationRule: "Deterministic theme-family mapping from query family, normalized title, topic hints, and fixed keyword rules.",
+    },
+    outputs: {
+      outcomeExplanation: consensus?.statusSummary ?? "No macro-theme consensus summary was persisted.",
+      actionableThemeCount: actionableThemes.length,
+      observedThemeCount: themes.filter((theme) => theme.supportingArticleCount > 0 || theme.counterArticleIds.length > 0).length,
+      themes: themes.map((theme) => ({
+        themeId: theme.themeId,
+        themeKey: theme.themeKey,
+        actionable: theme.actionable,
+        supportRatio: theme.supportRatio,
+        contradictionLevel: theme.contradictionLevel,
+        supportingArticleCount: theme.supportingArticleCount,
+        trustedSupportingCount: theme.trustedSupportingCount,
+      })),
+    },
+    metrics: buildDiagnosticsMetrics([
+      ["macro_actionable_themes", "Actionable Themes", actionableThemes.length],
+      ["macro_observed_themes", "Observed Themes", themes.length],
+    ]),
+    warnings: actionableThemes.length === 0 && themes.length > 0
+      ? buildDiagnosticsWarnings([["macro_no_actionable_consensus", "Macro themes were observed, but none cleared the deterministic consensus gate.", "warning"]])
+      : [],
+  };
+}
+
+function buildMacroExposureBridgeDiagnostics(input: {
+  macroBridge?: MacroExposureBridgeResult | null;
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
+  const bridge = input.macroBridge;
+  const hits = Array.isArray(bridge?.hits) ? bridge.hits : [];
+
+  return {
+    status: hits.length > 0 ? "ok" : "warning",
+    summary: bridge?.statusSummary ?? "Macro exposure bridge did not persist a usable summary.",
+    inputs: {
+      bridgeRuleCount: MACRO_EXPOSURE_BRIDGE_RULES.length,
+      bridgeRuleIds: MACRO_EXPOSURE_BRIDGE_RULES.map((rule) => rule.ruleId),
+      ruleMode: "Deterministic rule registry only; no open-ended macro reasoning.",
+    },
+    outputs: {
+      outcomeExplanation: bridge?.statusSummary ?? "No macro exposure bridge summary was persisted.",
+      hitCount: hits.length,
+      hits: hits.map((hit) => ({
+        bridgeHitId: hit.bridgeHitId,
+        themeId: hit.themeId,
+        ruleId: hit.ruleId,
+        matchedToken: hit.matchedToken,
+        laneHints: hit.laneHints,
+        exposureTags: hit.exposureTags,
+      })),
+    },
+    metrics: buildDiagnosticsMetrics([
+      ["macro_bridge_hits", "Bridge Hits", hits.length],
+      ["macro_bridge_rules", "Bridge Rules", MACRO_EXPOSURE_BRIDGE_RULES.length],
+    ]),
+    warnings: hits.length === 0
+      ? buildDiagnosticsWarnings([["macro_bridge_no_hits", "No macro exposure bridge rules fired from the actionable macro themes in this run.", "info"]])
+      : [],
+  };
+}
+
+function buildEnvironmentalGapDiagnostics(input: {
+  environmentalGaps?: EnvironmentalGap[] | null;
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
+  const gaps = Array.isArray(input.environmentalGaps) ? input.environmentalGaps : [];
+  return {
+    status: gaps.length > 0 ? "ok" : "warning",
+    summary: gaps.length > 0
+      ? `${gaps.length} environmental gap(s) were derived from actionable macro themes and bridge outputs.`
+      : "No actionable environmental gaps were derived from the macro environment in this run.",
+    inputs: {
+      authorityRule: "Structural gaps remain more authoritative than environmental gaps.",
+      derivationMode: "Environmental gaps require actionable macro themes plus bounded bridge outputs.",
+    },
+    outputs: {
+      environmentalGapCount: gaps.length,
+      gaps: gaps.map((gap) => ({
+        gapId: gap.gapId,
+        themeId: gap.themeId,
+        urgency: gap.urgency,
+        exposureTags: gap.exposureTags,
+        candidateSearchTags: gap.candidateSearchTags,
+        bridgeRuleIds: gap.bridgeRuleIds,
+        openCandidateDiscovery: gap.openCandidateDiscovery,
+      })),
+    },
+    metrics: buildDiagnosticsMetrics([
+      ["environmental_gap_count", "Environmental Gaps", gaps.length],
+      ["environmental_gaps_opening_discovery", "Discovery-Opening Gaps", gaps.filter((gap) => gap.openCandidateDiscovery).length],
+    ]),
+    warnings: gaps.length === 0
+      ? buildDiagnosticsWarnings([["environmental_gaps_none", "No environmental gaps cleared the phase-1 macro gate for this run.", "info"]])
+      : [],
+  };
+}
+
+function buildMacroCandidateLaneDiagnostics(input: {
+  candidateSearchLanes?: CandidateSearchLane[] | null;
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
+  const lanes = Array.isArray(input.candidateSearchLanes) ? input.candidateSearchLanes : [];
+  return {
+    status: lanes.length > 0 ? "ok" : "warning",
+    summary: lanes.length > 0
+      ? `${lanes.length} bounded macro candidate-search lane(s) were opened from environmental gaps.`
+      : "No bounded macro candidate-search lanes were opened in this run.",
+    inputs: {
+      laneRegistryKeys: Object.keys(PHASE1_MACRO_LANE_REGISTRY),
+      laneMode: "Fixed lane registry only; no dynamic lane creation.",
+    },
+    outputs: {
+      laneCount: lanes.length,
+      lanes: lanes.map((lane) => ({
+        laneId: lane.laneId,
+        laneKey: lane.laneKey,
+        priority: lane.priority,
+        themeIds: lane.themeIds,
+        environmentalGapIds: lane.environmentalGapIds,
+        bridgeRuleIds: lane.bridgeRuleIds,
+      })),
+    },
+    metrics: buildDiagnosticsMetrics([
+      ["macro_lane_count", "Macro Candidate Lanes", lanes.length],
+      ["macro_lane_registry_size", "Lane Registry Size", Object.keys(PHASE1_MACRO_LANE_REGISTRY).length],
+    ]),
+    warnings: lanes.length === 0
+      ? buildDiagnosticsWarnings([["macro_candidate_lanes_none", "No macro candidate-search lanes were authorized in this run.", "info"]])
+      : [],
+  };
+}
+
+export function buildMacroAnalyzerSummary(input: {
+  macroEnvironment: MacroNewsEnvironmentResult;
+  macroConsensus: MacroThemeConsensusResult;
+  macroBridge: MacroExposureBridgeResult;
+  environmentalGaps: EnvironmentalGap[];
+  candidateSearchLanes: CandidateSearchLane[];
+}): string {
+  return [
+    "=== MACRO ENVIRONMENT (NORMALIZED) ===",
+    `Collection: ${input.macroEnvironment.statusSummary}`,
+    `Consensus: ${input.macroConsensus.statusSummary}`,
+    `Bridge: ${input.macroBridge.statusSummary}`,
+    input.macroConsensus.themes.some((theme) => theme.actionable)
+      ? `Actionable themes:\n${input.macroConsensus.themes
+          .filter((theme) => theme.actionable)
+          .map((theme) => `- ${theme.themeLabel} (${theme.confidence}, contradiction=${theme.contradictionLevel}, exposures=${theme.exposureTags.join(", ") || "none"})`)
+          .join("\n")}`
+      : "Actionable themes: none",
+    input.environmentalGaps.length > 0
+      ? `Environmental gaps:\n${input.environmentalGaps
+          .map((gap) => `- ${gap.description} [theme=${gap.themeKey}; exposures=${gap.exposureTags.join(", ") || "none"}; lanes=${gap.candidateSearchTags.join(", ") || "none"}]`)
+          .join("\n")}`
+      : "Environmental gaps: none",
+    input.candidateSearchLanes.length > 0
+      ? `Macro candidate lanes:\n${input.candidateSearchLanes.map((lane) => `- ${lane.laneKey}: ${lane.rationaleSummary}`).join("\n")}`
+      : "Macro candidate lanes: none",
+    "Use macro as structured secondary context only. Do not reinterpret raw macro articles or use macro alone to set target weights.",
+  ].join("\n");
 }
 
 function buildNewsSourceDiagnostics(input: {
@@ -760,6 +1024,11 @@ export function buildRunDiagnosticsArtifact(input: {
   usingFallbackNews?: boolean;
   regime?: any;
   gapReport?: any;
+  macroEnvironment?: MacroNewsEnvironmentResult | null;
+  macroConsensus?: MacroThemeConsensusResult | null;
+  macroBridge?: MacroExposureBridgeResult | null;
+  environmentalGaps?: EnvironmentalGap[] | null;
+  candidateSearchLanes?: CandidateSearchLane[] | null;
   candidates?: any[];
   newsResult?: any;
   sentimentSignals?: Map<string, any>;
@@ -825,6 +1094,21 @@ export function buildRunDiagnosticsArtifact(input: {
     gapReport: input.gapReport,
     existingHoldingsCount,
   });
+  const macroNewsDiagnostics = buildMacroNewsCollectionDiagnostics({
+    macroEnvironment: input.macroEnvironment,
+  });
+  const macroConsensusDiagnostics = buildMacroThemeConsensusDiagnostics({
+    macroConsensus: input.macroConsensus,
+  });
+  const macroBridgeDiagnostics = buildMacroExposureBridgeDiagnostics({
+    macroBridge: input.macroBridge,
+  });
+  const environmentalGapDiagnostics = buildEnvironmentalGapDiagnostics({
+    environmentalGaps: input.environmentalGaps,
+  });
+  const macroLaneDiagnostics = buildMacroCandidateLaneDiagnostics({
+    candidateSearchLanes: input.candidateSearchLanes,
+  });
   const candidateScreeningDiagnostics = buildCandidateScreeningDiagnostics({
     candidates: candidateRows,
     existingHoldingsCount,
@@ -889,6 +1173,82 @@ export function buildRunDiagnosticsArtifact(input: {
       outputs: gapScanDiagnostics.outputs,
       metrics: gapScanDiagnostics.metrics,
       warnings: gapScanDiagnostics.warnings,
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "macro_news_collection",
+          stepName: "Macro-News Collection",
+          status: macroNewsDiagnostics.status,
+          summary: macroNewsDiagnostics.summary,
+        },
+        context
+      ),
+      inputs: macroNewsDiagnostics.inputs,
+      outputs: macroNewsDiagnostics.outputs,
+      metrics: macroNewsDiagnostics.metrics,
+      warnings: macroNewsDiagnostics.warnings,
+      sources: macroNewsDiagnostics.sources,
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "macro_theme_consensus",
+          stepName: "Macro Theme Consensus",
+          status: macroConsensusDiagnostics.status,
+          summary: macroConsensusDiagnostics.summary,
+        },
+        context
+      ),
+      inputs: macroConsensusDiagnostics.inputs,
+      outputs: macroConsensusDiagnostics.outputs,
+      metrics: macroConsensusDiagnostics.metrics,
+      warnings: macroConsensusDiagnostics.warnings,
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "macro_exposure_bridge",
+          stepName: "Macro Exposure Bridge",
+          status: macroBridgeDiagnostics.status,
+          summary: macroBridgeDiagnostics.summary,
+        },
+        context
+      ),
+      inputs: macroBridgeDiagnostics.inputs,
+      outputs: macroBridgeDiagnostics.outputs,
+      metrics: macroBridgeDiagnostics.metrics,
+      warnings: macroBridgeDiagnostics.warnings,
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "environmental_gaps",
+          stepName: "Environmental Gaps",
+          status: environmentalGapDiagnostics.status,
+          summary: environmentalGapDiagnostics.summary,
+        },
+        context
+      ),
+      inputs: environmentalGapDiagnostics.inputs,
+      outputs: environmentalGapDiagnostics.outputs,
+      metrics: environmentalGapDiagnostics.metrics,
+      warnings: environmentalGapDiagnostics.warnings,
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "macro_candidate_lanes",
+          stepName: "Macro Candidate Lanes",
+          status: macroLaneDiagnostics.status,
+          summary: macroLaneDiagnostics.summary,
+        },
+        context
+      ),
+      inputs: macroLaneDiagnostics.inputs,
+      outputs: macroLaneDiagnostics.outputs,
+      metrics: macroLaneDiagnostics.metrics,
+      warnings: macroLaneDiagnostics.warnings,
     },
     {
       ...buildStepBase(
@@ -1090,12 +1450,44 @@ export async function runFullAnalysis(
   // ══════════════════════════════════════════════════════════════════════════════
   // STAGE 0: Market Intelligence — regime + gap + candidates
   // ══════════════════════════════════════════════════════════════════════════════
-  const [regime, gapReport] = await Promise.all([
-    detectMarketRegime(openai, today, emit),
-    runGapAnalysis(openai, ctx.holdings.map(h => ({ ticker: h.ticker, currentWeight: h.computedWeight, isCash: h.isCash })), user.profile, today, emit),
-  ]);
+  const regime = await detectMarketRegime(openai, today, emit);
+  const structuralGapReport = await runStructuralGapAnalysis(
+    openai,
+    ctx.holdings.map((holding) => ({ ticker: holding.ticker, currentWeight: holding.computedWeight, isCash: holding.isCash })),
+    user.profile,
+    today,
+    emit
+  );
+  const macroEnvironment = await collectMacroNewsEnvironment(openai, today, emit);
+  const macroConsensus = deriveMacroThemeConsensus(macroEnvironment);
+  const macroBridge = applyMacroExposureBridge({
+    consensus: macroConsensus,
+    environment: macroEnvironment,
+  });
+  const environmentalGaps = deriveEnvironmentalGaps({
+    holdings: ctx.holdings,
+    structuralGapReport,
+    profile: user.profile,
+    marketRegime: regime,
+    macroConsensus,
+    macroBridge,
+  });
+  const macroCandidateSearchLanes = deriveMacroCandidateSearchLanes(environmentalGaps);
+  const gapReport = freezeRunEvidenceSet({
+    ...structuralGapReport,
+    environmentalGaps,
+    candidateSearchLanes: macroCandidateSearchLanes,
+  });
 
-  const candidates = await screenCandidates(openai, existingTickers, gapReport.searchBrief, user.profile, today, emit);
+  const candidates = await screenCandidates(
+    openai,
+    existingTickers,
+    gapReport.searchBrief,
+    macroCandidateSearchLanes,
+    user.profile,
+    today,
+    emit
+  );
 
   const candidateTickers = candidates.map(c => c.ticker);
   const allTickers = [...new Set([...existingTickers, ...candidateTickers])];
@@ -1223,6 +1615,11 @@ export async function runFullAnalysis(
   emit({ type: "stage_start", stage: "stage3", label: "Stage 3 · Primary AI Reasoning", detail: "Single gpt-5.4 call with json_schema — authoritative recommendations" });
 
   const frozenNewsResult = freezeRunEvidenceSet(newsResult);
+  const frozenMacroEnvironment = freezeRunEvidenceSet(macroEnvironment);
+  const frozenMacroConsensus = freezeRunEvidenceSet(macroConsensus);
+  const frozenMacroBridge = freezeRunEvidenceSet(macroBridge);
+  const frozenEnvironmentalGaps = freezeRunEvidenceSet(environmentalGaps);
+  const frozenMacroCandidateSearchLanes = freezeRunEvidenceSet(macroCandidateSearchLanes);
   const frozenValuations = freezeRunEvidenceSet(valuations);
   const frozenCorrelationMatrix = freezeRunEvidenceSet(correlationMatrix);
   const frozenTimelines = new Map(freezeRunEvidenceSet(Array.from(timelines.entries())));
@@ -1254,11 +1651,18 @@ export async function runFullAnalysis(
   const candidateSection = activeCandidates.length > 0
     ? `\n=== CANDIDATE POSITIONS TO EVALUATE ===\nThese are NOT currently held. To recommend adding any:\n1. Evidence quality HIGH only\n2. Identify which existing position funds it\n3. Explain why better than increasing an existing position\n${activeCandidates.map(t => {
         const c = candidates.find(c => c.ticker === t);
-        return `${t} (${c?.companyName}, $${c?.validatedPrice?.toFixed(2) ?? "?"}): via ${c?.source}, catalyst: ${c?.catalyst ?? "none"}, reason: ${c?.reason}`;
+        return `${t} (${c?.companyName}, $${c?.validatedPrice?.toFixed(2) ?? "?"}): via ${c?.source}${c?.discoveryLaneId ? `, lane: ${c.discoveryLaneId}` : ""}, catalyst: ${c?.catalyst ?? "none"}, reason: ${c?.reason}`;
       }).join("\n")}\n=== END CANDIDATES ===`
     : "";
 
   const regimeSection = `=== MARKET REGIME ===\nRisk mode: ${frozenFinalRegime.riskMode} | Rates: ${frozenFinalRegime.rateTrend} | Dollar: ${frozenFinalRegime.dollarTrend} | VIX: ${frozenFinalRegime.vixLevel}\n${frozenFinalRegime.summary}\n=== END REGIME ===`;
+  const macroSummarySection = buildMacroAnalyzerSummary({
+    macroEnvironment: frozenMacroEnvironment,
+    macroConsensus: frozenMacroConsensus,
+    macroBridge: frozenMacroBridge,
+    environmentalGaps: frozenEnvironmentalGaps,
+    candidateSearchLanes: frozenMacroCandidateSearchLanes,
+  });
 
   // W19: Guard all sections against context overflow
   const newsSection = guardContextLength(frozenNewsResult.combinedSummary, 8000, "30-day news");
@@ -1267,6 +1671,7 @@ export async function runFullAnalysis(
 
   const additionalContext = [
     regimeSection,
+    macroSummarySection,
     breaking24hSection,
     newsSection ? `=== RESEARCH (30-day) ===\n${newsSection}` : "",
     priceReactionSection ? `=== INTRADAY PRICE REACTIONS ===\n${priceReactionSection}` : "",
@@ -1279,6 +1684,7 @@ export async function runFullAnalysis(
   // Batch 5: Build promptHash + write frozen EvidencePacket BEFORE LLM call
   const perSectionChars = buildPerSectionChars({
     regime: regimeSection,
+    macroEnvironment: macroSummarySection,
     breaking24h: breaking24hSection,
     news30d: newsSection,
     priceReactions: priceReactionSection,
@@ -1351,6 +1757,13 @@ export async function runFullAnalysis(
           primaryModel: "gpt-5.4",
           responseHash: null,
           usingFallbackNews: frozenNewsResult.usingFallback ?? false,
+          regime: frozenFinalRegime,
+          gapReport,
+          macroEnvironment: frozenMacroEnvironment,
+          macroConsensus: frozenMacroConsensus,
+          macroBridge: frozenMacroBridge,
+          environmentalGaps: frozenEnvironmentalGaps,
+          candidateSearchLanes: frozenMacroCandidateSearchLanes,
           validationSummary: {
             hardErrorCount: 1,
             warningCount: 0,
@@ -1487,6 +1900,13 @@ export async function runFullAnalysis(
           primaryModel: "gpt-5.4",
           responseHash: null,
           usingFallbackNews: frozenNewsResult.usingFallback ?? false,
+          regime: frozenFinalRegime,
+          gapReport,
+          macroEnvironment: frozenMacroEnvironment,
+          macroConsensus: frozenMacroConsensus,
+          macroBridge: frozenMacroBridge,
+          environmentalGaps: frozenEnvironmentalGaps,
+          candidateSearchLanes: frozenMacroCandidateSearchLanes,
           validationSummary: {
             hardErrorCount: 1,
             warningCount: 0,
@@ -1610,8 +2030,16 @@ export async function runFullAnalysis(
 
   (reportData as any)._runMeta = {
     regime: frozenFinalRegime,
-    gaps: gapReport.gaps,
-    candidates: candidates.map(c => c.ticker),
+    structuralGaps: gapReport.structuralGaps,
+    environmentalGaps: frozenEnvironmentalGaps,
+    macroCandidateSearchLanes: frozenMacroCandidateSearchLanes,
+    actionableMacroThemes: frozenMacroConsensus.themes.filter((theme) => theme.actionable).map((theme) => theme.themeKey),
+    candidates: candidates.map((candidate) => ({
+      ticker: candidate.ticker,
+      source: candidate.source,
+      candidateOrigin: candidate.candidateOrigin,
+      discoveryLaneId: candidate.discoveryLaneId ?? null,
+    })),
     sentimentOverlay,
     correlationClusters: frozenCorrelationMatrix.clusters,
     priceDataMissing,
@@ -1681,6 +2109,11 @@ export async function runFullAnalysis(
     usingFallbackNews,
     regime: frozenFinalRegime,
     gapReport,
+    macroEnvironment: frozenMacroEnvironment,
+    macroConsensus: frozenMacroConsensus,
+    macroBridge: frozenMacroBridge,
+    environmentalGaps: frozenEnvironmentalGaps,
+    candidateSearchLanes: frozenMacroCandidateSearchLanes,
     candidates,
     newsResult: frozenNewsResult,
     sentimentSignals: frozenSentimentSignals,
@@ -1829,6 +2262,16 @@ export async function runFullAnalysis(
     qualityMeta: {
       promptHash,
       usingFallbackNews,
+      macroEnvironmentStatus: frozenMacroEnvironment.availabilityStatus ?? null,
+      macroEnvironmentSummary: frozenMacroEnvironment.statusSummary ?? null,
+      macroEnvironmentIssues: frozenMacroEnvironment.issues ?? [],
+      macroConsensusSummary: frozenMacroConsensus.statusSummary ?? null,
+      macroConsensusThresholds: frozenMacroConsensus.thresholds ?? null,
+      actionableMacroThemes: frozenMacroConsensus.themes.filter((theme) => theme.actionable),
+      macroBridgeSummary: frozenMacroBridge.statusSummary ?? null,
+      macroBridgeHits: frozenMacroBridge.hits ?? [],
+      environmentalGaps: frozenEnvironmentalGaps,
+      macroCandidateSearchLanes: frozenMacroCandidateSearchLanes,
       newsAvailabilityStatus: frozenNewsResult.availabilityStatus ?? null,
       newsStatusSummary: frozenNewsResult.statusSummary ?? null,
       newsIssues: frozenNewsResult.issues ?? [],

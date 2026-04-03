@@ -12,7 +12,7 @@ export type ProgressEvent =
   | { type: "stage_complete";   stage: string; durationMs: number }
   | { type: "regime";           riskMode: string; rateTrend: string; dollarTrend: string; vix: string; summary: string }
   | { type: "gap_found";        description: string; severity: "critical" | "opportunity" | "redundancy" | "mismatch"; tickers?: string[] }
-  | { type: "candidate_found";  ticker: string; companyName: string; source: "gap_screener" | "momentum"; reason: string; catalyst?: string }
+  | { type: "candidate_found";  ticker: string; companyName: string; source: "gap_screener" | "macro_lane" | "momentum"; reason: string; catalyst?: string }
   | { type: "candidate_eliminated"; ticker: string; reason: string }
   | { type: "sentiment_score";  ticker: string; direction: "buy" | "hold" | "sell"; magnitude: number; confidence: number; drivingArticle?: string; finbert?: number; fingpt?: number }
   | { type: "price_reaction";   ticker: string; verdict: string; note: string; preEventDrift?: number; reactionPct?: number; sustained?: boolean }

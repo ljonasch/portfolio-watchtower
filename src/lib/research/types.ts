@@ -90,6 +90,178 @@ export interface PriorRecommendation {
   role: string | null;
 }
 
+// ─── Gap analysis + macro environment ────────────────────────────────────────
+
+export interface GapItem {
+  type: "critical" | "opportunity" | "redundancy" | "mismatch";
+  description: string;
+  affectedTickers?: string[];
+  priority: number;
+}
+
+export type MacroQueryFamilyKey =
+  | "rates_inflation_central_banks"
+  | "recession_labor_growth"
+  | "energy_commodities"
+  | "geopolitics_shipping_supply_chain"
+  | "regulation_export_controls_ai_policy"
+  | "credit_liquidity_banking_stress"
+  | "defense_fiscal_industrial_policy";
+
+export type MacroThemeKey =
+  | "higher_for_longer_rates"
+  | "growth_slowdown_risk"
+  | "energy_supply_tightness"
+  | "shipping_disruption"
+  | "ai_policy_export_controls"
+  | "credit_liquidity_stress"
+  | "defense_fiscal_upcycle";
+
+export type MacroCandidateLaneKey =
+  | "rate_resilience"
+  | "defense_fiscal_beneficiaries"
+  | "energy_supply_chain"
+  | "shipping_resilience"
+  | "ai_infrastructure_policy"
+  | "liquidity_defense";
+
+export interface MacroNewsArticle {
+  articleId: string;
+  canonicalUrl: string;
+  title: string;
+  publisher: string;
+  publishedAt: string | null;
+  publishedAtBucket: string;
+  trusted: boolean;
+  queryFamily: MacroQueryFamilyKey;
+  retrievalReason: string;
+  topicHints: string[];
+  dedupKey: string;
+  stableSortKey: string;
+  evidenceHash: string;
+}
+
+export interface MacroNewsEnvironmentResult {
+  availabilityStatus: NewsAvailabilityStatus;
+  degradedReason: NewsDegradedReason | null;
+  statusSummary: string;
+  articleCount: number;
+  trustedArticleCount: number;
+  distinctPublisherCount: number;
+  sourceDiversity: {
+    distinctPublishers: number;
+    trustedPublishers: number;
+    trustedRatio: number;
+  };
+  issues: NewsFetchIssue[];
+  articles: MacroNewsArticle[];
+}
+
+export interface MacroThemeConsensus {
+  themeId: string;
+  themeKey: MacroThemeKey;
+  themeLabel: string;
+  queryFamilies: MacroQueryFamilyKey[];
+  supportingArticleIds: string[];
+  counterArticleIds: string[];
+  supportingArticleCount: number;
+  trustedSupportingCount: number;
+  distinctPublisherCount: number;
+  supportRatio: number;
+  contradictionLevel: "low" | "medium" | "high";
+  recentSupportingCount7d: number;
+  confidence: "high" | "medium" | "low";
+  severity: "high" | "medium" | "low";
+  actionable: boolean;
+  exposureTags: string[];
+  candidateSearchTags: string[];
+  summary: string;
+}
+
+export interface MacroThemeConsensusResult {
+  availabilityStatus: NewsAvailabilityStatus;
+  degradedReason: NewsDegradedReason | null;
+  thresholds: {
+    minSupportingArticles: number;
+    minTrustedSupportingArticles: number;
+    minDistinctPublishers: number;
+    minSupportRatio: number;
+    minRecentSupportingArticles7d: number;
+  };
+  statusSummary: string;
+  themes: MacroThemeConsensus[];
+}
+
+export interface MacroExposureBridgeRule {
+  ruleId: string;
+  label: string;
+  themeKeys: MacroThemeKey[];
+  matchTokens: string[];
+  emittedExposureTags: string[];
+  emittedLaneHints: MacroCandidateLaneKey[];
+  emittedSectorTags: string[];
+  emittedSensitivityTags: string[];
+}
+
+export interface MacroExposureBridgeHit {
+  bridgeHitId: string;
+  ruleId: string;
+  themeId: string;
+  matchedToken: string;
+  exposureTags: string[];
+  laneHints: MacroCandidateLaneKey[];
+  sectorTags: string[];
+  sensitivityTags: string[];
+  rationaleSummary: string;
+}
+
+export interface MacroExposureBridgeResult {
+  statusSummary: string;
+  hits: MacroExposureBridgeHit[];
+}
+
+export interface EnvironmentalGap {
+  gapId: string;
+  themeId: string;
+  themeKey: MacroThemeKey;
+  bridgeRuleIds: string[];
+  description: string;
+  authority: "environmental";
+  urgency: "high" | "medium" | "low";
+  exposureTags: string[];
+  candidateSearchTags: string[];
+  reviewCurrentHoldings: boolean;
+  reviewCandidates: boolean;
+  openCandidateDiscovery: boolean;
+  regimeAlignment: "aligned" | "neutral" | "countervailing";
+  profileAlignment: "aligned" | "neutral" | "conflicted";
+  rationaleSummary: string;
+}
+
+export interface CandidateSearchLane {
+  laneId: string;
+  laneKey: MacroCandidateLaneKey;
+  description: string;
+  allowedAssetClasses: string[];
+  searchTags: string[];
+  priority: number;
+  sortBehavior: "priority_then_ticker";
+  origin: "environmental_gap";
+  themeIds: string[];
+  environmentalGapIds: string[];
+  bridgeRuleIds: string[];
+  rationaleSummary: string;
+}
+
+export interface GapReport {
+  gaps: GapItem[];
+  structuralGaps: GapItem[];
+  environmentalGaps: EnvironmentalGap[];
+  candidateSearchLanes: CandidateSearchLane[];
+  searchBrief: string;
+  profilePreferences: string;
+}
+
 // ─── Portfolio construction ───────────────────────────────────────────────────
 
 export interface ConcentrationWarning {
@@ -201,6 +373,22 @@ export interface ValidationResult {
   errors: ValidationError[];
   warnings: ValidationError[];
   correctedReport?: Partial<PortfolioReportV3>;
+}
+
+export type ScreenedCandidateSource = "gap_screener" | "macro_lane" | "momentum";
+
+export interface ScreenedCandidate {
+  ticker: string;
+  companyName: string;
+  source: ScreenedCandidateSource;
+  candidateOrigin: "structural" | "macro_lane";
+  reason: string;
+  catalyst?: string;
+  analystRating?: string;
+  validatedPrice?: number;
+  discoveryLaneId?: string | null;
+  macroThemeIds?: string[];
+  environmentalGapIds?: string[];
 }
 
 // ─── New shared types added in Batch 2 ───────────────────────────────────────

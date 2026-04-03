@@ -124,6 +124,26 @@ function humanReadableFallbackNote(stepKey: DiagnosticsStepContract["stepKey"], 
       inputs: "This step scanned the existing portfolio for concentration risks, redundancies, and missing themes.",
       outputs: "This step did not persist a detailed gap-scan result beyond the stored summary.",
     },
+    macro_news_collection: {
+      inputs: "This step ran the fixed global macro-news query families for the last 7 days of market-environment coverage.",
+      outputs: "This step did not persist a detailed macro-news collection summary beyond the stored status output.",
+    },
+    macro_theme_consensus: {
+      inputs: "This step normalized collected macro articles into the fixed theme registry and applied the deterministic consensus gate.",
+      outputs: "This step did not persist a detailed macro-theme consensus summary beyond the stored status output.",
+    },
+    macro_exposure_bridge: {
+      inputs: "This step applied deterministic macro exposure bridge rules to actionable macro themes.",
+      outputs: "This step did not persist a detailed macro exposure bridge summary beyond the stored status output.",
+    },
+    environmental_gaps: {
+      inputs: "This step combined structural gaps, actionable macro themes, bridge outputs, and portfolio context into environmental gaps.",
+      outputs: "This step did not persist a detailed environmental-gap summary beyond the stored status output.",
+    },
+    macro_candidate_lanes: {
+      inputs: "This step converted environmental gaps into a bounded set of macro candidate-search lanes.",
+      outputs: "This step did not persist a detailed macro candidate-lane summary beyond the stored status output.",
+    },
     candidate_screening: {
       inputs: "This step reviewed existing holdings plus externally screened names against the identified portfolio gaps.",
       outputs: "This step did not persist detailed candidate-screening results beyond the stored summary.",

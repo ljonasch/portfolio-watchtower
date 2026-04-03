@@ -75,8 +75,8 @@ async function main() {
   try {
     const { screenCandidates } = await import("../src/lib/research/candidate-screener");
     candidates = await screenCandidates(
-      openai, existingTickers, gapReport.searchBrief, user.profile as any, today,
-      e => {
+      openai, existingTickers, gapReport.searchBrief, [], user.profile as any, today,
+      (e: any) => {
         if (e.type === "candidate_found") console.log(`  Found: ${e.ticker} (${e.source}) — ${e.reason?.slice(0,60)}`);
       }
     );

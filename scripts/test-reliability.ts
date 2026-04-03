@@ -431,7 +431,7 @@ async function T9_candidateDeduplication() {
   const held = snap!.holdings.filter((h: any) => !h.isCash).map((h: any) => h.ticker.toUpperCase());
 
   await check("T9", "No candidate overlaps with held tickers (full portfolio)", async () => {
-    const candidates = await screenCandidates(openai, held, "diversification opportunities", user!.profile as any, today, () => {});
+    const candidates = await screenCandidates(openai, held, "diversification opportunities", [], user!.profile as any, today, () => {});
     const overlap = candidates.filter(c => held.includes(c.ticker.toUpperCase()));
     return overlap.length === 0
       ? { ok: true, msg: `${candidates.length} candidates, zero overlap with ${held.length} held tickers` }
@@ -439,7 +439,7 @@ async function T9_candidateDeduplication() {
   });
 
   await check("T9", "Candidates have required fields (ticker, companyName, source, reason)", async () => {
-    const candidates = await screenCandidates(openai, ["NVDA", "AAPL"], "healthcare gap", user!.profile as any, today, () => {});
+    const candidates = await screenCandidates(openai, ["NVDA", "AAPL"], "healthcare gap", [], user!.profile as any, today, () => {});
     if (candidates.length === 0) return { ok: true, msg: "0 candidates returned — no field check needed" };
     const required = ["ticker", "companyName", "source", "reason"];
     const missing = candidates.flatMap(c => required.filter(f => !(c as any)[f]).map(f => `${c.ticker}.${f}`));
@@ -752,7 +752,7 @@ async function T17_tickerAliasDeduplication() {
   const profile = { trackedAccountRiskTolerance: "high", permittedAssetClasses: "Stocks, ETFs" };
 
   await check("T17", "GOOG excluded when GOOGL is held (alias relationship)", async () => {
-    const candidates = await screenCandidates(openai, ["GOOGL", "NVDA", "AAPL"], "tech growth gap", profile as any, today, () => {});
+    const candidates = await screenCandidates(openai, ["GOOGL", "NVDA", "AAPL"], "tech growth gap", [], profile as any, today, () => {});
     const hasGoog    = candidates.some(c => c.ticker === "GOOG");
     const hasGoogl   = candidates.some(c => c.ticker === "GOOGL");
     return (!hasGoog && !hasGoogl)
@@ -761,7 +761,7 @@ async function T17_tickerAliasDeduplication() {
   });
 
   await check("T17", "All candidate tickers are valid format (1-6 uppercase alphanumeric)", async () => {
-    const candidates = await screenCandidates(openai, ["NVDA", "AAPL", "MSFT"], "healthcare innovation", profile as any, today, () => {});
+    const candidates = await screenCandidates(openai, ["NVDA", "AAPL", "MSFT"], "healthcare innovation", [], profile as any, today, () => {});
     const TICKER_RE = /^[A-Z0-9.]{1,6}$/;
     const bad = candidates.filter(c => !TICKER_RE.test(c.ticker));
     return bad.length === 0

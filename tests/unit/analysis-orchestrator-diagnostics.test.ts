@@ -1,4 +1,4 @@
-import { buildRunDiagnosticsArtifact } from "@/lib/research/analysis-orchestrator";
+import { buildMacroAnalyzerSummary, buildRunDiagnosticsArtifact } from "@/lib/research/analysis-orchestrator";
 
 describe("analysis orchestrator diagnostics", () => {
   test("builds a typed diagnostics artifact from persisted run signals", () => {
@@ -26,9 +26,157 @@ describe("analysis orchestrator diagnostics", () => {
       },
       gapReport: {
         gaps: [{ ticker: "AVGO", companyName: "Broadcom", reason: "AI infra gap" }],
+        structuralGaps: [{ type: "opportunity", description: "AI infra gap", priority: 1 }],
+        environmentalGaps: [
+          {
+            gapId: "env_gap:defense_fiscal_upcycle",
+            themeId: "macro_theme:defense_fiscal_upcycle",
+            themeKey: "defense_fiscal_upcycle",
+            bridgeRuleIds: ["bridge.defense_procurement"],
+            description: "Defense exposure underweight",
+            authority: "environmental",
+            urgency: "medium",
+            exposureTags: ["defense_spending"],
+            candidateSearchTags: ["defense_fiscal_beneficiaries"],
+            reviewCurrentHoldings: true,
+            reviewCandidates: true,
+            openCandidateDiscovery: true,
+            regimeAlignment: "aligned",
+            profileAlignment: "aligned",
+            rationaleSummary: "Defense macro theme opened a bounded discovery lane.",
+          },
+        ],
+        candidateSearchLanes: [
+          {
+            laneId: "macro_lane:defense_fiscal_beneficiaries",
+            laneKey: "defense_fiscal_beneficiaries",
+            description: "Defense lane",
+            allowedAssetClasses: ["Stocks", "ETFs"],
+            searchTags: ["defense primes"],
+            priority: 2,
+            sortBehavior: "priority_then_ticker",
+            origin: "environmental_gap",
+            themeIds: ["macro_theme:defense_fiscal_upcycle"],
+            environmentalGapIds: ["env_gap:defense_fiscal_upcycle"],
+            bridgeRuleIds: ["bridge.defense_procurement"],
+            rationaleSummary: "Defense macro theme opened a bounded discovery lane.",
+          },
+        ],
         searchBrief: "One gap found.",
       },
-      candidates: [{ ticker: "AVGO", companyName: "Broadcom", reason: "AI infra gap", source: "gap_screener" }],
+      macroEnvironment: {
+        availabilityStatus: "primary_success",
+        degradedReason: null,
+        statusSummary: "Macro-news collection succeeded across the fixed global query families for this run.",
+        articleCount: 3,
+        trustedArticleCount: 3,
+        distinctPublisherCount: 3,
+        sourceDiversity: { distinctPublishers: 3, trustedPublishers: 3, trustedRatio: 1 },
+        issues: [],
+        articles: [
+          {
+            articleId: "macro_article:1",
+            canonicalUrl: "https://www.reuters.com/macro1",
+            title: "Defense budgets climb across NATO",
+            publisher: "reuters.com",
+            publishedAt: null,
+            publishedAtBucket: "last_7d",
+            trusted: true,
+            queryFamily: "defense_fiscal_industrial_policy",
+            retrievalReason: "global macro environment",
+            topicHints: ["defense", "nato"],
+            dedupKey: "macro1",
+            stableSortKey: "0:0000:https://www.reuters.com/macro1",
+            evidenceHash: "macro1",
+          },
+        ],
+      },
+      macroConsensus: {
+        availabilityStatus: "primary_success",
+        degradedReason: null,
+        thresholds: {
+          minSupportingArticles: 3,
+          minTrustedSupportingArticles: 2,
+          minDistinctPublishers: 2,
+          minSupportRatio: 0.7,
+          minRecentSupportingArticles7d: 2,
+        },
+        statusSummary: "1 macro theme(s) cleared the deterministic consensus gate out of 1 observed theme(s).",
+        themes: [
+          {
+            themeId: "macro_theme:defense_fiscal_upcycle",
+            themeKey: "defense_fiscal_upcycle",
+            themeLabel: "Defense / Fiscal / Industrial Policy",
+            queryFamilies: ["defense_fiscal_industrial_policy"],
+            supportingArticleIds: ["macro_article:1", "macro_article:2", "macro_article:3"],
+            counterArticleIds: [],
+            supportingArticleCount: 3,
+            trustedSupportingCount: 3,
+            distinctPublisherCount: 3,
+            supportRatio: 1,
+            contradictionLevel: "low",
+            recentSupportingCount7d: 3,
+            confidence: "high",
+            severity: "medium",
+            actionable: true,
+            exposureTags: ["defense_spending"],
+            candidateSearchTags: ["defense primes"],
+            summary: "Defense theme reached the phase-1 gate.",
+          },
+        ],
+      },
+      macroBridge: {
+        statusSummary: "1 deterministic macro exposure bridge hit(s) were produced from actionable macro themes.",
+        hits: [
+          {
+            bridgeHitId: "macro_theme:defense_fiscal_upcycle:bridge.defense_procurement:nato",
+            ruleId: "bridge.defense_procurement",
+            themeId: "macro_theme:defense_fiscal_upcycle",
+            matchedToken: "nato",
+            exposureTags: ["defense_spending", "industrial_policy"],
+            laneHints: ["defense_fiscal_beneficiaries"],
+            sectorTags: ["Defense"],
+            sensitivityTags: ["policy_beneficiary"],
+            rationaleSummary: "Defense bridge fired",
+          },
+        ],
+      },
+      environmentalGaps: [
+        {
+          gapId: "env_gap:defense_fiscal_upcycle",
+          themeId: "macro_theme:defense_fiscal_upcycle",
+          themeKey: "defense_fiscal_upcycle",
+          bridgeRuleIds: ["bridge.defense_procurement"],
+          description: "Defense exposure underweight",
+          authority: "environmental",
+          urgency: "medium",
+          exposureTags: ["defense_spending"],
+          candidateSearchTags: ["defense_fiscal_beneficiaries"],
+          reviewCurrentHoldings: true,
+          reviewCandidates: true,
+          openCandidateDiscovery: true,
+          regimeAlignment: "aligned",
+          profileAlignment: "aligned",
+          rationaleSummary: "Defense macro theme opened a bounded discovery lane.",
+        },
+      ],
+      candidateSearchLanes: [
+        {
+          laneId: "macro_lane:defense_fiscal_beneficiaries",
+          laneKey: "defense_fiscal_beneficiaries",
+          description: "Defense lane",
+          allowedAssetClasses: ["Stocks", "ETFs"],
+          searchTags: ["defense primes"],
+          priority: 2,
+          sortBehavior: "priority_then_ticker",
+          origin: "environmental_gap",
+          themeIds: ["macro_theme:defense_fiscal_upcycle"],
+          environmentalGapIds: ["env_gap:defense_fiscal_upcycle"],
+          bridgeRuleIds: ["bridge.defense_procurement"],
+          rationaleSummary: "Defense macro theme opened a bounded discovery lane.",
+        },
+      ],
+      candidates: [{ ticker: "AVGO", companyName: "Broadcom", reason: "AI infra gap", source: "gap_screener", candidateOrigin: "structural" }],
       newsResult: {
         availabilityStatus: "primary_success",
         degradedReason: null,
@@ -73,6 +221,11 @@ describe("analysis orchestrator diagnostics", () => {
     expect(artifact.steps.map((step) => step.stepKey)).toEqual([
       "market_regime",
       "gap_scan",
+      "macro_news_collection",
+      "macro_theme_consensus",
+      "macro_exposure_bridge",
+      "environmental_gaps",
+      "macro_candidate_lanes",
       "candidate_screening",
       "news_sources",
       "sentiment",
@@ -136,6 +289,21 @@ describe("analysis orchestrator diagnostics", () => {
     expect(artifact.steps.find((step) => step.stepKey === "gap_scan")?.outputs).toEqual(
       expect.objectContaining({
         outcomeExplanation: "1 material portfolio gap(s) were identified from the current holdings and profile context.",
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "macro_theme_consensus")?.outputs).toEqual(
+      expect.objectContaining({
+        actionableThemeCount: 1,
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "macro_exposure_bridge")?.outputs).toEqual(
+      expect.objectContaining({
+        hitCount: 1,
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "macro_candidate_lanes")?.outputs).toEqual(
+      expect.objectContaining({
+        laneCount: 1,
       })
     );
   });
@@ -381,5 +549,126 @@ describe("analysis orchestrator diagnostics", () => {
         warningId: expect.stringContaining("news_sources:primary_rate_limited:"),
       })
     );
+  });
+
+  test("macro analyzer summary contains normalized summaries only and omits raw article titles", () => {
+    const summary = buildMacroAnalyzerSummary({
+      macroEnvironment: {
+        availabilityStatus: "primary_success",
+        degradedReason: null,
+        statusSummary: "Macro collection succeeded.",
+        articleCount: 3,
+        trustedArticleCount: 3,
+        distinctPublisherCount: 3,
+        sourceDiversity: { distinctPublishers: 3, trustedPublishers: 3, trustedRatio: 1 },
+        issues: [],
+        articles: [
+          {
+            articleId: "macro_article:1",
+            canonicalUrl: "https://www.reuters.com/macro1",
+            title: "Red Sea attacks force carriers onto longer routes",
+            publisher: "reuters.com",
+            publishedAt: null,
+            publishedAtBucket: "last_7d",
+            trusted: true,
+            queryFamily: "geopolitics_shipping_supply_chain",
+            retrievalReason: "global macro environment",
+            topicHints: ["shipping", "war"],
+            dedupKey: "macro1",
+            stableSortKey: "0:0000:https://www.reuters.com/macro1",
+            evidenceHash: "macro1",
+          },
+        ],
+      },
+      macroConsensus: {
+        availabilityStatus: "primary_success",
+        degradedReason: null,
+        thresholds: {
+          minSupportingArticles: 3,
+          minTrustedSupportingArticles: 2,
+          minDistinctPublishers: 2,
+          minSupportRatio: 0.7,
+          minRecentSupportingArticles7d: 2,
+        },
+        statusSummary: "1 macro theme cleared the gate.",
+        themes: [
+          {
+            themeId: "macro_theme:shipping_disruption",
+            themeKey: "shipping_disruption",
+            themeLabel: "Shipping / Supply Chain Disruption",
+            queryFamilies: ["geopolitics_shipping_supply_chain"],
+            supportingArticleIds: ["macro_article:1", "macro_article:2", "macro_article:3"],
+            counterArticleIds: [],
+            supportingArticleCount: 3,
+            trustedSupportingCount: 3,
+            distinctPublisherCount: 3,
+            supportRatio: 1,
+            contradictionLevel: "low",
+            recentSupportingCount7d: 3,
+            confidence: "high",
+            severity: "medium",
+            actionable: true,
+            exposureTags: ["supply_chain_resilience"],
+            candidateSearchTags: ["shipping resilience"],
+            summary: "Shipping disruption cleared the gate.",
+          },
+        ],
+      },
+      macroBridge: {
+        statusSummary: "1 bridge hit",
+        hits: [
+          {
+            bridgeHitId: "hit1",
+            ruleId: "bridge.shipping_corridors",
+            themeId: "macro_theme:shipping_disruption",
+            matchedToken: "red sea",
+            exposureTags: ["supply_chain_resilience", "logistics_exposure"],
+            laneHints: ["shipping_resilience"],
+            sectorTags: ["Industrials"],
+            sensitivityTags: ["supply_chain_risk"],
+            rationaleSummary: "Shipping bridge hit",
+          },
+        ],
+      },
+      environmentalGaps: [
+        {
+          gapId: "env_gap:shipping_disruption",
+          themeId: "macro_theme:shipping_disruption",
+          themeKey: "shipping_disruption",
+          bridgeRuleIds: ["bridge.shipping_corridors"],
+          description: "Shipping resilience gap",
+          authority: "environmental",
+          urgency: "high",
+          exposureTags: ["supply_chain_resilience"],
+          candidateSearchTags: ["shipping_resilience"],
+          reviewCurrentHoldings: true,
+          reviewCandidates: true,
+          openCandidateDiscovery: true,
+          regimeAlignment: "neutral",
+          profileAlignment: "aligned",
+          rationaleSummary: "Shipping gap",
+        },
+      ],
+      candidateSearchLanes: [
+        {
+          laneId: "macro_lane:shipping_resilience",
+          laneKey: "shipping_resilience",
+          description: "Shipping lane",
+          allowedAssetClasses: ["Stocks", "ETFs"],
+          searchTags: ["shipping resilience"],
+          priority: 4,
+          sortBehavior: "priority_then_ticker",
+          origin: "environmental_gap",
+          themeIds: ["macro_theme:shipping_disruption"],
+          environmentalGapIds: ["env_gap:shipping_disruption"],
+          bridgeRuleIds: ["bridge.shipping_corridors"],
+          rationaleSummary: "Shipping gap opened bounded lane",
+        },
+      ],
+    });
+
+    expect(summary).toContain("Actionable themes:");
+    expect(summary).toContain("Macro candidate lanes:");
+    expect(summary).not.toContain("Red Sea attacks force carriers onto longer routes");
   });
 });

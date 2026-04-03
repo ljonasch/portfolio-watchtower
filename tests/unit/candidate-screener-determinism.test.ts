@@ -63,6 +63,8 @@ function pickStableShape(result: Awaited<ReturnType<typeof screenCandidates>>) {
     ticker: candidate.ticker,
     companyName: candidate.companyName,
     source: candidate.source,
+    candidateOrigin: candidate.candidateOrigin,
+    discoveryLaneId: candidate.discoveryLaneId ?? null,
     reason: candidate.reason,
     catalyst: candidate.catalyst ?? null,
     validatedPrice: candidate.validatedPrice ?? null,
@@ -90,6 +92,7 @@ describe("candidate screener determinism", () => {
       buildOpenAi(rawCandidates),
       ["AMZN"],
       "Find high-quality large-cap additions.",
+      [],
       { trackedAccountRiskTolerance: "medium", permittedAssetClasses: "Stocks, ETFs" },
       "2026-04-02",
       jest.fn()
@@ -100,6 +103,7 @@ describe("candidate screener determinism", () => {
       buildOpenAi(rawCandidates),
       ["AMZN"],
       "Find high-quality large-cap additions.",
+      [],
       { trackedAccountRiskTolerance: "medium", permittedAssetClasses: "Stocks, ETFs" },
       "2026-04-02",
       jest.fn()
@@ -126,6 +130,7 @@ describe("candidate screener determinism", () => {
       buildOpenAi(firstRawOrder),
       ["AMZN"],
       "Find high-quality large-cap additions.",
+      [],
       { trackedAccountRiskTolerance: "medium", permittedAssetClasses: "Stocks, ETFs" },
       "2026-04-02",
       jest.fn()
@@ -136,6 +141,7 @@ describe("candidate screener determinism", () => {
       buildOpenAi(secondRawOrder),
       ["AMZN"],
       "Find high-quality large-cap additions.",
+      [],
       { trackedAccountRiskTolerance: "medium", permittedAssetClasses: "Stocks, ETFs" },
       "2026-04-02",
       jest.fn()
@@ -143,5 +149,62 @@ describe("candidate screener determinism", () => {
 
     expect(pickStableShape(first)).toEqual(pickStableShape(second));
     expect(second.map((candidate) => candidate.ticker)).toEqual(["AAPL", "MSFT", "NVDA"]);
+  });
+
+  test("macro-lane candidates preserve provenance and still go through the normal validation path", async () => {
+    const openAi = {
+      chat: {
+        completions: {
+          create: jest
+            .fn()
+            .mockResolvedValueOnce({
+              choices: [{ message: { content: JSON.stringify([{ ticker: "AAPL", companyName: "Apple", reason: "Structural fit" }]) } }],
+            })
+            .mockResolvedValueOnce({
+              choices: [{ message: { content: JSON.stringify([{ ticker: "LMT", companyName: "Lockheed Martin", reason: "Fits defense lane" }]) } }],
+            }),
+        },
+      },
+    };
+
+    installFetchMock({ AAPL: 5, LMT: 5 });
+    const result = await screenCandidates(
+      openAi,
+      ["MSFT"],
+      "Find high-quality large-cap additions.",
+      [
+        {
+          laneId: "macro_lane:defense_fiscal_beneficiaries",
+          laneKey: "defense_fiscal_beneficiaries",
+          description: "Defense and fiscal beneficiaries.",
+          allowedAssetClasses: ["Stocks", "ETFs"],
+          searchTags: ["defense primes"],
+          priority: 1,
+          sortBehavior: "priority_then_ticker",
+          origin: "environmental_gap",
+          themeIds: ["macro_theme:defense_fiscal_upcycle"],
+          environmentalGapIds: ["env_gap:defense_fiscal_upcycle"],
+          bridgeRuleIds: ["bridge.defense_procurement"],
+          rationaleSummary: "Defense spending upcycle",
+        },
+      ],
+      { trackedAccountRiskTolerance: "medium", permittedAssetClasses: "Stocks, ETFs" },
+      "2026-04-02",
+      jest.fn()
+    );
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ticker: "LMT",
+          source: "macro_lane",
+          candidateOrigin: "macro_lane",
+          discoveryLaneId: "macro_lane:defense_fiscal_beneficiaries",
+          macroThemeIds: ["macro_theme:defense_fiscal_upcycle"],
+          environmentalGapIds: ["env_gap:defense_fiscal_upcycle"],
+          validatedPrice: 100,
+        }),
+      ])
+    );
   });
 });

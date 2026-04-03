@@ -1,38 +1,43 @@
 /**
  * Stage 0-C/D: Candidate Stock Screener
- * Fixes applied:
- *   F2  - Candidate price sanity validation (no delisted/hallucinated tickers)
- *   W12 - No recency bias (searches over 30 days not just 7)
- *   W17 - No large-cap bias (explicit small/mid-cap option)
- *   W28 - Ticker alias deduplication (GOOGL/GOOG, BRK.A/BRK.B, etc.)
+ * Structural search brief plus bounded macro lane inputs.
  */
 
 import type { ProgressEvent } from "./progress-events";
+import type { CandidateSearchLane, ScreenedCandidate, ScreenedCandidateSource } from "./types";
 
-export interface Candidate {
+interface RawCandidate {
   ticker: string;
   companyName: string;
-  source: "gap_screener" | "momentum";
+  source: ScreenedCandidateSource;
+  candidateOrigin: "structural" | "macro_lane";
   reason: string;
   catalyst?: string;
   analystRating?: string;
-  validatedPrice?: number;
+  discoveryLaneId?: string | null;
+  macroThemeIds?: string[];
+  environmentalGapIds?: string[];
 }
 
-function candidateSourcePriority(source: Candidate["source"]): number {
+function candidateSourcePriority(source: ScreenedCandidateSource): number {
   switch (source) {
     case "gap_screener":
       return 0;
-    case "momentum":
+    case "macro_lane":
       return 1;
-    default:
+    case "momentum":
       return 2;
+    default:
+      return 3;
   }
 }
 
-function compareCandidatesDeterministically(a: Candidate, b: Candidate): number {
+function compareCandidatesDeterministically(a: ScreenedCandidate, b: ScreenedCandidate): number {
   const sourceDelta = candidateSourcePriority(a.source) - candidateSourcePriority(b.source);
   if (sourceDelta !== 0) return sourceDelta;
+
+  const laneDelta = String(a.discoveryLaneId ?? "").localeCompare(String(b.discoveryLaneId ?? ""));
+  if (laneDelta !== 0) return laneDelta;
 
   const tickerDelta = a.ticker.localeCompare(b.ticker);
   if (tickerDelta !== 0) return tickerDelta;
@@ -119,19 +124,34 @@ function extractJsonArray(raw: string): any[] {
   return [];
 }
 
+function summarizeMacroLanes(lanes: CandidateSearchLane[]): string {
+  if (lanes.length === 0) {
+    return "";
+  }
+
+  return lanes
+    .map((lane) => `${lane.laneKey}: ${lane.description}. Search tags: ${lane.searchTags.join(", ")}.`)
+    .join("\n");
+}
+
+function buildMacroLaneMap(lanes: CandidateSearchLane[]): Map<string, CandidateSearchLane> {
+  return new Map(lanes.map((lane) => [lane.laneId, lane]));
+}
+
 export async function screenCandidates(
   openai: any,
   existingTickers: string[],
-  searchBrief: string,
+  structuralSearchBrief: string,
+  macroCandidateSearchLanes: CandidateSearchLane[],
   profile: Record<string, any>,
   today: string,
   emit: (e: ProgressEvent) => void
-): Promise<Candidate[]> {
+): Promise<ScreenedCandidate[]> {
   emit({
     type: "stage_start",
     stage: "candidates",
     label: "Candidate Stock Screening",
-    detail: "Gap-targeted screener + momentum (30-day window, size-agnostic)",
+    detail: "Structural gap-targeted screening plus bounded macro candidate lanes",
   });
   const t0 = Date.now();
 
@@ -143,12 +163,13 @@ export async function screenCandidates(
     : "liquid with average daily volume >500K shares";
 
   const excludedSet = expandAliases(existingTickers);
+  const laneMap = buildMacroLaneMap(macroCandidateSearchLanes);
 
   async function fetchWithRetry(prompt: string, attempt = 1): Promise<any> {
     try {
       return await openai.chat.completions.create({
         model: "gpt-5-search-api",
-        max_completion_tokens: 300,
+        max_completion_tokens: 350,
         messages: [{ role: "user", content: prompt }],
       });
     } catch (err: any) {
@@ -162,8 +183,19 @@ export async function screenCandidates(
     }
   }
 
-  const unifiedPrompt = `Today is ${today}. Find 3-4 stocks that fill this portfolio gap: "${searchBrief}".
-Find 3-4 MORE stocks with significant positive catalysts (earnings beats, FDA approvals, major contract wins, analyst upgrades) in the last 30 days.
+  const prompts: Array<{
+    source: ScreenedCandidateSource;
+    candidateOrigin: "structural" | "macro_lane";
+    discoveryLaneId: string | null;
+    prompt: string;
+    macroThemeIds?: string[];
+    environmentalGapIds?: string[];
+  }> = [
+    {
+      source: "gap_screener",
+      candidateOrigin: "structural",
+      discoveryLaneId: null,
+      prompt: `Today is ${today}. Find 3-4 stocks that fill this portfolio structural gap: "${structuralSearchBrief}".
 
 Requirements:
 - NOT any of these: ${excluded}
@@ -172,17 +204,41 @@ Requirements:
 - Currently rated Buy or Strong Buy by at least 1 major analyst
 - Must have a specific event catalyst from the last 30 days
 
-Return ONLY a JSON array, no other text:
-[{"ticker":"SYMBOL","companyName":"Name","reason":"why this fills the gap OR why it has momentum","catalyst":"specific event and date","analystRating":"rating or none"}]`;
+Return ONLY a JSON array:
+[{"ticker":"SYMBOL","companyName":"Name","reason":"why this fills the structural gap","catalyst":"specific event and date","analystRating":"rating or none"}]`,
+    },
+  ];
 
-  const unifiedRes = await fetchWithRetry(unifiedPrompt);
+  for (const lane of macroCandidateSearchLanes) {
+    prompts.push({
+      source: "macro_lane",
+      candidateOrigin: "macro_lane",
+      discoveryLaneId: lane.laneId,
+      macroThemeIds: lane.themeIds,
+      environmentalGapIds: lane.environmentalGapIds,
+      prompt: `Today is ${today}. Search only within this bounded macro candidate lane:
+${summarizeMacroLanes([lane])}
 
-  const candidates: Candidate[] = [];
+Requirements:
+- NOT any of these: ${excluded}
+- Asset types: ${permittedAssets}
+- ${liquidityReq}
+- Currently rated Buy or Strong Buy by at least 1 major analyst
+- Must have a specific catalyst or business support reason from the last 30 days
+- The result must fit the lane; do not invent unrelated names
+
+Return ONLY a JSON array:
+[{"ticker":"SYMBOL","companyName":"Name","reason":"why this fits the lane","catalyst":"specific event and date","analystRating":"rating or none"}]`,
+    });
+  }
+
+  const rawCandidates: RawCandidate[] = [];
   const seenTickers = new Set(excludedSet);
 
-  const parseAndAdd = (res: any) => {
-    if (!res) return;
-    const raw = (res as any).choices?.[0]?.message?.content ?? "";
+  for (const promptConfig of prompts) {
+    const res = await fetchWithRetry(promptConfig.prompt);
+    if (!res) continue;
+    const raw = res?.choices?.[0]?.message?.content ?? "";
     const items = extractJsonArray(raw);
 
     for (const item of items) {
@@ -197,23 +253,25 @@ Return ONLY a JSON array, no other text:
       }
 
       seenTickers.add(ticker);
-      candidates.push({
+      rawCandidates.push({
         ticker,
         companyName: String(item.companyName ?? "").slice(0, 60),
-        source: "gap_screener",
-        reason: String(item.reason ?? "").slice(0, 200),
+        source: promptConfig.source,
+        candidateOrigin: promptConfig.candidateOrigin,
+        reason: String(item.reason ?? "").slice(0, 220),
         catalyst: item.catalyst ? String(item.catalyst).slice(0, 200) : undefined,
         analystRating: item.analystRating ? String(item.analystRating).slice(0, 50) : undefined,
+        discoveryLaneId: promptConfig.discoveryLaneId,
+        macroThemeIds: promptConfig.macroThemeIds,
+        environmentalGapIds: promptConfig.environmentalGapIds,
       });
     }
-  };
+  }
 
-  parseAndAdd(unifiedRes);
+  emit({ type: "log", message: `Validating ${rawCandidates.length} candidates via price check...`, level: "info" });
 
-  emit({ type: "log", message: `Validating ${candidates.length} candidates via price check...`, level: "info" });
-
-  const validationResults: Array<Candidate | null> = await Promise.all(
-    candidates.map(async (candidate) => {
+  const validationResults: Array<ScreenedCandidate | null> = await Promise.all(
+    rawCandidates.map(async (candidate) => {
       const price = await validateCandidatePrice(candidate.ticker);
       if (price === null) {
         emit({ type: "log", message: `${candidate.ticker}: REJECTED - no live price (delisted or hallucinated)`, level: "warn" });
@@ -223,28 +281,29 @@ Return ONLY a JSON array, no other text:
       return {
         ...candidate,
         validatedPrice: price,
-      } as Candidate;
+      };
     })
   );
 
   const validated = validationResults
-    .filter((candidate): candidate is Candidate => candidate !== null)
+    .filter((candidate): candidate is ScreenedCandidate => candidate !== null)
     .sort(compareCandidatesDeterministically);
 
   for (const candidate of validated) {
+    const lane = candidate.discoveryLaneId ? laneMap.get(candidate.discoveryLaneId) : null;
     emit({
       type: "candidate_found",
       ticker: candidate.ticker,
       companyName: candidate.companyName,
       source: candidate.source,
-      reason: candidate.reason,
+      reason: lane ? `${candidate.reason} [lane: ${lane.laneKey}]` : candidate.reason,
       catalyst: candidate.catalyst,
     });
   }
 
   emit({
     type: "log",
-    message: `Candidates: ${validated.length} validated, ${candidates.length - validated.length} rejected`,
+    message: `Candidates: ${validated.length} validated, ${rawCandidates.length - validated.length} rejected`,
     level: "info",
   });
   emit({ type: "stage_complete", stage: "candidates", durationMs: Date.now() - t0 });
