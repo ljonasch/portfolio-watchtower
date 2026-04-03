@@ -120,6 +120,23 @@ type SortKey =
   | "ticker" | "role" | "targetWeight" | "targetShares"
   | "shareDelta" | "currentWeight" | "action" | "confidence" | "dollarDelta";
 
+function buildRecommendationRowBaseKey(rec: RecommendationRow): string {
+  if (rec.id) return `id:${rec.id}`;
+
+  return [
+    "fallback",
+    rec.ticker,
+    rec.role ?? "",
+    rec.action,
+    rec.currentShares,
+    rec.targetShares,
+    rec.currentWeight,
+    rec.targetWeight,
+    rec.shareDelta,
+    rec.dollarDelta ?? 0,
+  ].join("|");
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function SortableRecommendationsTable({
@@ -160,6 +177,18 @@ export function SortableRecommendationsTable({
     if (aVal < bVal) return sortDir === "asc" ? -1 : 1;
     if (aVal > bVal) return sortDir === "asc" ? 1 : -1;
     return 0;
+  });
+
+  const duplicateOrdinals = new Map<string, number>();
+  const keyedRecs = sortedRecs.map((rec) => {
+    const baseKey = buildRecommendationRowBaseKey(rec);
+    const ordinal = duplicateOrdinals.get(baseKey) ?? 0;
+    duplicateOrdinals.set(baseKey, ordinal + 1);
+
+    return {
+      rec,
+      rowKey: `${baseKey}|${ordinal}`,
+    };
   });
 
   const convictionMap = new Map(convictions.map(c => [c.ticker, c]));
@@ -217,14 +246,14 @@ export function SortableRecommendationsTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/80 bg-slate-900/20">
-            {sortedRecs.map(rec => {
+            {keyedRecs.map(({ rec, rowKey }) => {
               const isNew = rec.isNewPosition;
               const hasConviction = convictionMap.has(rec.ticker);
               const isSell = rec.actionBadgeVariant === "sell" || rec.actionBadgeVariant === "exit" || rec.actionBadgeVariant === "trim";
 
               return (
                   <tr
-                    key={rec.id}
+                    key={rowKey}
                     className={`hover:bg-slate-800/30 transition-colors align-top ${
                       isNew ? "bg-green-950/10" : isSell ? "bg-red-950/10" : ""
                     }`}
