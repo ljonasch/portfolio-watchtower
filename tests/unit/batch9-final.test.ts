@@ -223,10 +223,18 @@ describe("F4 â€” anti-churn audit field separation", () => {
     const result = applyAntiChurnOverride(recommendations, 1.5);
     const rec = result[0];
 
-    expect(rec.action).toBe("Hold");
-    expect(rec.whyChanged).toBe(originalWhyChanged);
+    expect(rec).toEqual(expect.objectContaining({
+      action: "Hold",
+      targetShares: 10,
+      shareDelta: 0,
+      targetWeight: 10,
+      dollarDelta: 0,
+      valueDelta: 0,
+    }));
+    expect(rec.whyChanged).toContain("Anti-churn override deferred this below-threshold rebalance");
+    expect(rec.whyChanged).toContain(originalWhyChanged);
     expect(rec.systemNote).toContain("Action normalized to Hold");
-    expect(rec.systemNote).toContain("antichurn threshold 1.5%");
+    expect(rec.systemNote).toContain("Target shares and deltas were reset to preserve Hold semantics");
   });
 
   test("runtime anti-churn path now delegates to applyAntiChurnOverride", () => {

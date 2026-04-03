@@ -41,10 +41,61 @@ import type {
 
 export type RecommendationResult = RecommendationV3;
 
+function appendSystemNote(rec: RecommendationV3, note: string): string {
+  return rec.systemNote ? `${rec.systemNote} ${note}` : note;
+}
+
+function buildConsistencyWhyChanged(original: string, reason: string): string {
+  return original ? `${reason} Original rationale: ${original}` : reason;
+}
+
+function deriveActionFromTargets(rec: RecommendationV3): RecommendationV3["action"] {
+  const expectedDelta = Number(((rec.targetShares ?? 0) - (rec.currentShares ?? 0)).toFixed(2));
+
+  if (expectedDelta > 0) return "Buy";
+  if (expectedDelta < 0 && (rec.targetShares ?? 0) === 0) return "Exit";
+  if (expectedDelta < 0) return "Trim";
+  return "Hold";
+}
+
+function collapseActionToHold(
+  rec: RecommendationV3,
+  note: string,
+  whyChangedReason: string
+): RecommendationV3 {
+  return {
+    ...rec,
+    targetShares: rec.currentShares,
+    shareDelta: 0,
+    targetWeight: Number((rec.currentWeight ?? 0).toFixed(2)),
+    dollarDelta: 0,
+    valueDelta: 0,
+    action: "Hold",
+    systemNote: appendSystemNote(rec, note),
+    whyChanged: buildConsistencyWhyChanged(rec.whyChanged, whyChangedReason),
+  };
+}
+
 export function applyAntiChurnOverride(
   recommendations: RecommendationV3[],
   antichurnThresholdPct: number
 ): RecommendationV3[] {
+  for (const rec of recommendations) {
+    const weightShift = (rec.targetWeight || 0) - (rec.currentWeight || 0);
+    if (
+      (rec.action === "Trim" || rec.action === "Buy") &&
+      Math.abs(weightShift) < antichurnThresholdPct &&
+      rec.targetShares > 0 &&
+      rec.currentShares > 0
+    ) {
+      const antiChurnNote = `Action normalized to Hold: |Δweight| ${Math.abs(weightShift).toFixed(2)}% < antichurn threshold ${antichurnThresholdPct}%. Target shares and deltas were reset to preserve Hold semantics.`;
+      const antiChurnWhyChanged = `Anti-churn override deferred this below-threshold rebalance (${Math.abs(weightShift).toFixed(2)}% < ${antichurnThresholdPct}%).`;
+      Object.assign(rec, collapseActionToHold(rec, antiChurnNote, antiChurnWhyChanged));
+    }
+  }
+
+  return recommendations;
+
   for (const rec of recommendations) {
     const weightShift = (rec.targetWeight || 0) - (rec.currentWeight || 0);
     if (
@@ -61,6 +112,51 @@ export function applyAntiChurnOverride(
     }
   }
   return recommendations;
+}
+
+export function enforceFinalRecommendationConsistency(
+  recommendations: RecommendationV3[],
+  materialWeightThresholdPct = 0.05
+): RecommendationV3[] {
+  return recommendations.map((rec) => {
+    if (rec.action !== "Hold") {
+      return rec;
+    }
+
+    const shareDelta = Number(((rec.targetShares ?? 0) - (rec.currentShares ?? 0)).toFixed(2));
+    const weightDelta = Math.abs((rec.targetWeight ?? 0) - (rec.currentWeight ?? 0));
+    const dollarDelta = Math.abs(rec.dollarDelta ?? 0);
+    const hasMaterialMismatch =
+      Math.abs(shareDelta) > 0 ||
+      weightDelta >= materialWeightThresholdPct ||
+      dollarDelta >= 1;
+
+    if (!hasMaterialMismatch) {
+      return rec;
+    }
+
+    const repairedAction = deriveActionFromTargets(rec);
+    if (repairedAction === "Hold") {
+      return collapseActionToHold(
+        rec,
+        "Final consistency guard aligned the row to true Hold semantics after post-processing left residual target deltas.",
+        "Final consistency guard aligned this row to true Hold semantics after post-processing left residual target deltas."
+      );
+    }
+
+    return {
+      ...rec,
+      action: repairedAction,
+      systemNote: appendSystemNote(
+        rec,
+        `Final consistency guard restored action \"${repairedAction}\" because the row still carried material target deltas after post-processing.`
+      ),
+      whyChanged: buildConsistencyWhyChanged(
+        rec.whyChanged,
+        `Final consistency guard restored action \"${repairedAction}\" because the final targets still implied a non-Hold change.`
+      ),
+    };
+  });
 }
 
 // ─── Build the structured analysis prompt ─────────────────────────────────────
@@ -547,6 +643,7 @@ ${breaking24h}
 
   const lowChurnResult = applyLowChurnRecommendationPolicy(recommendations, ctx, safeAntichurnThreshold);
   recommendations = lowChurnResult.recommendations;
+  recommendations = enforceFinalRecommendationConsistency(recommendations);
 
   const { valid: postPolicyWeightValid, sum: postPolicyWeightSum } = validateWeightSum(recommendations);
   if (!postPolicyWeightValid || Math.abs(postPolicyWeightSum - 100) > 0.05) {
