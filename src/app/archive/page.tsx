@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
-import { Archive, BarChart2, Calendar, ChevronRight, Package } from "lucide-react";
+import { Archive, BarChart2, Calendar, ChevronRight, FileText, Package } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -11,9 +11,36 @@ function fmtVal(n: number) {
   return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
+function parseReportViewModel(value: string) {
+  try {
+    return JSON.parse(value) as {
+      summaryMessage?: string;
+      recommendations?: Array<{ id?: string; ticker?: string; action?: string; thesisSummary?: string }>;
+    };
+  } catch {
+    return { summaryMessage: null, recommendations: [] };
+  }
+}
+
 export default async function ArchivePage() {
   const user = await (prisma as any).user.findFirst();
   if (!user) return <div>No user found.</div>;
+
+  const archivedBundles = await prisma.analysisBundle.findMany({
+    where: {
+      userId: user.id,
+      bundleScope: "PRIMARY_PORTFOLIO",
+      archivedAt: { not: null },
+    },
+    orderBy: { archivedAt: "desc" },
+    select: {
+      id: true,
+      archivedAt: true,
+      finalizedAt: true,
+      bundleOutcome: true,
+      reportViewModelJson: true,
+    },
+  });
 
   const snapshots = await (prisma as any).portfolioSnapshot.findMany({
     where: { userId: user.id, archivedAt: { not: null } },
@@ -58,7 +85,69 @@ export default async function ArchivePage() {
         </p>
       </div>
 
-      {batches.length === 0 && (
+      {archivedBundles.length > 0 && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-xl font-bold flex items-center gap-2 text-slate-100">
+              <FileText className="w-5 h-5 text-indigo-400" />
+              Archived Reports
+            </h2>
+            <p className="text-sm text-slate-400 mt-1">
+              Bundle-backed reports archived from the report page remain available here for direct access.
+            </p>
+          </div>
+          <div className="space-y-3">
+            {archivedBundles.map((bundle) => {
+              const reportViewModel = parseReportViewModel(bundle.reportViewModelJson);
+              const topRecommendations = Array.isArray(reportViewModel.recommendations)
+                ? reportViewModel.recommendations.slice(0, 3)
+                : [];
+
+              return (
+                <Link
+                  key={bundle.id}
+                  href={`/report/${bundle.id}`}
+                  className="block rounded-2xl border border-slate-800 bg-slate-900/30 p-5 transition-colors hover:border-slate-700 hover:bg-slate-900/50"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-2 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-300">
+                          {bundle.bundleOutcome}
+                        </span>
+                        <span className="text-xs text-slate-500">
+                          Archived {bundle.archivedAt ? fmt(bundle.archivedAt) : "Unknown date"}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-300 leading-relaxed line-clamp-2">
+                        {reportViewModel.summaryMessage || "Archived bundle-backed report"}
+                      </p>
+                      {topRecommendations.length > 0 && (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {topRecommendations.map((rec, index) => (
+                            <span
+                              key={rec.id ?? `${bundle.id}-rec-${index}`}
+                              className="rounded-full border border-slate-700 bg-slate-900/60 px-2 py-0.5 text-[11px] text-slate-400"
+                            >
+                              {rec.ticker ?? "UNKNOWN"} {rec.action ?? ""}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-xs text-slate-500">Finalized</p>
+                      <p className="text-sm font-semibold text-slate-200">{fmt(bundle.finalizedAt)}</p>
+                    </div>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {batches.length === 0 && archivedBundles.length === 0 && (
         <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-12 text-center space-y-3">
           <Package className="w-10 h-10 text-slate-600 mx-auto" />
           <p className="text-slate-400 font-medium">No archives yet</p>
