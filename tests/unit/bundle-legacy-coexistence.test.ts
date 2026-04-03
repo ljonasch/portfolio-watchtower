@@ -1,12 +1,29 @@
-import { resolveBundleLegacyCoexistence } from "@/lib/backfill";
+import {
+  buildBundleArtifactIdentityKey,
+  buildLegacyReportArtifactIdentityKey,
+  classifyBundleHistoryArtifact,
+  classifyLegacyReadOnlyArtifact,
+  resolveBundleLegacyCoexistence,
+} from "@/lib/backfill";
 
 describe("bundle and legacy coexistence", () => {
-  test("bundle wins and suppresses legacy when both represent the same artifact scope", () => {
+  test("bundle wins and suppresses legacy when both share the same artifact identity", () => {
+    const key = buildBundleArtifactIdentityKey({
+      userId: "user_1",
+      bundleScope: "PRIMARY_PORTFOLIO",
+      sourceRunId: "run_1",
+      portfolioSnapshotId: "snapshot_1",
+    });
+
     expect(
       resolveBundleLegacyCoexistence({
-        bundleArtifactId: "bundle_1",
-        legacyArtifactId: "report_1",
-        sameArtifactScope: true,
+        bundleArtifactIdentityKey: key,
+        legacyArtifactIdentityKey: buildLegacyReportArtifactIdentityKey({
+          userId: "user_1",
+          bundleScope: "PRIMARY_PORTFOLIO",
+          analysisRunId: "run_1",
+          portfolioSnapshotId: "snapshot_1",
+        }),
       })
     ).toEqual({
       preferredSource: "bundle",
@@ -14,16 +31,15 @@ describe("bundle and legacy coexistence", () => {
     });
   });
 
-  test("legacy remains available only when no bundle exists for that artifact scope", () => {
+  test("legacy artifact is explicitly classified as legacy_read_only", () => {
+    expect(classifyLegacyReadOnlyArtifact()).toBe("legacy_read_only");
+  });
+
+  test("backfilled bundles carry explicit provenance classification", () => {
     expect(
-      resolveBundleLegacyCoexistence({
-        bundleArtifactId: null,
-        legacyArtifactId: "report_legacy",
-        sameArtifactScope: false,
+      classifyBundleHistoryArtifact({
+        evidencePacketJson: JSON.stringify({ origin: "backfilled_legacy" }),
       })
-    ).toEqual({
-      preferredSource: "legacy",
-      suppressLegacy: false,
-    });
+    ).toBe("backfilled_legacy");
   });
 });

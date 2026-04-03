@@ -99,6 +99,179 @@ interface FinalizeAnalysisRunResult {
   outcome: FinalizeAnalysisRunInput["outcome"];
 }
 
+export interface PersistBackfilledLegacyBundleInput {
+  legacyArtifactId: string;
+  artifactIdentityKey: string;
+  userId: string;
+  bundleScope: string;
+  analysisRunId: string;
+  snapshotId: string;
+  createdAt: Date;
+  finalizedAt: Date;
+  summary: string;
+  reasoning: string;
+  marketContext: Record<string, unknown>;
+  recommendations: Array<{
+    id: string;
+    ticker: string;
+    companyName: string | null;
+    role: string | null;
+    currentShares: number;
+    targetShares: number;
+    shareDelta: number;
+    currentWeight: number;
+    targetWeight: number;
+    valueDelta: number;
+    dollarDelta: number | null;
+    acceptableRangeLow: number | null;
+    acceptableRangeHigh: number | null;
+    action: string;
+    confidence: string | null;
+    positionStatus: string | null;
+    evidenceQuality: string | null;
+    thesisSummary: string | null;
+    detailedReasoning: string | null;
+    whyChanged: string | null;
+    systemNote: string | null;
+    reasoningSources: Array<Record<string, unknown>>;
+  }>;
+  profileSnapshot: Record<string, unknown>;
+  convictionsSnapshot: Array<Record<string, unknown>>;
+}
+
+function buildBackfilledLegacyBundlePayload(input: PersistBackfilledLegacyBundleInput) {
+  const provenance = {
+    origin: "backfilled_legacy" as const,
+    legacyArtifactId: input.legacyArtifactId,
+    artifactIdentityKey: input.artifactIdentityKey,
+    backfilledAt: new Date().toISOString(),
+  };
+
+  return {
+    bundleScope: input.bundleScope,
+    portfolioSnapshotHash: hashJson({
+      legacyArtifactId: input.legacyArtifactId,
+      snapshotId: input.snapshotId,
+    }),
+    userProfileSnapshotJson: JSON.stringify(input.profileSnapshot),
+    userProfileHash: hashJson(input.profileSnapshot),
+    convictionSnapshotJson: JSON.stringify(input.convictionsSnapshot),
+    convictionHash: hashJson(input.convictionsSnapshot),
+    analysisPolicyVersion: "legacy-backfill-v1",
+    schemaVersion: "legacy-backfill-v1",
+    promptVersion: "legacy-backfill-v1",
+    viewModelVersion: "legacy-backfill-v1",
+    emailTemplateVersion: "legacy-backfill-v1",
+    modelPolicyVersion: "legacy-backfill-v1",
+    evidencePacketJson: JSON.stringify(provenance),
+    evidenceHash: hashJson(provenance),
+    evidenceFreshnessJson: JSON.stringify({
+      source: "legacy_persisted",
+      finalizedAt: input.finalizedAt.toISOString(),
+      backfilledAt: provenance.backfilledAt,
+    }),
+    sourceListJson: JSON.stringify([]),
+    primaryModel: "legacy_backfill",
+    llmStructuredScoreJson: JSON.stringify({ origin: provenance.origin }),
+    llmResponseHash: null,
+    llmUsageJson: JSON.stringify({}),
+    factorLedgerJson: JSON.stringify({
+      legacyArtifactId: input.legacyArtifactId,
+      artifactIdentityKey: input.artifactIdentityKey,
+    }),
+    recommendationDecisionJson: JSON.stringify({
+      recommendationsCount: input.recommendations.length,
+    }),
+    positionSizingJson: JSON.stringify({
+      recommendations: input.recommendations.map((row) => ({
+        ticker: row.ticker,
+        targetShares: row.targetShares,
+        targetWeight: row.targetWeight,
+      })),
+    }),
+    bundleOutcome: "validated",
+    validationSummaryJson: JSON.stringify({
+      hardErrorCount: 0,
+      warningCount: 0,
+      reasonCodes: [],
+      debugDetailsRef: input.legacyArtifactId,
+    }),
+    abstainReasonCodesJson: JSON.stringify([]),
+    degradedReasonCodesJson: JSON.stringify([]),
+    reportViewModelJson: JSON.stringify({
+      bundleId: "pending",
+      bundleOutcome: "validated",
+      renderState: "validated_actionable",
+      createdAt: input.createdAt.toISOString(),
+      finalizedAt: input.finalizedAt.toISOString(),
+      summaryMessage: input.summary,
+      reasoning: input.reasoning,
+      reasonCodes: [],
+      recommendations: input.recommendations.map((row) => ({
+        id: row.id,
+        ticker: row.ticker,
+        companyName: row.companyName ?? row.ticker,
+        role: row.role ?? "legacy",
+        currentShares: row.currentShares,
+        targetShares: row.targetShares,
+        shareDelta: row.shareDelta,
+        currentWeight: row.currentWeight,
+        targetWeight: row.targetWeight,
+        acceptableRangeLow: row.acceptableRangeLow,
+        acceptableRangeHigh: row.acceptableRangeHigh,
+        dollarDelta: row.dollarDelta ?? 0,
+        action: row.action,
+        actionLabel: row.action,
+        actionBadgeVariant: String(row.action).toLowerCase() as "buy" | "hold" | "trim" | "sell" | "exit",
+        sortPriority: 0,
+        confidence: row.confidence ?? "medium",
+        positionStatus: row.positionStatus ?? "on_target",
+        evidenceQuality: row.evidenceQuality ?? "medium",
+        thesisSummary: row.thesisSummary ?? "",
+        detailedReasoning: row.detailedReasoning ?? "",
+        whyChanged: row.whyChanged,
+        systemNote: row.systemNote ?? null,
+        sources: row.reasoningSources ?? [],
+        isNewPosition: row.currentShares === 0 && row.targetShares > 0,
+        isExiting: row.targetShares === 0,
+        hasStcgWarning: false,
+        isFractionalRebalance: false,
+      })),
+      deliveryStatus: "not_eligible",
+      isActionable: true,
+      isSuperseded: false,
+      historicalValidatedContextBundleId: null,
+    }),
+    emailPayloadJson: JSON.stringify({
+      bundleId: "pending",
+      generatedAt: input.finalizedAt.toISOString(),
+      subject: `Backfilled portfolio update`,
+      summary: input.summary,
+      html: "",
+      recommendations: input.recommendations.map((row) => ({
+        ticker: row.ticker,
+        companyName: row.companyName ?? row.ticker,
+        action: row.action,
+        targetShares: row.targetShares,
+        targetWeight: row.targetWeight,
+        thesisSummary: row.thesisSummary ?? "",
+      })),
+    }),
+    exportPayloadJson: JSON.stringify({
+      summary: input.summary,
+      reasoning: input.reasoning,
+      alertLevel: null,
+      alertReason: null,
+      recommendations: input.recommendations,
+      marketContext: input.marketContext,
+      origin: provenance.origin,
+    }),
+    deliveryStatus: "not_eligible" as const,
+    finalizedAt: input.finalizedAt,
+    createdAt: input.createdAt,
+  };
+}
+
 function hashJson(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -326,6 +499,84 @@ export async function finalizeAnalysisRun(input: FinalizeAnalysisRunInput): Prom
       bundleId: bundle.id,
       reportId,
       outcome: input.outcome,
+    };
+  });
+}
+
+export async function persistBackfilledLegacyBundle(input: PersistBackfilledLegacyBundleInput) {
+  const existingBundle = await prisma.analysisBundle.findUnique({
+    where: { sourceRunId: input.analysisRunId },
+    select: { id: true },
+  });
+
+  if (existingBundle) {
+    return {
+      bundleId: existingBundle.id,
+      origin: "backfilled_legacy" as const,
+      artifactIdentityKey: input.artifactIdentityKey,
+    };
+  }
+
+  const payload = buildBackfilledLegacyBundlePayload(input);
+
+  return prisma.$transaction(async (tx) => {
+    const currentBundle = await tx.analysisBundle.findFirst({
+      where: {
+        userId: input.userId,
+        bundleScope: input.bundleScope,
+        isSuperseded: false,
+      },
+      orderBy: { finalizedAt: "desc" },
+      select: {
+        id: true,
+        finalizedAt: true,
+      },
+    });
+
+    const bundle = await tx.analysisBundle.create({
+      data: {
+        userId: input.userId,
+        sourceRunId: input.analysisRunId,
+        portfolioSnapshotId: input.snapshotId,
+        ...payload,
+        isSuperseded: !!currentBundle && currentBundle.finalizedAt >= input.finalizedAt,
+        supersededAt: currentBundle && currentBundle.finalizedAt >= input.finalizedAt
+          ? currentBundle.finalizedAt
+          : null,
+      },
+    });
+
+    await tx.analysisBundle.update({
+      where: { id: bundle.id },
+      data: {
+        reportViewModelJson: JSON.stringify({
+          ...JSON.parse(payload.reportViewModelJson),
+          bundleId: bundle.id,
+        }),
+        emailPayloadJson: JSON.stringify({
+          ...JSON.parse(payload.emailPayloadJson!),
+          bundleId: bundle.id,
+        }),
+      },
+    });
+
+    if (input.recommendations.length > 0) {
+      await tx.holdingRecommendation.updateMany({
+        where: {
+          id: {
+            in: input.recommendations.map((row) => row.id),
+          },
+        },
+        data: {
+          analysisBundleId: bundle.id,
+        },
+      });
+    }
+
+    return {
+      bundleId: bundle.id,
+      origin: "backfilled_legacy" as const,
+      artifactIdentityKey: input.artifactIdentityKey,
     };
   });
 }

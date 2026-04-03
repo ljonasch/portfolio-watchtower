@@ -2,6 +2,7 @@ import type { BundleScope } from "@/lib/contracts";
 
 export type LegacyBackfillReadiness =
   | "ready_for_backfill"
+  | "ready_for_actionable_backfill"
   | "not_backfillable_missing_snapshot"
   | "not_backfillable_missing_recommendations"
   | "not_backfillable_incoherent_links"
@@ -14,6 +15,8 @@ export interface LegacyArtifactScope {
   portfolioSnapshotId: string | null;
 }
 
+export interface LegacyArtifactIdentityInput extends LegacyArtifactScope {}
+
 export interface LegacyArtifactReadinessInput {
   legacyArtifactId: string;
   scope: LegacyArtifactScope;
@@ -21,13 +24,23 @@ export interface LegacyArtifactReadinessInput {
   hasRecommendations: boolean;
   hasReportContent: boolean;
   hasCoherentLinks: boolean;
+  hasPersistedProfileSnapshot: boolean;
+  hasPersistedConvictionsSnapshot: boolean;
   bundleArtifactId: string | null;
 }
 
-export interface CoexistenceArtifactInput {
-  bundleArtifactId: string | null;
-  legacyArtifactId: string | null;
-  sameArtifactScope: boolean;
+export function buildLegacyArtifactIdentityKey(input: LegacyArtifactIdentityInput): string | null {
+  if (!input.analysisRunId || !input.portfolioSnapshotId) {
+    return null;
+  }
+
+  return [
+    "artifact",
+    input.userId,
+    input.bundleScope,
+    input.analysisRunId,
+    input.portfolioSnapshotId,
+  ].join("::");
 }
 
 export function evaluateLegacyBackfillReadiness(
@@ -41,44 +54,25 @@ export function evaluateLegacyBackfillReadiness(
     return "not_backfillable_missing_snapshot";
   }
 
-  if (!input.hasRecommendations || !input.hasReportContent) {
-    return "not_backfillable_missing_recommendations";
-  }
-
-  if (!input.hasCoherentLinks || !input.scope.portfolioSnapshotId) {
+  if (!input.hasCoherentLinks || !buildLegacyArtifactIdentityKey(input.scope)) {
     return "not_backfillable_incoherent_links";
   }
 
-  return "ready_for_backfill";
-}
-
-export function resolveBundleLegacyCoexistence(input: CoexistenceArtifactInput): {
-  preferredSource: "bundle" | "legacy" | null;
-  suppressLegacy: boolean;
-} {
-  if (input.bundleArtifactId && input.sameArtifactScope) {
-    return {
-      preferredSource: "bundle",
-      suppressLegacy: true,
-    };
+  if (!input.hasReportContent) {
+    return "not_backfillable_missing_recommendations";
   }
 
-  if (input.legacyArtifactId) {
-    return {
-      preferredSource: "legacy",
-      suppressLegacy: false,
-    };
+  if (
+    input.hasRecommendations &&
+    input.hasPersistedProfileSnapshot &&
+    input.hasPersistedConvictionsSnapshot
+  ) {
+    return "ready_for_actionable_backfill";
   }
 
-  if (input.bundleArtifactId) {
-    return {
-      preferredSource: "bundle",
-      suppressLegacy: false,
-    };
+  if (input.hasRecommendations) {
+    return "ready_for_backfill";
   }
 
-  return {
-    preferredSource: null,
-    suppressLegacy: false,
-  };
+  return "not_backfillable_missing_recommendations";
 }

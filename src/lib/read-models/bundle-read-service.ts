@@ -5,6 +5,13 @@ import type {
   HistoryItemViewModelContract,
   ReportViewModelContract,
 } from "@/lib/contracts";
+import {
+  buildBundleArtifactIdentityKey,
+  buildLegacyReportArtifactIdentityKey,
+  classifyLegacyReadOnlyArtifact,
+  extractBundleOrigin,
+  resolveBundleLegacyCoexistence,
+} from "@/lib/backfill";
 import { buildDeliveryEligibility } from "./delivery-eligibility";
 import { selectCurrentBundle } from "./current-bundle-selector";
 
@@ -124,6 +131,7 @@ export async function getRequestedReportArtifact(userId: string, requestedId: st
   if (bundle && bundle.userId === userId) {
     return {
       source: "bundle" as const,
+      origin: extractBundleOrigin(bundle),
       bundle,
       reportViewModel: parseJsonField<ReportViewModelContract>(bundle.reportViewModelJson, "reportViewModelJson"),
     };
@@ -144,6 +152,7 @@ export async function getRequestedReportArtifact(userId: string, requestedId: st
 
   return {
     source: "legacy" as const,
+    classification: classifyLegacyReadOnlyArtifact(),
     report: legacyReport,
   };
 }
@@ -158,6 +167,7 @@ export async function getCurrentBundleReport(userId: string) {
 
     return {
       source: "bundle" as const,
+      origin: extractBundleOrigin(bundleResult.currentBundle),
       selection: bundleResult.selection,
       reportViewModel,
       bundle: bundleResult.currentBundle,
@@ -178,6 +188,7 @@ export async function getCurrentBundleReport(userId: string) {
 
   return {
     source: "legacy" as const,
+    classification: classifyLegacyReadOnlyArtifact(),
     selection: bundleResult.selection,
     reportViewModel: null,
     bundle: null,
@@ -188,8 +199,8 @@ export async function getCurrentBundleReport(userId: string) {
 }
 
 export async function getHistoryBundles(userId: string): Promise<Array<
-  | { source: "bundle"; bundle: any; historyItem: HistoryItemViewModelContract }
-  | { source: "legacy"; report: any }
+  | { source: "bundle"; origin: "runtime" | "backfilled_legacy"; artifactIdentityKey: string; bundle: any; historyItem: HistoryItemViewModelContract }
+  | { source: "legacy"; classification: "legacy_read_only"; artifactIdentityKey: string | null; report: any }
 >> {
   const bundles = await prisma.analysisBundle.findMany({
     where: { userId, bundleScope: "PRIMARY_PORTFOLIO" },
@@ -198,6 +209,13 @@ export async function getHistoryBundles(userId: string): Promise<Array<
 
   const historyItems = bundles.map((bundle) => ({
     source: "bundle" as const,
+    origin: extractBundleOrigin(bundle),
+    artifactIdentityKey: buildBundleArtifactIdentityKey({
+      userId: bundle.userId ?? userId,
+      bundleScope: bundle.bundleScope,
+      sourceRunId: bundle.sourceRunId,
+      portfolioSnapshotId: bundle.portfolioSnapshotId,
+    }),
     bundle,
     historyItem: {
       bundleId: bundle.id,
@@ -210,10 +228,7 @@ export async function getHistoryBundles(userId: string): Promise<Array<
   }));
 
   const bundleArtifactKeys = new Set(
-    bundles.flatMap((bundle) => [
-      `run:${bundle.sourceRunId}`,
-      `scope:${bundle.portfolioSnapshotId}:${bundle.bundleScope}:${bundle.finalizedAt.toISOString()}`,
-    ])
+    historyItems.map((item) => item.artifactIdentityKey)
   );
   const legacyReports = await prisma.portfolioReport.findMany({
     where: {
@@ -229,15 +244,30 @@ export async function getHistoryBundles(userId: string): Promise<Array<
 
   const legacyItems = legacyReports
     .filter((report) => {
-      const artifactKeys = [
-        report.analysisRunId ? `run:${report.analysisRunId}` : null,
-        `scope:${report.snapshotId}:PRIMARY_PORTFOLIO:${report.createdAt.toISOString()}`,
-      ].filter(Boolean) as string[];
+      const legacyArtifactIdentityKey = buildLegacyReportArtifactIdentityKey({
+        userId,
+        bundleScope: "PRIMARY_PORTFOLIO",
+        analysisRunId: report.analysisRunId,
+        portfolioSnapshotId: report.snapshotId,
+      });
+      const coexistence = resolveBundleLegacyCoexistence({
+        bundleArtifactIdentityKey: legacyArtifactIdentityKey && bundleArtifactKeys.has(legacyArtifactIdentityKey)
+          ? legacyArtifactIdentityKey
+          : null,
+        legacyArtifactIdentityKey,
+      });
 
-      return !artifactKeys.some((key) => bundleArtifactKeys.has(key));
+      return !coexistence.suppressLegacy;
     })
     .map((report) => ({
       source: "legacy" as const,
+      classification: classifyLegacyReadOnlyArtifact(),
+      artifactIdentityKey: buildLegacyReportArtifactIdentityKey({
+        userId,
+        bundleScope: "PRIMARY_PORTFOLIO",
+        analysisRunId: report.analysisRunId,
+        portfolioSnapshotId: report.snapshotId,
+      }),
       report,
       effectiveTimestamp: report.createdAt.getTime(),
     }));
