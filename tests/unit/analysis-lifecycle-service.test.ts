@@ -48,8 +48,20 @@ jest.mock("@/app/actions", () => ({
   enrichPricesWithLLM: jest.fn().mockResolvedValue({}),
 }));
 
+jest.mock("@/lib/email-templates", () => ({
+  renderDailyAlertEmail: jest.fn().mockReturnValue({
+    subject: "Daily Portfolio Watchtower",
+    html: "<p>Daily update</p>",
+  }),
+}));
+
+jest.mock("@/lib/services/email-delivery-service", () => ({
+  sendEmailNotification: jest.fn(),
+}));
+
 import { prisma } from "@/lib/prisma";
 import { runFullAnalysis } from "@/lib/research/analysis-orchestrator";
+import { renderDailyAlertEmail } from "@/lib/email-templates";
 import {
   finalizeAnalysisRun,
   persistBackfilledLegacyBundle,
@@ -57,6 +69,7 @@ import {
   runStreamAnalysis,
   type FinalizeAnalysisRunInput,
 } from "@/lib/services";
+import { sendEmailNotification } from "@/lib/services/email-delivery-service";
 
 function buildValidatedInput(): FinalizeAnalysisRunInput {
   return {
@@ -174,6 +187,7 @@ describe("analysis-lifecycle-service", () => {
     (prisma.analysisRun.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
     (prisma.analysisRun.update as jest.Mock).mockResolvedValue({ id: "run_1" });
     (prisma.holdingRecommendation.createMany as jest.Mock).mockResolvedValue({ count: 1 });
+    (sendEmailNotification as jest.Mock).mockResolvedValue({ id: "notif_1" });
   });
 
   test("delegates stream analysis through the lifecycle service boundary", async () => {
@@ -301,5 +315,70 @@ describe("analysis-lifecycle-service", () => {
     ).rejects.toThrow(
       'An analysis run is already in progress for this user. Please wait for it to complete. Active run run_conflict (manual, stage queued, started 2026-04-03T15:00:00.000Z).'
     );
+  });
+
+  test("scheduled daily checks email stable runs even when alertLevel is none", async () => {
+    (prisma.portfolioSnapshot.findFirst as jest.Mock).mockResolvedValue({
+      id: "snapshot_1",
+      holdings: [],
+    });
+    (prisma.notificationRecipient.findMany as jest.Mock).mockResolvedValue([
+      { email: "user@example.com", active: true },
+    ]);
+    (runFullAnalysis as jest.Mock).mockResolvedValue({
+      runId: "run_stable",
+      reportId: "report_stable",
+      alertLevel: "none",
+      alertReason: "Portfolio stable - no changes recommended",
+      changes: [],
+      report: {
+        summary: "Stable summary",
+        reasoning: "Stable reasoning",
+        recommendations: [],
+      },
+    });
+
+    await runDailyCheck({ triggerType: "scheduled", triggeredBy: "cron-scheduler" });
+
+    expect(renderDailyAlertEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reportId: "report_stable",
+        alertLevel: "none",
+      })
+    );
+    expect(sendEmailNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run_stable",
+        reportId: "report_stable",
+        recipient: "user@example.com",
+        type: "daily_alert",
+      })
+    );
+  });
+
+  test("manual stable runs still do not send a daily alert email", async () => {
+    (prisma.portfolioSnapshot.findFirst as jest.Mock).mockResolvedValue({
+      id: "snapshot_1",
+      holdings: [],
+    });
+    (prisma.notificationRecipient.findMany as jest.Mock).mockResolvedValue([
+      { email: "user@example.com", active: true },
+    ]);
+    (runFullAnalysis as jest.Mock).mockResolvedValue({
+      runId: "run_manual_stable",
+      reportId: "report_manual_stable",
+      alertLevel: "none",
+      alertReason: "Portfolio stable - no changes recommended",
+      changes: [],
+      report: {
+        summary: "Stable summary",
+        reasoning: "Stable reasoning",
+        recommendations: [],
+      },
+    });
+
+    await runDailyCheck({ triggerType: "manual", triggeredBy: "manual-debug-trigger" });
+
+    expect(sendEmailNotification).not.toHaveBeenCalled();
   });
 });

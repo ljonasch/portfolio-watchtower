@@ -645,6 +645,17 @@ async function findLatestActiveRun(userId: string): Promise<ActiveRunSummary | n
   };
 }
 
+function shouldSendDailyAlertEmail(
+  triggerType: "scheduled" | "manual" | "debug",
+  alertLevel: string | null | undefined
+): boolean {
+  if (triggerType === "scheduled") {
+    return true;
+  }
+
+  return alertLevel === "red" || alertLevel === "yellow";
+}
+
 export async function runDailyCheck(opts: {
   triggerType?: "scheduled" | "manual" | "debug";
   triggeredBy?: string;
@@ -727,7 +738,7 @@ export async function runDailyCheck(opts: {
       throw new Error(enrichConcurrentRunMessage(err.message, activeRun), { cause: err });
     }
 
-    const shouldEmailDaily = result.alertLevel === "red" || result.alertLevel === "yellow";
+    const shouldEmailDaily = shouldSendDailyAlertEmail(triggerType, result.alertLevel);
     if (shouldEmailDaily) {
       const recipients = await prisma.notificationRecipient.findMany({
         where: { userId: user.id, active: true },
