@@ -156,6 +156,7 @@ export async function runFullAnalysis(
   if (!stagingRun) throw new Error("Failed to create staging AnalysisRun record");
   const runId = stagingRun.id;
   let finalizedBundleId: string | null = null;
+  let promptHash: string | null = null;
 
   try {
 
@@ -357,7 +358,7 @@ export async function runFullAnalysis(
     correlation: correlationSection,
     candidates: candidateSection,
   });
-  const promptHash = buildPromptHash(additionalContext);
+  promptHash = buildPromptHash(additionalContext);
   emit({ type: "log", message: `Evidence packet assembled: ${additionalContext.length} chars, hash=${promptHash}`, level: "info" });
 
   let evidencePacketId: string | null = null;
@@ -750,7 +751,7 @@ export async function runFullAnalysis(
     },
     llm: {
       primaryModel: modelUsed,
-      structuredScore: reportData as Record<string, unknown>,
+      structuredScore: reportData as unknown as Record<string, unknown>,
       responseHash: hashPromptPayload(reportData),
       usage: {
         modelUsed,
@@ -797,6 +798,7 @@ export async function runFullAnalysis(
       bundleId: "pending",
       generatedAt: finalizedAt.toISOString(),
       subject: `Portfolio update for ${today}`,
+      html: "",
       summary: reportData.summary,
       recommendations: reportData.recommendations.map((r: any) => ({
         ticker: r.ticker,

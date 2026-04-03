@@ -188,9 +188,9 @@ export interface PortfolioReportV3 {
 export interface ValidationError {
   field: string;
   ticker?: string;
-  expected: string;       // what was expected (added Batch 2)
-  received: string;       // what was received
-  corrected: boolean;
+  expected?: string;       // what was expected (added Batch 2)
+  received?: string;       // what was received
+  corrected?: boolean;
   correctionApplied?: string;
   // kept for backward compat with validator layer
   message?: string;

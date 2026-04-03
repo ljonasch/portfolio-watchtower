@@ -103,7 +103,8 @@ export default async function HistoryPage() {
             // Recalculate level if missing (for legacy or manual runs)
             let alertLevel = (report.analysisRun?.alertLevel ?? "none") as any;
             if (!report.analysisRun && profile) {
-              const nextReport = historyRows[i + 1]?.source === "legacy" ? historyRows[i + 1].report : null;
+              const nextRow = historyRows[i + 1];
+              const nextReport = nextRow && nextRow.source === "legacy" ? nextRow.report : null;
               const changes = compareRecommendations(nextReport?.recommendations || [], report.recommendations);
               const alert = evaluateAlert(changes, report.recommendations, profile, null);
               alertLevel = alert.level;

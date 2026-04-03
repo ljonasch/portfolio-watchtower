@@ -86,6 +86,7 @@ describe("view-model contract fixtures", () => {
       bundleId: "bundle_validated",
       generatedAt: "2026-04-02T10:02:00.000Z",
       subject: "Portfolio update",
+      html: "<p>Validated analysis complete</p>",
       summary: "Validated analysis complete",
       recommendations: [],
     };

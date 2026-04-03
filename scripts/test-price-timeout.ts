@@ -4,6 +4,8 @@
  * Then verifies with 4000ms that it's still respected.
  */
 
+export {};
+
 // Must be set before any module that reads it is imported
 process.env["PRICE_FETCH_TIMEOUT_MS"] = "1";
 

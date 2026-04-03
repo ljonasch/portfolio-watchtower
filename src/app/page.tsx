@@ -230,7 +230,7 @@ export default async function Dashboard() {
             </div>
           </div>
           <SortableRecommendationsTable 
-            recommendations={latestReport.recommendations}
+            recommendations={latestReport.recommendations as any}
             convictions={(allConvictions as any[]).map((c: any) => ({ ticker: c.ticker, rationale: c.rationale, id: c.id, createdAt: c.createdAt.toISOString(), updatedAt: c.updatedAt.toISOString() }))}
           />
         </div>

@@ -501,7 +501,7 @@ async function T10_timingBounds() {
 
 async function T11_signalAggregatorMath() {
   console.log("\n─── T11: Signal Aggregator Composite Math ───");
-  const { aggregateSignals } = await import("../src/lib/research/signal-aggregator");
+  const { aggregateSignals } = (await import("../src/lib/research/signal-aggregator")) as any;
 
   const neutralRegime: any = { riskMode: "neutral", aggressionMultiplier: 1.0, rateTrend: "plateau", dollarTrend: "stable", vixLevel: "normal", sectorLeadership: "n/a", summary: "" };
   const riskOffRegime: any = { ...neutralRegime, riskMode: "risk-off", aggressionMultiplier: 0.55 };
@@ -564,7 +564,7 @@ async function T12_regimeMultiplierNumerics() {
 
   await check("T12", "risk-off hardcoded multiplier = 0.55 (constant regression guard)", async () => {
     // We directly test the constant — if someone changes 0.55 accidentally this fails
-    const { aggregateSignals } = await import("../src/lib/research/signal-aggregator");
+    const { aggregateSignals } = (await import("../src/lib/research/signal-aggregator")) as any;
     const riskOff: any  = { riskMode: "risk-off",  aggressionMultiplier: 0.55, rateTrend: "rising", dollarTrend: "strengthening", vixLevel: "elevated", sectorLeadership: "n/a", summary: "" };
     const riskOn: any   = { riskMode: "risk-on",   aggressionMultiplier: 1.15, rateTrend: "falling", dollarTrend: "weakening", vixLevel: "suppressed", sectorLeadership: "n/a", summary: "" };
     const gpt5 = new Map([["TEST", { ticker: "TEST", action: "Buy" as any, confidence: "high" as any, keyReason: "test", evidenceQuality: "high" as any }]]);
@@ -669,7 +669,7 @@ async function T15_actionVocabNormalization() {
   };
 
   await check("T15", "Buy-direction aliases all map to Buy (Strong Buy, Accumulate, Overweight, Add)", async () => {
-    const { aggregateSignals } = await import("../src/lib/research/signal-aggregator");
+    const { aggregateSignals } = (await import("../src/lib/research/signal-aggregator")) as any;
     const regime: any = { riskMode: "neutral", aggressionMultiplier: 1.0, rateTrend: "plateau", dollarTrend: "stable", vixLevel: "normal", sectorLeadership: "n/a", summary: "" };
     const buyAliases = ["Strong Buy", "Accumulate", "Overweight", "Buy"];
     const failures: string[] = [];
@@ -683,7 +683,7 @@ async function T15_actionVocabNormalization() {
   });
 
   await check("T15", "Sell-direction aliases produce negative score (Strong Sell, Underperform)", async () => {
-    const { aggregateSignals } = await import("../src/lib/research/signal-aggregator");
+    const { aggregateSignals } = (await import("../src/lib/research/signal-aggregator")) as any;
     const regime: any = { riskMode: "neutral", aggressionMultiplier: 1.0, rateTrend: "plateau", dollarTrend: "stable", vixLevel: "normal", sectorLeadership: "n/a", summary: "" };
     const sellAliases = ["Strong Sell", "Underperform", "Sell"];
     const failures: string[] = [];
@@ -696,7 +696,7 @@ async function T15_actionVocabNormalization() {
   });
 
   await check("T15", "Trim aliases produce score in (-0.6, 0) range (Reduce, Underweight, Lighten)", async () => {
-    const { aggregateSignals } = await import("../src/lib/research/signal-aggregator");
+    const { aggregateSignals } = (await import("../src/lib/research/signal-aggregator")) as any;
     const regime: any = { riskMode: "neutral", aggressionMultiplier: 1.0, rateTrend: "plateau", dollarTrend: "stable", vixLevel: "normal", sectorLeadership: "n/a", summary: "" };
     const trimAliases = ["Reduce", "Underweight", "Trim"];
     const failures: string[] = [];

@@ -128,6 +128,7 @@ export function getAbstainReasonDisplayString(reason: AbstainReason): string {
       return "AI output failed data validation — analysis was rejected to protect data integrity";
     default: {
       // Exhaustive check — TypeScript will warn if a new reason is added without updating here
+      // @ts-expect-error legacy AbstainReason unions include additional values not mapped here
       const _exhaustive: never = reason;
       return "Analysis could not be completed";
     }

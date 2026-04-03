@@ -70,6 +70,7 @@ describe("T30 — action sort priority", () => {
       action: RecommendationViewModel["action"],
       dollarDelta = 0
     ): RecommendationViewModel => ({
+      id: `rec-${action}-${dollarDelta}`,
       ticker: action,
       companyName: action,
       role: "Core",
@@ -121,6 +122,7 @@ describe("T30 — action sort priority", () => {
     const baseMock = (
       dollarDelta: number
     ): RecommendationViewModel => ({
+      id: `rec-buy-${dollarDelta}`,
       ticker: `T${dollarDelta}`,
       companyName: `T${dollarDelta}`,
       role: "Core",
