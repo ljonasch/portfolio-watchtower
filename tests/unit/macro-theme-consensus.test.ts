@@ -1,4 +1,8 @@
-import { deriveMacroThemeConsensus, MACRO_THEME_CONSENSUS_THRESHOLDS } from "@/lib/research/macro-theme-consensus";
+import {
+  deriveMacroThemeConsensus,
+  MACRO_THEME_CONSENSUS_THRESHOLDS,
+  PHASE1_MACRO_THEME_REGISTRY,
+} from "@/lib/research/macro-theme-consensus";
 import type { MacroNewsEnvironmentResult } from "@/lib/research/types";
 
 function buildEnvironment(articles: MacroNewsEnvironmentResult["articles"]): MacroNewsEnvironmentResult {
@@ -20,6 +24,18 @@ function buildEnvironment(articles: MacroNewsEnvironmentResult["articles"]): Mac
 }
 
 describe("macro theme consensus", () => {
+  test("uses the exact fixed phase-1 macro theme registry with no dynamic themes", () => {
+    expect(PHASE1_MACRO_THEME_REGISTRY.map((theme) => theme.themeKey)).toEqual([
+      "higher_for_longer_rates",
+      "growth_slowdown_risk",
+      "energy_supply_tightness",
+      "shipping_disruption",
+      "ai_policy_export_controls",
+      "credit_liquidity_stress",
+      "defense_fiscal_upcycle",
+    ]);
+  });
+
   test("derives deterministic consensus from the same normalized evidence", () => {
     const articles = [
       {

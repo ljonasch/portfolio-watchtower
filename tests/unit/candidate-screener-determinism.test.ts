@@ -207,4 +207,73 @@ describe("candidate screener determinism", () => {
       ])
     );
   });
+
+  test("macro-lane candidates use the same live-price validation gate as structural candidates", async () => {
+    const openAi = {
+      chat: {
+        completions: {
+          create: jest
+            .fn()
+            .mockResolvedValueOnce({
+              choices: [{ message: { content: JSON.stringify([{ ticker: "AAPL", companyName: "Apple", reason: "Structural fit" }]) } }],
+            })
+            .mockResolvedValueOnce({
+              choices: [{ message: { content: JSON.stringify([{ ticker: "LMT", companyName: "Lockheed Martin", reason: "Fits defense lane" }]) } }],
+            }),
+        },
+      },
+    };
+
+    Object.defineProperty(global, "fetch", {
+      configurable: true,
+      writable: true,
+      value: jest.fn(async (url: string) => {
+        const ticker = decodeURIComponent(String(url).match(/chart\/([^?]+)/)?.[1] ?? "");
+        if (ticker === "LMT") {
+          return { ok: false, json: async () => ({}) };
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            chart: {
+              result: [
+                {
+                  meta: { regularMarketPrice: 100 },
+                  indicators: { quote: [{ close: [100, 101, 102] }] },
+                },
+              ],
+            },
+          }),
+        };
+      }),
+    });
+
+    const result = await screenCandidates(
+      openAi,
+      ["MSFT"],
+      "Find high-quality large-cap additions.",
+      [
+        {
+          laneId: "macro_lane:defense_fiscal_beneficiaries",
+          laneKey: "defense_fiscal_beneficiaries",
+          description: "Defense and fiscal beneficiaries.",
+          allowedAssetClasses: ["Stocks", "ETFs"],
+          searchTags: ["defense primes"],
+          priority: 1,
+          sortBehavior: "priority_then_ticker",
+          origin: "environmental_gap",
+          themeIds: ["macro_theme:defense_fiscal_upcycle"],
+          environmentalGapIds: ["env_gap:defense_fiscal_upcycle"],
+          bridgeRuleIds: ["bridge.defense_procurement"],
+          rationaleSummary: "Defense spending upcycle",
+        },
+      ],
+      { trackedAccountRiskTolerance: "medium", permittedAssetClasses: "Stocks, ETFs" },
+      "2026-04-02",
+      jest.fn()
+    );
+
+    expect(result.map((candidate) => candidate.ticker)).toEqual(["AAPL"]);
+    expect(result.find((candidate) => candidate.source === "macro_lane")).toBeUndefined();
+  });
 });

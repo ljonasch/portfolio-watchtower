@@ -256,6 +256,10 @@ describe("analysis orchestrator diagnostics", () => {
     expect(artifact.steps.find((step) => step.stepKey === "candidate_screening")?.outputs).toEqual(
       expect.objectContaining({
         screenedInCount: 1,
+        screenedInByOrigin: {
+          structural: 1,
+          macroLane: 0,
+        },
         outcomeExplanation: "1 candidate(s) passed screening and were advanced into the analyzed ticker set.",
       })
     );

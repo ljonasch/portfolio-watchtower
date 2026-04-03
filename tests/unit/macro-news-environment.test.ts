@@ -5,7 +5,7 @@ jest.mock("@/lib/cache", () => ({
   getOrLoadRuntimeCache: async ({ loader }: { loader: () => Promise<unknown> }) => loader(),
 }));
 
-import { collectMacroNewsEnvironment } from "@/lib/research/macro-news-environment";
+import { collectMacroNewsEnvironment, MACRO_QUERY_FAMILIES } from "@/lib/research/macro-news-environment";
 
 function buildOpenAi(annotationSets: Array<Array<{ title: string; url: string }>>) {
   let callIndex = 0;
@@ -44,6 +44,18 @@ function pickStableShape(result: Awaited<ReturnType<typeof collectMacroNewsEnvir
 }
 
 describe("macro news environment", () => {
+  test("uses the exact fixed global phase-1 macro query families", () => {
+    expect(MACRO_QUERY_FAMILIES.map((family) => family.key)).toEqual([
+      "rates_inflation_central_banks",
+      "recession_labor_growth",
+      "energy_commodities",
+      "geopolitics_shipping_supply_chain",
+      "regulation_export_controls_ai_policy",
+      "credit_liquidity_banking_stress",
+      "defense_fiscal_industrial_policy",
+    ]);
+  });
+
   test("normalizes, dedups, and stable-sorts macro articles deterministically", async () => {
     const commonReuters = {
       title: "Central banks keep pressure on markets",

@@ -27,7 +27,7 @@ export const MACRO_THEME_CONSENSUS_THRESHOLDS = {
   minRecentSupportingArticles7d: 2,
 } as const;
 
-const MACRO_THEME_DEFINITIONS: MacroThemeDefinition[] = [
+export const PHASE1_MACRO_THEME_REGISTRY: MacroThemeDefinition[] = [
   {
     themeKey: "higher_for_longer_rates",
     themeLabel: "Higher-for-Longer Rates",
@@ -154,7 +154,7 @@ function compareThemes(a: MacroThemeConsensus, b: MacroThemeConsensus): number {
 export function deriveMacroThemeConsensus(
   macroEnvironment: MacroNewsEnvironmentResult
 ): MacroThemeConsensusResult {
-  const themes = MACRO_THEME_DEFINITIONS.map<MacroThemeConsensus>((definition) => {
+  const themes = PHASE1_MACRO_THEME_REGISTRY.map<MacroThemeConsensus>((definition) => {
     const supportingArticles: MacroNewsArticle[] = [];
     const counterArticles: MacroNewsArticle[] = [];
 
