@@ -343,6 +343,25 @@ function withPersistedBundleId<T extends Record<string, unknown> | null | undefi
   } as T;
 }
 
+function withPersistedEvidenceBundleId(
+  evidencePacket: Record<string, unknown>,
+  bundleId: string
+): Record<string, unknown> {
+  const diagnosticsArtifact = evidencePacket.diagnosticsArtifact;
+
+  if (!diagnosticsArtifact || typeof diagnosticsArtifact !== "object" || Array.isArray(diagnosticsArtifact)) {
+    return evidencePacket;
+  }
+
+  return {
+    ...evidencePacket,
+    diagnosticsArtifact: {
+      ...diagnosticsArtifact,
+      bundleId,
+    },
+  };
+}
+
 function buildLegacyRecommendationRows(recommendations: TerminalRecommendationInput[], analysisBundleId: string, reportId: string) {
   return recommendations.map((row) => ({
     reportId,
@@ -435,6 +454,7 @@ export async function finalizeAnalysisRun(input: FinalizeAnalysisRunInput): Prom
         sourceRunId: input.runId,
         portfolioSnapshotId: input.snapshotId,
         ...bundlePayload,
+        evidencePacketJson: JSON.stringify(withPersistedEvidenceBundleId(input.evidencePacket, "pending")),
         reportViewModelJson: JSON.stringify(withPersistedBundleId(input.reportViewModel, "pending")),
         emailPayloadJson: input.outcome === "validated"
           ? JSON.stringify(withPersistedBundleId(input.emailPayload ?? null, "pending"))
@@ -445,6 +465,7 @@ export async function finalizeAnalysisRun(input: FinalizeAnalysisRunInput): Prom
     await tx.analysisBundle.update({
       where: { id: bundle.id },
       data: {
+        evidencePacketJson: JSON.stringify(withPersistedEvidenceBundleId(input.evidencePacket, bundle.id)),
         reportViewModelJson: JSON.stringify(withPersistedBundleId(input.reportViewModel, bundle.id)),
         emailPayloadJson: input.outcome === "validated"
           ? JSON.stringify(withPersistedBundleId(input.emailPayload ?? null, bundle.id))

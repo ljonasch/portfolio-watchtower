@@ -42,6 +42,13 @@ import {
 } from "./evidence-packet-builder";
 import type { ProgressEvent }      from "./progress-events";
 import { AnalysisAbstainedError, type AbstainResult } from "./types";
+import type {
+  DiagnosticsMetricContract,
+  DiagnosticsSourceRefContract,
+  DiagnosticsStepContract,
+  DiagnosticsWarningContract,
+  RunDiagnosticsArtifact,
+} from "@/lib/contracts";
 
 // ── W23: Circuit breaker ──────────────────────────────────────────────────────
 
@@ -78,6 +85,322 @@ function guardContextLength(text: string, maxChars: number, label: string): stri
 
 export function freezeRunEvidenceSet<T>(value: T): T {
   return freezeRuntimeEvidence(value);
+}
+
+function buildDiagnosticsMetrics(
+  rows: Array<[string, string, string | number | boolean | null | undefined]>
+): DiagnosticsMetricContract[] {
+  return rows
+    .filter(([, , value]) => value !== undefined)
+    .map(([key, label, value]) => ({
+      key,
+      label,
+      value: value ?? null,
+    }));
+}
+
+function buildDiagnosticsWarnings(
+  rows: Array<[string, string, DiagnosticsWarningContract["severity"]]>
+): DiagnosticsWarningContract[] {
+  return rows.map(([code, message, severity]) => ({
+    code,
+    message,
+    severity,
+  }));
+}
+
+function buildStepBase(
+  step: Pick<DiagnosticsStepContract, "stepKey" | "stepName" | "status" | "summary">,
+  context: {
+    evidenceHash: string | null;
+    promptHash: string | null;
+    schemaVersion: string | null;
+    analysisPolicyVersion: string | null;
+    viewModelVersion: string | null;
+  }
+): DiagnosticsStepContract {
+  return {
+    ...step,
+    inputs: {},
+    outputs: {},
+    metrics: [],
+    sources: [],
+    warnings: [],
+    model: null,
+    hashes: {
+      evidenceHash: context.evidenceHash,
+      promptHash: context.promptHash,
+    },
+    versions: {
+      schemaVersion: context.schemaVersion,
+      analysisPolicyVersion: context.analysisPolicyVersion,
+      viewModelVersion: context.viewModelVersion,
+    },
+  };
+}
+
+export function buildRunDiagnosticsArtifact(input: {
+  bundleId: string;
+  runId: string;
+  outcome: RunDiagnosticsArtifact["outcome"];
+  generatedAt: string;
+  evidencePacketId: string | null;
+  evidenceHash: string | null;
+  promptHash: string | null;
+  versions: {
+    schemaVersion: string | null;
+    analysisPolicyVersion: string | null;
+    viewModelVersion: string | null;
+    promptVersion?: string | null;
+  };
+  primaryModel: string | null;
+  responseHash: string | null;
+  usingFallbackNews?: boolean;
+  regime?: any;
+  gapReport?: any;
+  candidates?: any[];
+  newsResult?: any;
+  sentimentSignals?: Map<string, any>;
+  sentimentOverlay?: any[];
+  reportData?: any;
+  validationSummary: {
+    hardErrorCount: number;
+    warningCount: number;
+    reasonCodes: string[];
+  };
+  adjudicatorNotes?: Record<string, unknown>;
+  perSectionChars?: Record<string, unknown>;
+  totalInputChars?: number | null;
+  sources?: Array<Record<string, unknown>>;
+}): RunDiagnosticsArtifact {
+  const context = {
+    evidenceHash: input.evidenceHash,
+    promptHash: input.promptHash,
+    schemaVersion: input.versions.schemaVersion,
+    analysisPolicyVersion: input.versions.analysisPolicyVersion,
+    viewModelVersion: input.versions.viewModelVersion,
+  };
+  const sourceRefs: DiagnosticsSourceRefContract[] = (input.sources ?? input.newsResult?.allSources ?? []).map((source: any) => ({
+    title: source?.title ?? source?.source ?? "Untitled source",
+    url: source?.url ?? null,
+    source: source?.source ?? null,
+    publishedAt: source?.publishedAt ?? null,
+  }));
+  const scoredSignals = Array.from(input.sentimentSignals?.values?.() ?? []).filter((signal: any) =>
+    (signal?.finbertScore ?? 0) !== 0 || (signal?.fingptScore ?? 0) !== 0
+  );
+  const recommendationCount = Array.isArray(input.reportData?.recommendations)
+    ? input.reportData.recommendations.length
+    : 0;
+  const validationWarnings = (input.validationSummary.reasonCodes ?? []).map((code) => ({
+    code,
+    message: code,
+    severity: input.validationSummary.hardErrorCount > 0 ? "error" as const : "warning" as const,
+  }));
+
+  const steps: DiagnosticsStepContract[] = [
+    {
+      ...buildStepBase(
+        {
+          stepKey: "market_regime",
+          stepName: "Market Regime",
+          status: input.regime?.summary && input.regime.summary !== "Regime data unavailable." ? "ok" : "warning",
+          summary: input.regime?.summary ?? "Regime data unavailable.",
+        },
+        context
+      ),
+      inputs: {
+        generatedAt: input.generatedAt,
+      },
+      outputs: {
+        riskMode: input.regime?.riskMode ?? null,
+        rateTrend: input.regime?.rateTrend ?? null,
+        summary: input.regime?.summary ?? null,
+      },
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "gap_scan",
+          stepName: "Portfolio Gap Scan",
+          status: Array.isArray(input.gapReport?.gaps) && input.gapReport.gaps.length > 0 ? "ok" : "warning",
+          summary: input.gapReport?.searchBrief ?? "No portfolio gaps were identified.",
+        },
+        context
+      ),
+      outputs: {
+        gapCount: Array.isArray(input.gapReport?.gaps) ? input.gapReport.gaps.length : 0,
+        topGaps: Array.isArray(input.gapReport?.gaps)
+          ? input.gapReport.gaps.slice(0, 5).map((gap: any) => ({
+              ticker: gap?.ticker ?? null,
+              companyName: gap?.companyName ?? null,
+              reason: gap?.reason ?? null,
+            }))
+          : [],
+      },
+      metrics: buildDiagnosticsMetrics([
+        ["gap_count", "Gap Count", Array.isArray(input.gapReport?.gaps) ? input.gapReport.gaps.length : 0],
+      ]),
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "candidate_screening",
+          stepName: "Candidate Screening",
+          status: Array.isArray(input.candidates) && input.candidates.length > 0 ? "ok" : "warning",
+          summary: Array.isArray(input.candidates) && input.candidates.length > 0
+            ? `${input.candidates.length} candidates screened into the run.`
+            : "No candidates were added during screening.",
+        },
+        context
+      ),
+      outputs: {
+        candidateCount: Array.isArray(input.candidates) ? input.candidates.length : 0,
+        candidates: Array.isArray(input.candidates)
+          ? input.candidates.slice(0, 10).map((candidate: any) => ({
+              ticker: candidate?.ticker ?? null,
+              companyName: candidate?.companyName ?? null,
+              reason: candidate?.reason ?? null,
+            }))
+          : [],
+      },
+      metrics: buildDiagnosticsMetrics([
+        ["candidate_count", "Candidate Count", Array.isArray(input.candidates) ? input.candidates.length : 0],
+      ]),
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "news_sources",
+          stepName: "News & Event Sources",
+          status: sourceRefs.length > 0 ? "ok" : "warning",
+          summary: sourceRefs.length > 0
+            ? `${sourceRefs.length} sources collected for the run.`
+            : "No news/event sources were collected for the run.",
+        },
+        context
+      ),
+      inputs: {
+        usingFallbackNews: input.usingFallbackNews ?? false,
+      },
+      outputs: {
+        breakingSummaryPresent: Boolean(input.newsResult?.breaking24h?.length),
+        combinedSummaryPresent: Boolean(input.newsResult?.combinedSummary?.length),
+        sourceCount: sourceRefs.length,
+      },
+      metrics: buildDiagnosticsMetrics([
+        ["source_count", "Source Count", sourceRefs.length],
+        ["breaking_items", "Breaking Items", input.newsResult?.breaking24h?.length ?? 0],
+      ]),
+      sources: sourceRefs,
+      warnings: input.usingFallbackNews
+        ? buildDiagnosticsWarnings([["fallback_news", "Fallback news path was used.", "warning"]])
+        : [],
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "sentiment",
+          stepName: "FinBERT / Sentiment",
+          status: scoredSignals.length > 0 ? "ok" : "warning",
+          summary: scoredSignals.length > 0
+            ? `${scoredSignals.length} tickers produced sentiment signals.`
+            : "No non-zero sentiment signals were recorded.",
+        },
+        context
+      ),
+      outputs: {
+        scoredTickerCount: scoredSignals.length,
+        overlayTickerCount: Array.isArray(input.sentimentOverlay) ? input.sentimentOverlay.length : 0,
+        overlay: input.sentimentOverlay ?? [],
+      },
+      metrics: buildDiagnosticsMetrics([
+        ["scored_tickers", "Scored Tickers", scoredSignals.length],
+        ["overlay_tickers", "Overlay Tickers", Array.isArray(input.sentimentOverlay) ? input.sentimentOverlay.length : 0],
+      ]),
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "gpt5_reasoning",
+          stepName: "GPT-5 Reasoning",
+          status: recommendationCount > 0 ? "ok" : input.outcome === "validated" ? "warning" : "not_run",
+          summary: recommendationCount > 0
+            ? `${recommendationCount} recommendations were produced by the final reasoning step.`
+            : input.outcome === "validated"
+              ? "The final reasoning step completed without recommendation rows."
+              : "The final reasoning step did not complete.",
+        },
+        context
+      ),
+      inputs: {
+        totalInputChars: input.totalInputChars ?? null,
+        perSectionChars: input.perSectionChars ?? null,
+      },
+      outputs: {
+        recommendationCount,
+        watchlistIdeasCount: input.reportData?.watchlistIdeas?.length ?? 0,
+      },
+      metrics: buildDiagnosticsMetrics([
+        ["recommendation_count", "Recommendations", recommendationCount],
+        ["watchlist_ideas", "Watchlist Ideas", input.reportData?.watchlistIdeas?.length ?? 0],
+      ]),
+      warnings: Object.keys(input.adjudicatorNotes ?? {}).length > 0
+        ? buildDiagnosticsWarnings([["adjudicator_invoked", "Low-confidence adjudicator notes were captured for this run.", "info"]])
+        : [],
+      model: {
+        name: input.primaryModel,
+        promptVersion: input.versions.promptVersion ?? input.promptHash,
+        responseHash: input.responseHash,
+      },
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "validation_finalization",
+          stepName: "Validation & Finalization",
+          status: input.validationSummary.hardErrorCount > 0
+            ? "error"
+            : input.validationSummary.warningCount > 0
+              ? "warning"
+              : "ok",
+          summary: input.validationSummary.hardErrorCount > 0
+            ? "Validation recorded hard errors."
+            : input.validationSummary.warningCount > 0
+              ? "Validation completed with warnings."
+              : "Validation and finalization completed cleanly.",
+        },
+        context
+      ),
+      inputs: {
+        evidencePacketId: input.evidencePacketId,
+      },
+      outputs: {
+        hardErrorCount: input.validationSummary.hardErrorCount,
+        warningCount: input.validationSummary.warningCount,
+        reasonCodes: input.validationSummary.reasonCodes,
+      },
+      metrics: buildDiagnosticsMetrics([
+        ["hard_error_count", "Hard Errors", input.validationSummary.hardErrorCount],
+        ["warning_count", "Warnings", input.validationSummary.warningCount],
+      ]),
+      warnings: validationWarnings,
+      model: {
+        name: input.primaryModel,
+        promptVersion: input.versions.promptVersion ?? input.promptHash,
+        responseHash: input.responseHash,
+      },
+    },
+  ];
+
+  return {
+    bundleId: input.bundleId,
+    runId: input.runId,
+    outcome: input.outcome,
+    generatedAt: input.generatedAt,
+    evidencePacketId: input.evidencePacketId,
+    steps,
+  };
 }
 
 // ── Main orchestrator ─────────────────────────────────────────────────────────
@@ -418,6 +741,29 @@ export async function runFullAnalysis(
         evidencePacketId: null,
         promptHash,
         stage: "stage3",
+        diagnosticsArtifact: buildRunDiagnosticsArtifact({
+          bundleId: "pending",
+          runId,
+          outcome: "abstained",
+          generatedAt: finalizedAt.toISOString(),
+          evidencePacketId: null,
+          evidenceHash: promptHash,
+          promptHash,
+          versions: {
+            schemaVersion: TERMINAL_CONTRACT_VERSIONS.schemaVersion,
+            analysisPolicyVersion: TERMINAL_CONTRACT_VERSIONS.analysisPolicyVersion,
+            viewModelVersion: TERMINAL_CONTRACT_VERSIONS.viewModelVersion,
+            promptVersion: promptHash,
+          },
+          primaryModel: "gpt-5.4",
+          responseHash: null,
+          usingFallbackNews: frozenNewsResult.usingFallback ?? false,
+          validationSummary: {
+            hardErrorCount: 1,
+            warningCount: 0,
+            reasonCodes: ["evidence_packet_persist_failed"],
+          },
+        }),
       },
       evidenceHash: promptHash,
       evidenceFreshness: {
@@ -530,6 +876,29 @@ export async function runFullAnalysis(
         evidencePacketId,
         promptHash,
         stage: "stage3",
+        diagnosticsArtifact: buildRunDiagnosticsArtifact({
+          bundleId: "pending",
+          runId,
+          outcome: "abstained",
+          generatedAt: finalizedAt.toISOString(),
+          evidencePacketId,
+          evidenceHash: promptHash,
+          promptHash,
+          versions: {
+            schemaVersion: TERMINAL_CONTRACT_VERSIONS.schemaVersion,
+            analysisPolicyVersion: TERMINAL_CONTRACT_VERSIONS.analysisPolicyVersion,
+            viewModelVersion: TERMINAL_CONTRACT_VERSIONS.viewModelVersion,
+            promptVersion: promptHash,
+          },
+          primaryModel: "gpt-5.4",
+          responseHash: null,
+          usingFallbackNews: frozenNewsResult.usingFallback ?? false,
+          validationSummary: {
+            hardErrorCount: 1,
+            warningCount: 0,
+            reasonCodes: [abstainReason],
+          },
+        }),
       },
       evidenceHash: promptHash,
       evidenceFreshness: {
@@ -698,8 +1067,46 @@ export async function runFullAnalysis(
   const retryCount = typeof llmMeta.retryCount === "number" ? llmMeta.retryCount : 0;
   const validationWarningCount = typeof llmMeta.validationWarningCount === "number" ? llmMeta.validationWarningCount : 0;
   const usingFallbackNews = frozenNewsResult.usingFallback ?? false;
-
   const finalizedAt = new Date();
+  const diagnosticsArtifact = buildRunDiagnosticsArtifact({
+    bundleId: "pending",
+    runId,
+    outcome: "validated",
+    generatedAt: finalizedAt.toISOString(),
+    evidencePacketId,
+    evidenceHash: promptHash,
+    promptHash,
+    versions: {
+      schemaVersion: TERMINAL_CONTRACT_VERSIONS.schemaVersion,
+      analysisPolicyVersion: TERMINAL_CONTRACT_VERSIONS.analysisPolicyVersion,
+      viewModelVersion: TERMINAL_CONTRACT_VERSIONS.viewModelVersion,
+      promptVersion: promptHash,
+    },
+    primaryModel: modelUsed,
+    responseHash: hashPromptPayload(reportData),
+    usingFallbackNews,
+    regime: frozenFinalRegime,
+    gapReport,
+    candidates,
+    newsResult: frozenNewsResult,
+    sentimentSignals: frozenSentimentSignals,
+    sentimentOverlay,
+    reportData,
+    validationSummary: {
+      hardErrorCount: 0,
+      warningCount: validationWarningCount,
+      reasonCodes: [],
+    },
+    adjudicatorNotes,
+    perSectionChars,
+    totalInputChars: additionalContext.length,
+    sources: (frozenNewsResult.allSources ?? []).map((source: any) => ({
+      title: source.title ?? source.source ?? "Untitled",
+      url: source.url ?? null,
+      publishedAt: source.publishedAt ?? null,
+      source: source.source ?? null,
+    })),
+  });
   const validatedFinalizationInput: FinalizeAnalysisRunInput = {
     runId,
     userId: snapshot.userId,
@@ -745,6 +1152,7 @@ export async function runFullAnalysis(
       usingFallbackNews,
       priceDataMissing,
       regime: frozenFinalRegime,
+      diagnosticsArtifact,
     },
     evidenceHash: promptHash,
     evidenceFreshness: {

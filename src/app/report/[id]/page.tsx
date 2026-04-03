@@ -13,7 +13,8 @@ import type { ConvictionThreadData } from "@/components/ConvictionThread";
 import type { MarketContext } from "@/lib/analyzer";
 import { projectRecommendation } from "@/lib/view-models";
 import type { SourceViewModel } from "@/lib/view-models/types";
-import { getRequestedReportArtifact } from "@/lib/read-models";
+import type { DiagnosticsStepContract } from "@/lib/contracts";
+import { getRequestedReportArtifact, getRunDiagnostics } from "@/lib/read-models";
 
 function SourceChip({ source }: { source: SourceViewModel }) {
   return (
@@ -86,6 +87,148 @@ function VerRow({ label, value }: { label: string, value: any }) {
   );
 }
 
+function formatDiagnosticValue(value: unknown): string {
+  if (value === null || value === undefined) return "Not available";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value, null, 2);
+}
+
+function StepStatusPill({ status }: { status: DiagnosticsStepContract["status"] }) {
+  const style = status === "ok"
+    ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-300"
+    : status === "warning"
+      ? "bg-amber-500/10 border-amber-500/25 text-amber-300"
+      : status === "error"
+        ? "bg-red-500/10 border-red-500/25 text-red-300"
+        : "bg-slate-800/70 border-slate-700 text-slate-400";
+
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wider font-semibold ${style}`}>
+      {status.replace("_", " ")}
+    </span>
+  );
+}
+
+function DiagnosticDataBlock({ title, data }: { title: string; data: Record<string, unknown> }) {
+  const entries = Object.entries(data).filter(([, value]) => value !== undefined);
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      <h5 className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">{title}</h5>
+      <div className="grid grid-cols-1 gap-2">
+        {entries.map(([key, value]) => (
+          <div key={key} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">{key}</div>
+            <pre className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-300 font-mono">
+              {formatDiagnosticValue(value)}
+            </pre>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DiagnosticStepCard({ step }: { step: DiagnosticsStepContract }) {
+  return (
+    <details className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 group">
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 focus:outline-none">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h4 className="text-sm font-semibold text-slate-100">{step.stepName}</h4>
+            <StepStatusPill status={step.status} />
+          </div>
+          <p className="text-xs leading-relaxed text-slate-400">{step.summary}</p>
+        </div>
+        <span className="hidden text-[10px] uppercase tracking-wider text-slate-500 group-hover:text-slate-400 sm:block">Expand</span>
+      </summary>
+
+      <div className="mt-4 space-y-4 border-t border-slate-800 pt-4">
+        <DiagnosticDataBlock title="Key Inputs" data={step.inputs} />
+        <DiagnosticDataBlock title="Key Outputs" data={step.outputs} />
+
+        {step.metrics.length > 0 && (
+          <div className="space-y-2">
+            <h5 className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Metrics</h5>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {step.metrics.map((metric) => (
+                <div key={metric.key} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">{metric.label}</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-200">{formatDiagnosticValue(metric.value)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {step.sources.length > 0 && (
+          <div className="space-y-2">
+            <h5 className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">
+              Sources ({step.sources.length})
+            </h5>
+            <div className="space-y-2">
+              {step.sources.map((source, index) => (
+                <div key={`${source.url ?? source.title}-${index}`} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-300">
+                  <div className="font-semibold text-slate-200">{source.title}</div>
+                  <div className="mt-1 text-slate-400">
+                    {[source.source, source.publishedAt].filter(Boolean).join(" · ") || "Metadata unavailable"}
+                  </div>
+                  {source.url && (
+                    <a href={source.url} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex text-blue-400 hover:text-blue-300">
+                      {source.url}
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {(step.model || step.warnings.length > 0 || step.hashes.evidenceHash || step.hashes.promptHash) && (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {step.model && (
+              <DiagnosticDataBlock
+                title="Model & Version"
+                data={{
+                  model: step.model.name,
+                  promptVersion: step.model.promptVersion,
+                  responseHash: step.model.responseHash,
+                  schemaVersion: step.versions.schemaVersion,
+                  analysisPolicyVersion: step.versions.analysisPolicyVersion,
+                  viewModelVersion: step.versions.viewModelVersion,
+                }}
+              />
+            )}
+            <DiagnosticDataBlock
+              title="Hashes"
+              data={{
+                evidenceHash: step.hashes.evidenceHash,
+                promptHash: step.hashes.promptHash,
+              }}
+            />
+          </div>
+        )}
+
+        {step.warnings.length > 0 && (
+          <div className="space-y-2">
+            <h5 className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Warnings & Reasons</h5>
+            <div className="space-y-2">
+              {step.warnings.map((warning) => (
+                <div key={`${warning.code}-${warning.message}`} className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
+                  <div className="font-semibold">{warning.code}</div>
+                  <div className="mt-1">{warning.message}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
 export default async function ReportPage(props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const user = await prisma.user.findFirst();
@@ -97,6 +240,7 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
   if (artifact.source === "bundle") {
     const reportViewModel = artifact.reportViewModel;
     const bundle = artifact.bundle;
+    const diagnostics = await getRunDiagnostics(bundle.id);
 
     return (
       <div className="space-y-10 max-w-6xl mx-auto">
@@ -108,6 +252,45 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
             <h1 className="text-3xl font-bold">Portfolio Analysis Report</h1>
             <p className="text-slate-400 mt-1">Generated on {new Date(reportViewModel.finalizedAt).toLocaleDateString()}</p>
           </div>
+        </div>
+
+        <div className="space-y-4">
+          <h3 className="text-xl font-bold border-b border-slate-800 pb-2 flex items-center gap-2 text-slate-200">
+            <ShieldCheck className="w-5 h-5 text-emerald-400" /> Deep Analysis Verification
+          </h3>
+          {diagnostics ? (
+            <>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Outcome</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-100">{diagnostics.artifactMeta.outcome}</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Run ID</div>
+                  <div className="mt-1 break-all text-sm font-semibold text-slate-100">{diagnostics.artifactMeta.runId}</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Evidence Packet</div>
+                  <div className="mt-1 break-all text-sm font-semibold text-slate-100">{diagnostics.artifactMeta.evidencePacketId ?? "Not available"}</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Generated</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-100">
+                    {new Date(diagnostics.artifactMeta.generatedAt).toLocaleString()}
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {diagnostics.steps.map((step) => (
+                  <DiagnosticStepCard key={step.stepKey} step={step} />
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-6 text-sm text-slate-400">
+              Diagnostics were not available for this run.
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
