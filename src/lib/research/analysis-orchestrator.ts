@@ -162,6 +162,93 @@ function ensureStepSections(
   };
 }
 
+function truncateText(value: string | null | undefined, maxLength = 240): string | null {
+  if (!value) return null;
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function toLabeledTickerList(
+  values: Array<string | { ticker?: string | null; companyName?: string | null; action?: string | null }>
+): string[] {
+  return values
+    .map((value) => {
+      if (typeof value === "string") return value;
+      const ticker = value?.ticker ?? "Unknown";
+      const companyName = value?.companyName ? ` - ${value.companyName}` : "";
+      const action = value?.action ? ` (${value.action})` : "";
+      return `${ticker}${companyName}${action}`;
+    })
+    .filter(Boolean);
+}
+
+function summarizeCandidateSources(candidates: Array<{ source?: string | null }>): string {
+  const normalized = Array.from(
+    new Set(
+      candidates
+        .map((candidate) => candidate?.source)
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+    )
+  );
+
+  if (normalized.length === 0) {
+    return "No explicit external screening source tags were persisted for this run.";
+  }
+
+  return normalized
+    .map((source) => source.replace(/_/g, " "))
+    .join(", ");
+}
+
+function summarizeContextSections(perSectionChars: Record<string, unknown> | null | undefined): string[] {
+  if (!perSectionChars) return [];
+
+  return Object.entries(perSectionChars)
+    .filter(([, value]) => typeof value === "number" && value > 0)
+    .map(([key, value]) => `${key}: ${value} chars`);
+}
+
+function summarizeTopSentimentSignals(signals: any[], overlay: any[]): Array<Record<string, unknown>> {
+  const overlayByTicker = new Map(
+    (Array.isArray(overlay) ? overlay : []).map((entry: any) => [String(entry?.ticker ?? "").toUpperCase(), entry])
+  );
+
+  return signals
+    .slice()
+    .sort((a: any, b: any) => {
+      const aScore = Math.max(Math.abs(a?.finbertScore ?? 0), Math.abs(a?.fingptScore ?? 0));
+      const bScore = Math.max(Math.abs(b?.finbertScore ?? 0), Math.abs(b?.fingptScore ?? 0));
+      return bScore - aScore;
+    })
+    .slice(0, 5)
+    .map((signal: any) => {
+      const ticker = String(signal?.ticker ?? "").toUpperCase();
+      const overlayEntry = overlayByTicker.get(ticker);
+      return {
+        ticker,
+        finbertScore: signal?.finbertScore ?? null,
+        fingptScore: signal?.fingptScore ?? null,
+        stance: overlayEntry?.stance ?? null,
+      };
+    });
+}
+
+function buildValidationSummaryText(validationSummary: {
+  hardErrorCount: number;
+  warningCount: number;
+  reasonCodes: string[];
+}): string {
+  if (validationSummary.hardErrorCount > 0) {
+    return `Validation recorded ${validationSummary.hardErrorCount} hard error(s).`;
+  }
+
+  if (validationSummary.warningCount > 0) {
+    return `Validation completed with ${validationSummary.warningCount} warning(s).`;
+  }
+
+  return "Validation and finalization completed without hard errors or warnings.";
+}
+
 export function buildRunDiagnosticsArtifact(input: {
   bundleId: string;
   runId: string;
@@ -195,6 +282,8 @@ export function buildRunDiagnosticsArtifact(input: {
   perSectionChars?: Record<string, unknown>;
   totalInputChars?: number | null;
   sources?: Array<Record<string, unknown>>;
+  existingHoldingsCount?: number | null;
+  allTickers?: string[];
 }): RunDiagnosticsArtifact {
   const context = {
     evidenceHash: input.evidenceHash,
@@ -212,9 +301,24 @@ export function buildRunDiagnosticsArtifact(input: {
   const scoredSignals = Array.from(input.sentimentSignals?.values?.() ?? []).filter((signal: any) =>
     (signal?.finbertScore ?? 0) !== 0 || (signal?.fingptScore ?? 0) !== 0
   );
+  const scoredSignalsWithTicker = scoredSignals.map((signal: any) => ({
+    ticker: signal?.ticker ?? signal?.symbol ?? null,
+    ...signal,
+  }));
   const recommendationCount = Array.isArray(input.reportData?.recommendations)
     ? input.reportData.recommendations.length
     : 0;
+  const watchlistIdeas = Array.isArray(input.reportData?.watchlistIdeas)
+    ? input.reportData.watchlistIdeas
+    : [];
+  const recommendationRows = Array.isArray(input.reportData?.recommendations)
+    ? input.reportData.recommendations
+    : [];
+  const contextSections = summarizeContextSections(input.perSectionChars ?? null);
+  const candidateRows = Array.isArray(input.candidates) ? input.candidates : [];
+  const allTickers = Array.isArray(input.allTickers) ? input.allTickers : [];
+  const existingHoldingsCount = input.existingHoldingsCount ?? null;
+  const topSentimentSignals = summarizeTopSentimentSignals(scoredSignalsWithTicker, input.sentimentOverlay ?? []);
   const validationWarnings = (input.validationSummary.reasonCodes ?? []).map((code) => ({
     code,
     message: code,
@@ -233,11 +337,19 @@ export function buildRunDiagnosticsArtifact(input: {
         context
       ),
       inputs: {
-        generatedAt: input.generatedAt,
+        asOfDate: input.generatedAt.split("T")[0],
+        indicatorsReviewed: [
+          "CBOE VIX volatility",
+          "US 10-year Treasury yield",
+          "US Dollar Index",
+        ],
       },
       outputs: {
         riskMode: input.regime?.riskMode ?? null,
         rateTrend: input.regime?.rateTrend ?? null,
+        dollarTrend: input.regime?.dollarTrend ?? null,
+        volatilityBackdrop: input.regime?.vixLevel ?? null,
+        sectorLeadership: input.regime?.sectorLeadership ?? null,
         summary: input.regime?.summary ?? null,
       },
     },
@@ -251,15 +363,22 @@ export function buildRunDiagnosticsArtifact(input: {
         },
         context
       ),
+      inputs: {
+        holdingsReviewed: existingHoldingsCount,
+        portfolioPreferences: input.gapReport?.profilePreferences ?? null,
+        searchFocus: input.gapReport?.searchBrief ?? null,
+      },
       outputs: {
         gapCount: Array.isArray(input.gapReport?.gaps) ? input.gapReport.gaps.length : 0,
         topGaps: Array.isArray(input.gapReport?.gaps)
           ? input.gapReport.gaps.slice(0, 5).map((gap: any) => ({
-              ticker: gap?.ticker ?? null,
-              companyName: gap?.companyName ?? null,
-              reason: gap?.reason ?? null,
+              type: gap?.type ?? null,
+              description: gap?.description ?? null,
+              affectedTickers: gap?.affectedTickers ?? [],
+              priority: gap?.priority ?? null,
             }))
           : [],
+        scanSummary: input.gapReport?.searchBrief ?? null,
       },
       metrics: buildDiagnosticsMetrics([
         ["gap_count", "Gap Count", Array.isArray(input.gapReport?.gaps) ? input.gapReport.gaps.length : 0],
@@ -277,18 +396,30 @@ export function buildRunDiagnosticsArtifact(input: {
         },
         context
       ),
+      inputs: {
+        heldTickerCount: existingHoldingsCount,
+        analyzedTickerCount: allTickers.length || null,
+        screeningGoal: input.gapReport?.searchBrief ?? null,
+        candidateSourcesReviewed: summarizeCandidateSources(candidateRows),
+      },
       outputs: {
-        candidateCount: Array.isArray(input.candidates) ? input.candidates.length : 0,
-        candidates: Array.isArray(input.candidates)
-          ? input.candidates.slice(0, 10).map((candidate: any) => ({
+        screenedInCount: candidateRows.length,
+        topCandidates: candidateRows
+          .slice(0, 10)
+          .map((candidate: any) => ({
               ticker: candidate?.ticker ?? null,
               companyName: candidate?.companyName ?? null,
               reason: candidate?.reason ?? null,
+              catalyst: candidate?.catalyst ?? null,
+              analystRating: candidate?.analystRating ?? null,
             }))
-          : [],
+          ,
+        selectionSummary: candidateRows.length > 0
+          ? `${candidateRows.length} candidates advanced from screening into the analysis set.`
+          : "No external candidates advanced from screening into this run.",
       },
       metrics: buildDiagnosticsMetrics([
-        ["candidate_count", "Candidate Count", Array.isArray(input.candidates) ? input.candidates.length : 0],
+        ["candidate_count", "Candidate Count", candidateRows.length],
       ]),
     },
     {
@@ -304,12 +435,17 @@ export function buildRunDiagnosticsArtifact(input: {
         context
       ),
       inputs: {
-        usingFallbackNews: input.usingFallbackNews ?? false,
+        tickersReviewed: allTickers.length > 0 ? allTickers : null,
+        searchWindow: input.usingFallbackNews
+          ? "Yahoo Finance fallback headlines"
+          : "Breaking 24h plus broader 30-day company, sector, and macro search",
+        fallbackUsed: input.usingFallbackNews ?? false,
       },
       outputs: {
-        breakingSummaryPresent: Boolean(input.newsResult?.breaking24h?.length),
-        combinedSummaryPresent: Boolean(input.newsResult?.combinedSummary?.length),
+        breakingNewsSummary: truncateText(input.newsResult?.breaking24h ?? null),
+        combinedResearchSummary: truncateText(input.newsResult?.combinedSummary ?? null),
         sourceCount: sourceRefs.length,
+        topSourceTitles: sourceRefs.slice(0, 5).map((source) => source.title),
       },
       metrics: buildDiagnosticsMetrics([
         ["source_count", "Source Count", sourceRefs.length],
@@ -332,10 +468,19 @@ export function buildRunDiagnosticsArtifact(input: {
         },
         context
       ),
+      inputs: {
+        tickersScored: allTickers.length > 0 ? allTickers : null,
+        scoringCoverage: allTickers.length > 0
+          ? `${allTickers.length} analyzed tickers were eligible for sentiment scoring.`
+          : "Sentiment scoring ran on the analyzed ticker set for this run.",
+      },
       outputs: {
         scoredTickerCount: scoredSignals.length,
         overlayTickerCount: Array.isArray(input.sentimentOverlay) ? input.sentimentOverlay.length : 0,
-        overlay: input.sentimentOverlay ?? [],
+        strongestSignals: topSentimentSignals,
+        overlaySummary: Array.isArray(input.sentimentOverlay) && input.sentimentOverlay.length > 0
+          ? `${input.sentimentOverlay.length} tickers received a sentiment overlay adjustment.`
+          : "No sentiment overlay adjustments were persisted for this run.",
       },
       metrics: buildDiagnosticsMetrics([
         ["scored_tickers", "Scored Tickers", scoredSignals.length],
@@ -358,15 +503,27 @@ export function buildRunDiagnosticsArtifact(input: {
       ),
       inputs: {
         totalInputChars: input.totalInputChars ?? null,
-        perSectionChars: input.perSectionChars ?? null,
+        contextSections,
+        recommendationUniverse: allTickers.length || null,
+        adjudicatorSupport: Object.keys(input.adjudicatorNotes ?? {}).length > 0
+          ? `${Object.keys(input.adjudicatorNotes ?? {}).length} low-confidence ticker(s) received adjudicator notes.`
+          : "No low-confidence adjudicator pass was needed for this run.",
       },
       outputs: {
         recommendationCount,
-        watchlistIdeasCount: input.reportData?.watchlistIdeas?.length ?? 0,
+        watchlistIdeasCount: watchlistIdeas.length,
+        recommendations: recommendationRows.slice(0, 10).map((recommendation: any) => ({
+          ticker: recommendation?.ticker ?? null,
+          companyName: recommendation?.companyName ?? null,
+          action: recommendation?.action ?? null,
+          thesisSummary: recommendation?.thesisSummary ?? recommendation?.detailedReasoning ?? null,
+        })),
+        watchlistIdeas: toLabeledTickerList(watchlistIdeas),
+        outputSummary: input.reportData?.summary ?? null,
       },
       metrics: buildDiagnosticsMetrics([
         ["recommendation_count", "Recommendations", recommendationCount],
-        ["watchlist_ideas", "Watchlist Ideas", input.reportData?.watchlistIdeas?.length ?? 0],
+        ["watchlist_ideas", "Watchlist Ideas", watchlistIdeas.length],
       ]),
       warnings: Object.keys(input.adjudicatorNotes ?? {}).length > 0
         ? buildDiagnosticsWarnings([["adjudicator_invoked", "Low-confidence adjudicator notes were captured for this run.", "info"]])
@@ -396,9 +553,12 @@ export function buildRunDiagnosticsArtifact(input: {
         context
       ),
       inputs: {
-        evidencePacketId: input.evidencePacketId,
+        finalOutcome: input.outcome,
+        recommendationRowsEvaluated: recommendationCount,
+        evidencePacketReady: Boolean(input.evidencePacketId),
       },
       outputs: {
+        finalizationSummary: buildValidationSummaryText(input.validationSummary),
         hardErrorCount: input.validationSummary.hardErrorCount,
         warningCount: input.validationSummary.warningCount,
         reasonCodes: input.validationSummary.reasonCodes,
@@ -1130,6 +1290,8 @@ export async function runFullAnalysis(
     adjudicatorNotes,
     perSectionChars,
     totalInputChars: additionalContext.length,
+    existingHoldingsCount: existingTickers.length,
+    allTickers,
     sources: (frozenNewsResult.allSources ?? []).map((source: any) => ({
       title: source.title ?? source.source ?? "Untitled",
       url: source.url ?? null,

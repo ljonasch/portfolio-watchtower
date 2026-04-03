@@ -43,7 +43,9 @@ describe("run diagnostics read service", () => {
               stepName: "Market Regime",
               status: "ok",
               summary: "Risk-on.",
-              inputs: {},
+              inputs: {
+                evidencePacketId: "packet_1",
+              },
               outputs: {},
               metrics: [],
               sources: [],
@@ -72,6 +74,16 @@ describe("run diagnostics read service", () => {
       expect(Object.keys(step.inputs).length).toBeGreaterThan(0);
       expect(Object.keys(step.outputs).length).toBeGreaterThan(0);
     }
+    expect(result?.steps[0]?.inputs).toEqual(
+      expect.objectContaining({
+        note: "This step reviewed the current macro regime using volatility, rates, and dollar context available for the run.",
+      })
+    );
+    expect(result?.steps[0]?.outputs).toEqual(
+      expect.objectContaining({
+        note: "This step did not persist a detailed market-regime conclusion beyond the stored status summary.",
+      })
+    );
     expect(prisma.analysisRun.findUnique).not.toHaveBeenCalled();
   });
 
@@ -134,10 +146,24 @@ describe("run diagnostics read service", () => {
     for (const step of result?.steps ?? []) {
       expect(Object.keys(step.inputs).length).toBeGreaterThan(0);
       expect(Object.keys(step.outputs).length).toBeGreaterThan(0);
+      expect(Object.keys(step.inputs).some((key) => key !== "note")).toBe(true);
+      expect(Object.keys(step.outputs).some((key) => key !== "note")).toBe(true);
     }
     expect(result?.steps.find((step) => step.stepKey === "gap_scan")?.inputs).toEqual(
       expect.objectContaining({
-        note: "Unavailable in fallback diagnostics for this older bundle.",
+        portfolioReview: "Existing holdings were reviewed for concentration, redundancy, and missing themes.",
+      })
+    );
+    expect(result?.steps.find((step) => step.stepKey === "candidate_screening")?.outputs).toEqual(
+      expect.objectContaining({
+        screeningResult: "3 added",
+        rationale: "Three candidates",
+      })
+    );
+    expect(result?.steps.find((step) => step.stepKey === "news_sources")?.outputs).toEqual(
+      expect.objectContaining({
+        sourceCoverage: "5 sources",
+        topSourceTitles: ["News item"],
       })
     );
     expect(result?.steps.find((step) => step.stepKey === "news_sources")?.sources).toHaveLength(1);

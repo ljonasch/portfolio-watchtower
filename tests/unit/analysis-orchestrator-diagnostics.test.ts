@@ -28,7 +28,7 @@ describe("analysis orchestrator diagnostics", () => {
         gaps: [{ ticker: "AVGO", companyName: "Broadcom", reason: "AI infra gap" }],
         searchBrief: "One gap found.",
       },
-      candidates: [{ ticker: "AVGO", companyName: "Broadcom", reason: "AI infra gap" }],
+      candidates: [{ ticker: "AVGO", companyName: "Broadcom", reason: "AI infra gap", source: "gap_screener" }],
       newsResult: {
         allSources: [{ title: "News item", url: "https://example.com", source: "example", publishedAt: null }],
         breaking24h: [{ title: "Breaking" }],
@@ -39,8 +39,12 @@ describe("analysis orchestrator diagnostics", () => {
       ]),
       sentimentOverlay: [{ ticker: "AVGO", stance: "positive" }],
       reportData: {
-        recommendations: [{ ticker: "AVGO" }, { ticker: "MSFT" }],
-        watchlistIdeas: [{ ticker: "NVDA" }],
+        summary: "Add AI infrastructure exposure while trimming overlapping software risk.",
+        recommendations: [
+          { ticker: "AVGO", companyName: "Broadcom", action: "Buy", thesisSummary: "Improves AI infrastructure exposure." },
+          { ticker: "MSFT", companyName: "Microsoft", action: "Hold", thesisSummary: "Maintains core platform exposure." },
+        ],
+        watchlistIdeas: [{ ticker: "NVDA", companyName: "NVIDIA" }],
       },
       validationSummary: {
         hardErrorCount: 0,
@@ -50,6 +54,8 @@ describe("analysis orchestrator diagnostics", () => {
       adjudicatorNotes: { AVGO: { confidence: "medium" } },
       perSectionChars: { news: 1200 },
       totalInputChars: 4200,
+      existingHoldingsCount: 6,
+      allTickers: ["AAPL", "MSFT", "AVGO", "NVDA"],
       sources: [{ title: "News item", url: "https://example.com", source: "example", publishedAt: null }],
     });
 
@@ -70,10 +76,40 @@ describe("analysis orchestrator diagnostics", () => {
     for (const step of artifact.steps) {
       expect(Object.keys(step.inputs).length).toBeGreaterThan(0);
       expect(Object.keys(step.outputs).length).toBeGreaterThan(0);
+      expect(Object.keys(step.inputs).some((key) => key !== "note")).toBe(true);
+      expect(Object.keys(step.outputs).some((key) => key !== "note")).toBe(true);
     }
-    expect(artifact.steps.find((step) => step.stepKey === "gap_scan")?.inputs).toEqual(
+    expect(artifact.steps.find((step) => step.stepKey === "candidate_screening")?.inputs).toEqual(
       expect.objectContaining({
-        note: "No explicit input telemetry was captured for this step in this run.",
+        heldTickerCount: 6,
+        screeningGoal: "One gap found.",
+        candidateSourcesReviewed: "gap screener",
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "candidate_screening")?.outputs).toEqual(
+      expect.objectContaining({
+        screenedInCount: 1,
+        selectionSummary: "1 candidates advanced from screening into the analysis set.",
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "news_sources")?.inputs).toEqual(
+      expect.objectContaining({
+        searchWindow: "Breaking 24h plus broader 30-day company, sector, and macro search",
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "gpt5_reasoning")?.outputs).toEqual(
+      expect.objectContaining({
+        recommendationCount: 2,
+        outputSummary: "Add AI infrastructure exposure while trimming overlapping software risk.",
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "market_regime")?.inputs).toEqual(
+      expect.objectContaining({
+        indicatorsReviewed: [
+          "CBOE VIX volatility",
+          "US 10-year Treasury yield",
+          "US Dollar Index",
+        ],
       })
     );
   });

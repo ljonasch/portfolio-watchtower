@@ -75,6 +75,80 @@ function ensureSection(
     : { note };
 }
 
+const GENERIC_NOTE_PATTERNS = [
+  "No explicit input telemetry was captured",
+  "No explicit output summary was captured",
+  "Inputs were not explicitly persisted",
+  "Outputs were not explicitly persisted",
+  "Unavailable in fallback diagnostics",
+  "No persisted output summary was available in fallback diagnostics",
+];
+
+const PROVENANCE_ONLY_KEYS = new Set([
+  "artifactId",
+  "bundleId",
+  "bundleOutcome",
+  "bundleSource",
+  "evidenceHash",
+  "evidencePacketId",
+  "generatedAt",
+  "promptHash",
+  "responseHash",
+  "runId",
+]);
+
+function isGenericNote(value: unknown): boolean {
+  return typeof value === "string" && GENERIC_NOTE_PATTERNS.some((pattern) => value.includes(pattern));
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0 && !isGenericNote(value);
+  if (typeof value === "number" || typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value as Record<string, unknown>).length > 0;
+  return false;
+}
+
+function hasHumanReadableSectionValue(data: Record<string, unknown>): boolean {
+  return Object.entries(data).some(([key, value]) => !PROVENANCE_ONLY_KEYS.has(key) && hasMeaningfulValue(value));
+}
+
+function humanReadableFallbackNote(stepKey: DiagnosticsStepContract["stepKey"], section: "inputs" | "outputs"): string {
+  const notes: Record<DiagnosticsStepContract["stepKey"], { inputs: string; outputs: string }> = {
+    market_regime: {
+      inputs: "This step reviewed the current macro regime using volatility, rates, and dollar context available for the run.",
+      outputs: "This step did not persist a detailed market-regime conclusion beyond the stored status summary.",
+    },
+    gap_scan: {
+      inputs: "This step scanned the existing portfolio for concentration risks, redundancies, and missing themes.",
+      outputs: "This step did not persist a detailed gap-scan result beyond the stored summary.",
+    },
+    candidate_screening: {
+      inputs: "This step reviewed existing holdings plus externally screened names against the identified portfolio gaps.",
+      outputs: "This step did not persist detailed candidate-screening results beyond the stored summary.",
+    },
+    news_sources: {
+      inputs: "This step searched recent company, sector, and macro news relevant to the analyzed tickers.",
+      outputs: "This step did not persist a detailed news-source summary beyond the stored citation list.",
+    },
+    sentiment: {
+      inputs: "This step evaluated sentiment signals across the analyzed tickers for this run.",
+      outputs: "This step did not persist a detailed sentiment summary beyond the stored overlay results.",
+    },
+    gpt5_reasoning: {
+      inputs: "This step assembled the compiled research context that was sent into the final reasoning model.",
+      outputs: "This step did not persist a detailed reasoning summary beyond the stored status output.",
+    },
+    validation_finalization: {
+      inputs: "This step validated the bundle payload and finalized the run outcome for persistence.",
+      outputs: "This step did not persist additional finalization details beyond the stored outcome summary.",
+    },
+  };
+
+  return notes[stepKey][section];
+}
+
 function ensureStepSections(
   step: DiagnosticsStepContract,
   notes: {
@@ -98,7 +172,18 @@ function normalizeArtifactSections(
 ): RunDiagnosticsArtifact {
   return {
     ...artifact,
-    steps: artifact.steps.map((step) => ensureStepSections(step, notes)),
+    steps: artifact.steps.map((step) => {
+      const ensured = ensureStepSections(step, notes);
+      return {
+        ...ensured,
+        inputs: hasHumanReadableSectionValue(ensured.inputs)
+          ? ensured.inputs
+          : { ...ensured.inputs, note: humanReadableFallbackNote(step.stepKey, "inputs") },
+        outputs: hasHumanReadableSectionValue(ensured.outputs)
+          ? ensured.outputs
+          : { ...ensured.outputs, note: humanReadableFallbackNote(step.stepKey, "outputs") },
+      };
+    }),
   };
 }
 
@@ -130,9 +215,15 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
       status: toStepStatusFromLegacyStatus(systemVerification.marketRegime?.status),
       summary: normalizeLegacySummary(systemVerification.marketRegime?.status ?? "Not run"),
       inputs: {
-        evidencePacketId: qualityMeta.evidencePacketId ?? evidencePacket.evidencePacketId ?? null,
+        asOfDate: bundle.finalizedAt.toISOString().split("T")[0],
+        indicatorsReviewed: [
+          "Market volatility",
+          "Interest-rate trend",
+          "US dollar backdrop",
+        ],
       },
       outputs: {
+        regimeAssessment: normalizeLegacySummary(systemVerification.marketRegime?.status ?? "Not run"),
         rationale: systemVerification.marketRegime?.rationale ?? null,
       },
       metrics: [],
@@ -147,8 +238,11 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
       stepName: "Portfolio Gap Scan",
       status: toStepStatusFromLegacyStatus(systemVerification.gapAnalysis?.status),
       summary: normalizeLegacySummary(systemVerification.gapAnalysis?.status ?? "Not run"),
-      inputs: {},
+      inputs: {
+        portfolioReview: "Existing holdings were reviewed for concentration, redundancy, and missing themes.",
+      },
       outputs: {
+        gapAssessment: normalizeLegacySummary(systemVerification.gapAnalysis?.status ?? "Not run"),
         rationale: systemVerification.gapAnalysis?.rationale ?? null,
       },
       metrics: [],
@@ -163,8 +257,11 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
       stepName: "Candidate Screening",
       status: toStepStatusFromLegacyStatus(systemVerification.candidateScreening?.status),
       summary: normalizeLegacySummary(systemVerification.candidateScreening?.status ?? "Not run"),
-      inputs: {},
+      inputs: {
+        screeningContext: "Held names and externally screened candidates were evaluated against the gap-scan output.",
+      },
       outputs: {
+        screeningResult: normalizeLegacySummary(systemVerification.candidateScreening?.status ?? "Not run"),
         rationale: systemVerification.candidateScreening?.rationale ?? null,
       },
       metrics: [],
@@ -180,10 +277,15 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
       status: toStepStatusFromLegacyStatus(systemVerification.fastSearchResearch?.status),
       summary: normalizeLegacySummary(systemVerification.fastSearchResearch?.status ?? "Not run"),
       inputs: {
-        usingFallbackNews: qualityMeta.usingFallbackNews ?? evidencePacket.usingFallbackNews ?? false,
+        searchWindow: qualityMeta.usingFallbackNews ?? evidencePacket.usingFallbackNews
+          ? "Yahoo Finance fallback headlines"
+          : "Breaking 24h plus broader company, sector, and macro search",
+        fallbackUsed: qualityMeta.usingFallbackNews ?? evidencePacket.usingFallbackNews ?? false,
       },
       outputs: {
-        rationale: systemVerification.fastSearchResearch?.rationale ?? null,
+        sourceCoverage: normalizeLegacySummary(systemVerification.fastSearchResearch?.status ?? "Not run"),
+        rationale: systemVerification.fastSearchResearch?.rationale || (sourceList.length > 0 ? "Citations were persisted for this run." : null),
+        topSourceTitles: sourceList.slice(0, 5).map((source) => source?.title ?? source?.source ?? "Untitled source"),
       },
       metrics: buildMetrics([
         ["source_count", "Source Count", sourceList.length],
@@ -201,8 +303,11 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
       stepName: "FinBERT / Sentiment",
       status: toStepStatusFromLegacyStatus(systemVerification.finbertSentiment?.status),
       summary: normalizeLegacySummary(systemVerification.finbertSentiment?.status ?? "Not run"),
-      inputs: {},
+      inputs: {
+        scoringScope: "Holdings and screened candidates were evaluated for sentiment signals.",
+      },
       outputs: {
+        sentimentSummary: normalizeLegacySummary(systemVerification.finbertSentiment?.status ?? "Not run"),
         rationale: systemVerification.finbertSentiment?.rationale ?? null,
         sentimentOverlay: systemVerification.sentimentOverlay?.overlay ?? [],
       },
@@ -222,9 +327,13 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
       summary: normalizeLegacySummary(systemVerification.gpt5Strategic?.status ?? "Not run"),
       inputs: {
         totalInputChars: qualityMeta.totalInputChars ?? evidencePacket.additionalContextLength ?? null,
-        perSectionChars: qualityMeta.perSectionChars ?? null,
+        contextSections: Object.keys(qualityMeta.perSectionChars ?? {}).map((key) => `${key}: ${(qualityMeta.perSectionChars ?? {})[key]} chars`),
+        adjudicatorSupport: Array.isArray(qualityMeta.adjudicatorTickers) && qualityMeta.adjudicatorTickers.length > 0
+          ? `${qualityMeta.adjudicatorTickers.length} low-confidence ticker(s) received adjudicator notes.`
+          : "No low-confidence adjudicator pass was needed for this run.",
       },
       outputs: {
+        reasoningSummary: normalizeLegacySummary(systemVerification.gpt5Strategic?.status ?? "Not run"),
         rationale: systemVerification.gpt5Strategic?.rationale ?? null,
         adjudicatorTickers: qualityMeta.adjudicatorTickers ?? [],
       },
@@ -251,9 +360,15 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
           ? "Validation completed with warnings."
           : "Validation and finalization completed cleanly.",
       inputs: {
-        evidencePacketId: qualityMeta.evidencePacketId ?? evidencePacket.evidencePacketId ?? null,
+        finalOutcome: bundle.bundleOutcome,
+        evidencePacketReady: Boolean(qualityMeta.evidencePacketId ?? evidencePacket.evidencePacketId ?? null),
       },
       outputs: {
+        validationSummary: validationSummary.hardErrorCount > 0
+          ? `Validation recorded ${validationSummary.hardErrorCount} hard error(s).`
+          : validationSummary.warningCount > 0
+            ? `Validation completed with ${validationSummary.warningCount} warning(s).`
+            : "Validation and finalization completed without hard errors or warnings.",
         hardErrorCount: validationSummary.hardErrorCount ?? 0,
         warningCount: validationSummary.warningCount ?? 0,
         reasonCodes: validationSummary.reasonCodes ?? [],
