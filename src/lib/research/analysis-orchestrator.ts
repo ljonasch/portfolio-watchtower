@@ -233,6 +233,404 @@ function summarizeTopSentimentSignals(signals: any[], overlay: any[]): Array<Rec
     });
 }
 
+function buildGapScanDiagnostics(input: {
+  gapReport?: any;
+  existingHoldingsCount?: number | null;
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
+  const gapRows = Array.isArray(input.gapReport?.gaps) ? input.gapReport.gaps : [];
+  const holdingsReviewed = input.existingHoldingsCount ?? null;
+  const hasHoldingsInput = typeof holdingsReviewed === "number" && holdingsReviewed > 0;
+  const hasSearchBasis = Boolean(input.gapReport?.searchBrief || input.gapReport?.profilePreferences);
+  const hasMeaningfulInputs = hasHoldingsInput || hasSearchBasis;
+  const ranMeaningfully = hasMeaningfulInputs;
+  const foundGaps = gapRows.length > 0;
+
+  const status: DiagnosticsStepContract["status"] = foundGaps
+    ? "ok"
+    : ranMeaningfully
+      ? "ok"
+      : "warning";
+
+  const outcomeExplanation = foundGaps
+    ? `${gapRows.length} material portfolio gap(s) were identified from the current holdings and profile context.`
+    : ranMeaningfully
+      ? "The gap scan ran successfully and found no material portfolio gaps worth actioning in this run."
+      : "Gap scan degraded because the run did not persist enough holdings or search-basis context to explain an empty result confidently.";
+
+  return {
+    status,
+    summary: outcomeExplanation,
+    inputs: {
+      holdingsScannedCount: holdingsReviewed,
+      scanScope: hasHoldingsInput
+        ? "Existing portfolio holdings were scanned for concentration, redundancy, and missing-theme exposure."
+        : "Holdings-scan scope was not fully persisted for this run.",
+      searchBasis: input.gapReport?.searchBrief ?? "No explicit gap-search brief was persisted for this run.",
+      profilePreferenceContext: input.gapReport?.profilePreferences ?? "No additional profile-preference gap context was persisted for this run.",
+      inputAvailability: hasMeaningfulInputs
+        ? "Enough portfolio context was available to run the gap scan."
+        : "Portfolio gap scan inputs were incomplete, so the empty result may reflect degraded telemetry rather than a clean no-gap outcome.",
+    },
+    outputs: {
+      outcomeExplanation,
+      gapCount: gapRows.length,
+      topFindings: gapRows.slice(0, 5).map((gap: any) => ({
+        type: gap?.type ?? null,
+        description: gap?.description ?? null,
+        affectedTickers: gap?.affectedTickers ?? [],
+        priority: gap?.priority ?? null,
+      })),
+      emptyResultReason: foundGaps
+        ? null
+        : ranMeaningfully
+          ? "No material gaps cleared the step's threshold for surfacing in this run."
+          : "The scan did not persist enough context to distinguish between a true no-gap result and a degraded run.",
+    },
+    warnings: !hasMeaningfulInputs
+      ? buildDiagnosticsWarnings([["gap_scan_inputs_incomplete", "Gap scan inputs were incomplete, so the step may have degraded before producing meaningful findings.", "warning"]])
+      : [],
+    metrics: buildDiagnosticsMetrics([
+      ["gap_count", "Gap Count", gapRows.length],
+      ["holdings_scanned", "Holdings Scanned", holdingsReviewed],
+    ]),
+  };
+}
+
+function buildCandidateScreeningDiagnostics(input: {
+  candidates?: any[];
+  existingHoldingsCount?: number | null;
+  allTickers?: string[];
+  gapReport?: any;
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
+  const candidateRows = Array.isArray(input.candidates) ? input.candidates : [];
+  const holdingsCount = input.existingHoldingsCount ?? null;
+  const allTickers = Array.isArray(input.allTickers) ? input.allTickers : [];
+  const candidatePoolCount = Math.max(0, allTickers.length - (holdingsCount ?? 0));
+  const hasScreeningContext = typeof holdingsCount === "number" || Boolean(input.gapReport?.searchBrief);
+  const foundCandidates = candidateRows.length > 0;
+
+  const status: DiagnosticsStepContract["status"] = foundCandidates
+    ? "ok"
+    : hasScreeningContext
+      ? "ok"
+      : "warning";
+
+  const outcomeExplanation = foundCandidates
+    ? `${candidateRows.length} candidate(s) passed screening and were advanced into the analyzed ticker set.`
+    : hasScreeningContext
+      ? "Candidate screening ran and no external candidates passed the screen for this run."
+      : "Candidate screening degraded because the run did not persist enough screening context to explain the empty result confidently.";
+
+  return {
+    status,
+    summary: outcomeExplanation,
+    inputs: {
+      heldTickerCount: holdingsCount,
+      analyzedTickerCount: allTickers.length || null,
+      estimatedExternalPoolCount: candidatePoolCount || 0,
+      screeningGoal: input.gapReport?.searchBrief ?? "No explicit screening brief was persisted for this run.",
+      categoriesConsidered: typeof holdingsCount === "number"
+        ? "Existing holdings plus externally screened candidates were considered."
+        : "The run did not persist enough context to confirm the full screening scope.",
+      rankingBasis: candidateRows.some((candidate) => candidate?.catalyst || candidate?.analystRating)
+        ? "Gap fit, recent catalyst strength, analyst support, and live-price validation."
+        : "Gap fit and externally screened candidate reasoning.",
+    },
+    outputs: {
+      outcomeExplanation,
+      screenedInCount: candidateRows.length,
+      screenedOutCount: candidatePoolCount > candidateRows.length ? candidatePoolCount - candidateRows.length : null,
+      topCandidates: candidateRows.slice(0, 10).map((candidate: any) => ({
+        ticker: candidate?.ticker ?? null,
+        companyName: candidate?.companyName ?? null,
+        reason: candidate?.reason ?? null,
+        catalyst: candidate?.catalyst ?? null,
+        analystRating: candidate?.analystRating ?? null,
+      })),
+      emptyResultReason: foundCandidates
+        ? null
+        : hasScreeningContext
+          ? "No screened candidates met the bar to be advanced into the final analyzed set."
+          : "The screening step did not persist enough scope detail to explain why no candidates passed.",
+    },
+    warnings: !hasScreeningContext
+      ? buildDiagnosticsWarnings([["candidate_screening_context_missing", "Candidate screening context was incomplete, so the empty result may reflect degraded telemetry.", "warning"]])
+      : [],
+    metrics: buildDiagnosticsMetrics([
+      ["candidate_count", "Candidate Count", candidateRows.length],
+      ["held_ticker_count", "Held Tickers", holdingsCount],
+      ["estimated_external_pool", "Estimated External Pool", candidatePoolCount],
+    ]),
+  };
+}
+
+function buildNewsSourceDiagnostics(input: {
+  allTickers?: string[];
+  usingFallbackNews?: boolean;
+  newsResult?: any;
+  sourceRefs: DiagnosticsSourceRefContract[];
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics" | "sources"> {
+  const allTickers = Array.isArray(input.allTickers) ? input.allTickers : [];
+  const breakingItems = input.newsResult?.breaking24h?.length ?? 0;
+  const sourceCount = input.sourceRefs.length;
+  const hasSearchContext = allTickers.length > 0;
+  const collectedSources = sourceCount > 0;
+
+  const status: DiagnosticsStepContract["status"] = collectedSources
+    ? "ok"
+    : hasSearchContext
+      ? "warning"
+      : "warning";
+
+  const outcomeExplanation = collectedSources
+    ? `${sourceCount} source(s) were collected for the analyzed ticker set.`
+    : hasSearchContext
+      ? "News search ran for the analyzed tickers, but no sourceable events were persisted into this run."
+      : "News source search context was incomplete, so the empty result may reflect degraded execution.";
+
+  return {
+    status,
+    summary: outcomeExplanation,
+    inputs: {
+      tickersReviewed: allTickers.length > 0 ? allTickers : null,
+      searchWindow: input.usingFallbackNews
+        ? "Yahoo Finance fallback headlines"
+        : "Breaking 24h plus broader 30-day company, sector, and macro search",
+      fallbackUsed: input.usingFallbackNews ?? false,
+      searchScope: hasSearchContext
+        ? "The step searched company, sector, and macro events relevant to the analyzed tickers."
+        : "The run did not persist enough ticker scope to describe the news search inputs fully.",
+    },
+    outputs: {
+      outcomeExplanation,
+      sourceCount,
+      breakingNewsSummary: truncateText(input.newsResult?.breaking24h ?? null),
+      combinedResearchSummary: truncateText(input.newsResult?.combinedSummary ?? null),
+      topSourceTitles: input.sourceRefs.slice(0, 5).map((source) => source.title),
+      emptyResultReason: collectedSources
+        ? null
+        : hasSearchContext
+          ? "The news search completed but did not persist any source-backed items for this run."
+          : "The step did not persist enough input scope to explain an empty source result confidently.",
+    },
+    metrics: buildDiagnosticsMetrics([
+      ["source_count", "Source Count", sourceCount],
+      ["breaking_items", "Breaking Items", breakingItems],
+      ["tickers_reviewed", "Tickers Reviewed", allTickers.length || null],
+    ]),
+    sources: input.sourceRefs,
+    warnings: input.usingFallbackNews
+      ? buildDiagnosticsWarnings([["fallback_news", "Fallback news path was used.", "warning"]])
+      : !collectedSources
+        ? buildDiagnosticsWarnings([["news_sources_empty", "News search returned no persisted sources for this run.", "warning"]])
+        : [],
+  };
+}
+
+function buildReasoningDiagnostics(input: {
+  recommendationRows: any[];
+  watchlistIdeas: any[];
+  totalInputChars?: number | null;
+  contextSections: string[];
+  adjudicatorNotes?: Record<string, unknown>;
+  allTickers?: string[];
+  reportData?: any;
+  outcome: RunDiagnosticsArtifact["outcome"];
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics" | "model"> {
+  const recommendationCount = input.recommendationRows.length;
+  const hasContext = (input.totalInputChars ?? 0) > 0 || input.contextSections.length > 0 || (input.allTickers?.length ?? 0) > 0;
+  const status: DiagnosticsStepContract["status"] = recommendationCount > 0
+    ? "ok"
+    : input.outcome === "validated"
+      ? hasContext
+        ? "warning"
+        : "not_run"
+      : "not_run";
+
+  const outcomeExplanation = recommendationCount > 0
+    ? `${recommendationCount} recommendation row(s) were produced from the final reasoning pass.`
+    : hasContext
+      ? "The final reasoning step ran but did not produce actionable recommendation rows."
+      : "The final reasoning step did not have enough persisted context to produce or explain recommendation output.";
+
+  return {
+    status,
+    summary: outcomeExplanation,
+    inputs: {
+      recommendationUniverse: input.allTickers?.length ?? null,
+      totalInputChars: input.totalInputChars ?? null,
+      contextSections: input.contextSections.length > 0 ? input.contextSections : ["No per-section context telemetry was persisted for this run."],
+      adjudicatorSupport: Object.keys(input.adjudicatorNotes ?? {}).length > 0
+        ? `${Object.keys(input.adjudicatorNotes ?? {}).length} low-confidence ticker(s) received adjudicator notes.`
+        : "No low-confidence adjudicator pass was needed for this run.",
+    },
+    outputs: {
+      outcomeExplanation,
+      recommendationCount,
+      watchlistIdeasCount: input.watchlistIdeas.length,
+      recommendations: input.recommendationRows.slice(0, 10).map((recommendation: any) => ({
+        ticker: recommendation?.ticker ?? null,
+        companyName: recommendation?.companyName ?? null,
+        action: recommendation?.action ?? null,
+        thesisSummary: recommendation?.thesisSummary ?? recommendation?.detailedReasoning ?? null,
+      })),
+      watchlistIdeas: toLabeledTickerList(input.watchlistIdeas),
+      outputSummary: input.reportData?.summary ?? null,
+      emptyResultReason: recommendationCount > 0
+        ? null
+        : hasContext
+          ? "The reasoning stage completed without surfacing actionable recommendations."
+          : "The reasoning stage did not persist enough input context to explain an empty output.",
+    },
+    metrics: buildDiagnosticsMetrics([
+      ["recommendation_count", "Recommendations", recommendationCount],
+      ["watchlist_ideas", "Watchlist Ideas", input.watchlistIdeas.length],
+    ]),
+    warnings: Object.keys(input.adjudicatorNotes ?? {}).length > 0
+      ? buildDiagnosticsWarnings([["adjudicator_invoked", "Low-confidence adjudicator notes were captured for this run.", "info"]])
+      : recommendationCount === 0 && hasContext
+        ? buildDiagnosticsWarnings([["reasoning_no_actions", "The reasoning stage completed without actionable recommendations.", "warning"]])
+        : [],
+    model: null,
+  };
+}
+
+function buildMarketRegimeDiagnostics(input: {
+  generatedAt: string;
+  regime?: any;
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings"> {
+  const hasRegime = Boolean(input.regime?.summary && input.regime.summary !== "Regime data unavailable.");
+  const outcomeExplanation = hasRegime
+    ? "Market regime detection completed with a usable macro posture summary."
+    : "Market regime detection degraded because the run did not persist a usable macro summary.";
+
+  return {
+    status: hasRegime ? "ok" : "warning",
+    summary: outcomeExplanation,
+    inputs: {
+      asOfDate: input.generatedAt.split("T")[0],
+      indicatorsReviewed: [
+        "CBOE VIX volatility",
+        "US 10-year Treasury yield",
+        "US Dollar Index",
+      ],
+      executionMode: hasRegime
+        ? "Macro regime inputs were available and assessed."
+        : "The regime step did not persist enough macro evidence to explain a clean result.",
+    },
+    outputs: {
+      outcomeExplanation,
+      riskMode: input.regime?.riskMode ?? null,
+      rateTrend: input.regime?.rateTrend ?? null,
+      dollarTrend: input.regime?.dollarTrend ?? null,
+      volatilityBackdrop: input.regime?.vixLevel ?? null,
+      sectorLeadership: input.regime?.sectorLeadership ?? null,
+      regimeSummary: input.regime?.summary ?? null,
+      emptyResultReason: hasRegime ? null : "The step did not persist a usable regime summary for this run.",
+    },
+    warnings: hasRegime
+      ? []
+      : buildDiagnosticsWarnings([["market_regime_unavailable", "Market regime detection did not persist a usable summary for this run.", "warning"]]),
+  };
+}
+
+function buildSentimentDiagnostics(input: {
+  allTickers?: string[];
+  scoredSignals: any[];
+  sentimentOverlay?: any[];
+  topSentimentSignals: Array<Record<string, unknown>>;
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
+  const allTickers = Array.isArray(input.allTickers) ? input.allTickers : [];
+  const overlayCount = Array.isArray(input.sentimentOverlay) ? input.sentimentOverlay.length : 0;
+  const hasCoverage = allTickers.length > 0;
+  const hasSignals = input.scoredSignals.length > 0 || overlayCount > 0;
+  const outcomeExplanation = hasSignals
+    ? `${input.scoredSignals.length} ticker(s) produced non-zero sentiment signals and ${overlayCount} overlay adjustment(s) were recorded.`
+    : hasCoverage
+      ? "Sentiment scoring ran but did not find any non-zero signals worth surfacing in this run."
+      : "Sentiment scoring context was incomplete, so the empty result may reflect degraded telemetry.";
+
+  return {
+    status: hasSignals ? "ok" : hasCoverage ? "ok" : "warning",
+    summary: outcomeExplanation,
+    inputs: {
+      tickersScored: hasCoverage ? allTickers : null,
+      scoringScope: hasCoverage
+        ? `${allTickers.length} analyzed ticker(s) were eligible for sentiment scoring.`
+        : "The run did not persist enough ticker scope to describe sentiment coverage fully.",
+    },
+    outputs: {
+      outcomeExplanation,
+      scoredTickerCount: input.scoredSignals.length,
+      overlayTickerCount: overlayCount,
+      strongestSignals: input.topSentimentSignals,
+      overlaySummary: overlayCount > 0
+        ? `${overlayCount} ticker(s) received a sentiment overlay adjustment.`
+        : hasCoverage
+          ? "Sentiment scoring ran but no overlay adjustments were needed."
+          : "No overlay output was available because sentiment coverage details were incomplete.",
+      emptyResultReason: hasSignals
+        ? null
+        : hasCoverage
+          ? "The step ran and found no non-zero sentiment signals worth surfacing."
+          : "The step did not persist enough coverage context to explain the empty sentiment result.",
+    },
+    metrics: buildDiagnosticsMetrics([
+      ["scored_tickers", "Scored Tickers", input.scoredSignals.length],
+      ["overlay_tickers", "Overlay Tickers", overlayCount],
+      ["eligible_tickers", "Eligible Tickers", hasCoverage ? allTickers.length : null],
+    ]),
+    warnings: hasCoverage
+      ? []
+      : buildDiagnosticsWarnings([["sentiment_scope_incomplete", "Sentiment scoring scope was incomplete, so the empty result may reflect degraded telemetry.", "warning"]]),
+  };
+}
+
+function buildValidationDiagnostics(input: {
+  outcome: RunDiagnosticsArtifact["outcome"];
+  evidencePacketId: string | null;
+  recommendationCount: number;
+  validationSummary: {
+    hardErrorCount: number;
+    warningCount: number;
+    reasonCodes: string[];
+  };
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
+  const finalizationSummary = buildValidationSummaryText(input.validationSummary);
+  return {
+    status: input.validationSummary.hardErrorCount > 0
+      ? "error"
+      : input.validationSummary.warningCount > 0
+        ? "warning"
+        : "ok",
+    summary: finalizationSummary,
+    inputs: {
+      finalOutcome: input.outcome,
+      recommendationRowsEvaluated: input.recommendationCount,
+      evidencePacketReady: Boolean(input.evidencePacketId),
+      finalizationScope: "The finalized bundle payload, recommendation rows, and validation summary were checked before persistence.",
+    },
+    outputs: {
+      finalizationSummary,
+      hardErrorCount: input.validationSummary.hardErrorCount,
+      warningCount: input.validationSummary.warningCount,
+      reasonCodes: input.validationSummary.reasonCodes,
+      emptyResultReason: input.validationSummary.hardErrorCount === 0 && input.validationSummary.warningCount === 0
+        ? "Validation completed cleanly and produced no warning codes."
+        : null,
+    },
+    metrics: buildDiagnosticsMetrics([
+      ["hard_error_count", "Hard Errors", input.validationSummary.hardErrorCount],
+      ["warning_count", "Warnings", input.validationSummary.warningCount],
+    ]),
+    warnings: (input.validationSummary.reasonCodes ?? []).map((code) => ({
+      code,
+      message: code,
+      severity: input.validationSummary.hardErrorCount > 0 ? "error" as const : "warning" as const,
+    })),
+  };
+}
+
 function buildValidationSummaryText(validationSummary: {
   hardErrorCount: number;
   warningCount: number;
@@ -325,209 +723,139 @@ export function buildRunDiagnosticsArtifact(input: {
     severity: input.validationSummary.hardErrorCount > 0 ? "error" as const : "warning" as const,
   }));
 
+  const marketRegimeDiagnostics = buildMarketRegimeDiagnostics({
+    generatedAt: input.generatedAt,
+    regime: input.regime,
+  });
+  const gapScanDiagnostics = buildGapScanDiagnostics({
+    gapReport: input.gapReport,
+    existingHoldingsCount,
+  });
+  const candidateScreeningDiagnostics = buildCandidateScreeningDiagnostics({
+    candidates: candidateRows,
+    existingHoldingsCount,
+    allTickers,
+    gapReport: input.gapReport,
+  });
+  const newsSourceDiagnostics = buildNewsSourceDiagnostics({
+    allTickers,
+    usingFallbackNews: input.usingFallbackNews,
+    newsResult: input.newsResult,
+    sourceRefs,
+  });
+  const sentimentDiagnostics = buildSentimentDiagnostics({
+    allTickers,
+    scoredSignals,
+    sentimentOverlay: input.sentimentOverlay,
+    topSentimentSignals,
+  });
+  const reasoningDiagnostics = buildReasoningDiagnostics({
+    recommendationRows,
+    watchlistIdeas,
+    totalInputChars: input.totalInputChars ?? null,
+    contextSections,
+    adjudicatorNotes: input.adjudicatorNotes,
+    allTickers,
+    reportData: input.reportData,
+    outcome: input.outcome,
+  });
+  const validationDiagnostics = buildValidationDiagnostics({
+    outcome: input.outcome,
+    evidencePacketId: input.evidencePacketId,
+    recommendationCount,
+    validationSummary: input.validationSummary,
+  });
+
   const steps: DiagnosticsStepContract[] = [
     {
       ...buildStepBase(
         {
           stepKey: "market_regime",
           stepName: "Market Regime",
-          status: input.regime?.summary && input.regime.summary !== "Regime data unavailable." ? "ok" : "warning",
-          summary: input.regime?.summary ?? "Regime data unavailable.",
+          status: marketRegimeDiagnostics.status,
+          summary: marketRegimeDiagnostics.summary,
         },
         context
       ),
-      inputs: {
-        asOfDate: input.generatedAt.split("T")[0],
-        indicatorsReviewed: [
-          "CBOE VIX volatility",
-          "US 10-year Treasury yield",
-          "US Dollar Index",
-        ],
-      },
-      outputs: {
-        riskMode: input.regime?.riskMode ?? null,
-        rateTrend: input.regime?.rateTrend ?? null,
-        dollarTrend: input.regime?.dollarTrend ?? null,
-        volatilityBackdrop: input.regime?.vixLevel ?? null,
-        sectorLeadership: input.regime?.sectorLeadership ?? null,
-        summary: input.regime?.summary ?? null,
-      },
+      inputs: marketRegimeDiagnostics.inputs,
+      outputs: marketRegimeDiagnostics.outputs,
+      warnings: marketRegimeDiagnostics.warnings,
     },
     {
       ...buildStepBase(
         {
           stepKey: "gap_scan",
           stepName: "Portfolio Gap Scan",
-          status: Array.isArray(input.gapReport?.gaps) && input.gapReport.gaps.length > 0 ? "ok" : "warning",
-          summary: input.gapReport?.searchBrief ?? "No portfolio gaps were identified.",
+          status: gapScanDiagnostics.status,
+          summary: gapScanDiagnostics.summary,
         },
         context
       ),
-      inputs: {
-        holdingsReviewed: existingHoldingsCount,
-        portfolioPreferences: input.gapReport?.profilePreferences ?? null,
-        searchFocus: input.gapReport?.searchBrief ?? null,
-      },
-      outputs: {
-        gapCount: Array.isArray(input.gapReport?.gaps) ? input.gapReport.gaps.length : 0,
-        topGaps: Array.isArray(input.gapReport?.gaps)
-          ? input.gapReport.gaps.slice(0, 5).map((gap: any) => ({
-              type: gap?.type ?? null,
-              description: gap?.description ?? null,
-              affectedTickers: gap?.affectedTickers ?? [],
-              priority: gap?.priority ?? null,
-            }))
-          : [],
-        scanSummary: input.gapReport?.searchBrief ?? null,
-      },
-      metrics: buildDiagnosticsMetrics([
-        ["gap_count", "Gap Count", Array.isArray(input.gapReport?.gaps) ? input.gapReport.gaps.length : 0],
-      ]),
+      inputs: gapScanDiagnostics.inputs,
+      outputs: gapScanDiagnostics.outputs,
+      metrics: gapScanDiagnostics.metrics,
+      warnings: gapScanDiagnostics.warnings,
     },
     {
       ...buildStepBase(
         {
           stepKey: "candidate_screening",
           stepName: "Candidate Screening",
-          status: Array.isArray(input.candidates) && input.candidates.length > 0 ? "ok" : "warning",
-          summary: Array.isArray(input.candidates) && input.candidates.length > 0
-            ? `${input.candidates.length} candidates screened into the run.`
-            : "No candidates were added during screening.",
+          status: candidateScreeningDiagnostics.status,
+          summary: candidateScreeningDiagnostics.summary,
         },
         context
       ),
-      inputs: {
-        heldTickerCount: existingHoldingsCount,
-        analyzedTickerCount: allTickers.length || null,
-        screeningGoal: input.gapReport?.searchBrief ?? null,
-        candidateSourcesReviewed: summarizeCandidateSources(candidateRows),
-      },
-      outputs: {
-        screenedInCount: candidateRows.length,
-        topCandidates: candidateRows
-          .slice(0, 10)
-          .map((candidate: any) => ({
-              ticker: candidate?.ticker ?? null,
-              companyName: candidate?.companyName ?? null,
-              reason: candidate?.reason ?? null,
-              catalyst: candidate?.catalyst ?? null,
-              analystRating: candidate?.analystRating ?? null,
-            }))
-          ,
-        selectionSummary: candidateRows.length > 0
-          ? `${candidateRows.length} candidates advanced from screening into the analysis set.`
-          : "No external candidates advanced from screening into this run.",
-      },
-      metrics: buildDiagnosticsMetrics([
-        ["candidate_count", "Candidate Count", candidateRows.length],
-      ]),
+      inputs: candidateScreeningDiagnostics.inputs,
+      outputs: candidateScreeningDiagnostics.outputs,
+      metrics: candidateScreeningDiagnostics.metrics,
+      warnings: candidateScreeningDiagnostics.warnings,
     },
     {
       ...buildStepBase(
         {
           stepKey: "news_sources",
           stepName: "News & Event Sources",
-          status: sourceRefs.length > 0 ? "ok" : "warning",
-          summary: sourceRefs.length > 0
-            ? `${sourceRefs.length} sources collected for the run.`
-            : "No news/event sources were collected for the run.",
+          status: newsSourceDiagnostics.status,
+          summary: newsSourceDiagnostics.summary,
         },
         context
       ),
-      inputs: {
-        tickersReviewed: allTickers.length > 0 ? allTickers : null,
-        searchWindow: input.usingFallbackNews
-          ? "Yahoo Finance fallback headlines"
-          : "Breaking 24h plus broader 30-day company, sector, and macro search",
-        fallbackUsed: input.usingFallbackNews ?? false,
-      },
-      outputs: {
-        breakingNewsSummary: truncateText(input.newsResult?.breaking24h ?? null),
-        combinedResearchSummary: truncateText(input.newsResult?.combinedSummary ?? null),
-        sourceCount: sourceRefs.length,
-        topSourceTitles: sourceRefs.slice(0, 5).map((source) => source.title),
-      },
-      metrics: buildDiagnosticsMetrics([
-        ["source_count", "Source Count", sourceRefs.length],
-        ["breaking_items", "Breaking Items", input.newsResult?.breaking24h?.length ?? 0],
-      ]),
-      sources: sourceRefs,
-      warnings: input.usingFallbackNews
-        ? buildDiagnosticsWarnings([["fallback_news", "Fallback news path was used.", "warning"]])
-        : [],
+      inputs: newsSourceDiagnostics.inputs,
+      outputs: newsSourceDiagnostics.outputs,
+      metrics: newsSourceDiagnostics.metrics,
+      sources: newsSourceDiagnostics.sources,
+      warnings: newsSourceDiagnostics.warnings,
     },
     {
       ...buildStepBase(
         {
           stepKey: "sentiment",
           stepName: "FinBERT / Sentiment",
-          status: scoredSignals.length > 0 ? "ok" : "warning",
-          summary: scoredSignals.length > 0
-            ? `${scoredSignals.length} tickers produced sentiment signals.`
-            : "No non-zero sentiment signals were recorded.",
+          status: sentimentDiagnostics.status,
+          summary: sentimentDiagnostics.summary,
         },
         context
       ),
-      inputs: {
-        tickersScored: allTickers.length > 0 ? allTickers : null,
-        scoringCoverage: allTickers.length > 0
-          ? `${allTickers.length} analyzed tickers were eligible for sentiment scoring.`
-          : "Sentiment scoring ran on the analyzed ticker set for this run.",
-      },
-      outputs: {
-        scoredTickerCount: scoredSignals.length,
-        overlayTickerCount: Array.isArray(input.sentimentOverlay) ? input.sentimentOverlay.length : 0,
-        strongestSignals: topSentimentSignals,
-        overlaySummary: Array.isArray(input.sentimentOverlay) && input.sentimentOverlay.length > 0
-          ? `${input.sentimentOverlay.length} tickers received a sentiment overlay adjustment.`
-          : "No sentiment overlay adjustments were persisted for this run.",
-      },
-      metrics: buildDiagnosticsMetrics([
-        ["scored_tickers", "Scored Tickers", scoredSignals.length],
-        ["overlay_tickers", "Overlay Tickers", Array.isArray(input.sentimentOverlay) ? input.sentimentOverlay.length : 0],
-      ]),
+      inputs: sentimentDiagnostics.inputs,
+      outputs: sentimentDiagnostics.outputs,
+      metrics: sentimentDiagnostics.metrics,
+      warnings: sentimentDiagnostics.warnings,
     },
     {
       ...buildStepBase(
         {
           stepKey: "gpt5_reasoning",
           stepName: "GPT-5 Reasoning",
-          status: recommendationCount > 0 ? "ok" : input.outcome === "validated" ? "warning" : "not_run",
-          summary: recommendationCount > 0
-            ? `${recommendationCount} recommendations were produced by the final reasoning step.`
-            : input.outcome === "validated"
-              ? "The final reasoning step completed without recommendation rows."
-              : "The final reasoning step did not complete.",
+          status: reasoningDiagnostics.status,
+          summary: reasoningDiagnostics.summary,
         },
         context
       ),
-      inputs: {
-        totalInputChars: input.totalInputChars ?? null,
-        contextSections,
-        recommendationUniverse: allTickers.length || null,
-        adjudicatorSupport: Object.keys(input.adjudicatorNotes ?? {}).length > 0
-          ? `${Object.keys(input.adjudicatorNotes ?? {}).length} low-confidence ticker(s) received adjudicator notes.`
-          : "No low-confidence adjudicator pass was needed for this run.",
-      },
-      outputs: {
-        recommendationCount,
-        watchlistIdeasCount: watchlistIdeas.length,
-        recommendations: recommendationRows.slice(0, 10).map((recommendation: any) => ({
-          ticker: recommendation?.ticker ?? null,
-          companyName: recommendation?.companyName ?? null,
-          action: recommendation?.action ?? null,
-          thesisSummary: recommendation?.thesisSummary ?? recommendation?.detailedReasoning ?? null,
-        })),
-        watchlistIdeas: toLabeledTickerList(watchlistIdeas),
-        outputSummary: input.reportData?.summary ?? null,
-      },
-      metrics: buildDiagnosticsMetrics([
-        ["recommendation_count", "Recommendations", recommendationCount],
-        ["watchlist_ideas", "Watchlist Ideas", watchlistIdeas.length],
-      ]),
-      warnings: Object.keys(input.adjudicatorNotes ?? {}).length > 0
-        ? buildDiagnosticsWarnings([["adjudicator_invoked", "Low-confidence adjudicator notes were captured for this run.", "info"]])
-        : [],
+      inputs: reasoningDiagnostics.inputs,
+      outputs: reasoningDiagnostics.outputs,
+      metrics: reasoningDiagnostics.metrics,
+      warnings: reasoningDiagnostics.warnings,
       model: {
         name: input.primaryModel,
         promptVersion: input.versions.promptVersion ?? input.promptHash,
@@ -539,35 +867,15 @@ export function buildRunDiagnosticsArtifact(input: {
         {
           stepKey: "validation_finalization",
           stepName: "Validation & Finalization",
-          status: input.validationSummary.hardErrorCount > 0
-            ? "error"
-            : input.validationSummary.warningCount > 0
-              ? "warning"
-              : "ok",
-          summary: input.validationSummary.hardErrorCount > 0
-            ? "Validation recorded hard errors."
-            : input.validationSummary.warningCount > 0
-              ? "Validation completed with warnings."
-              : "Validation and finalization completed cleanly.",
+          status: validationDiagnostics.status,
+          summary: validationDiagnostics.summary,
         },
         context
       ),
-      inputs: {
-        finalOutcome: input.outcome,
-        recommendationRowsEvaluated: recommendationCount,
-        evidencePacketReady: Boolean(input.evidencePacketId),
-      },
-      outputs: {
-        finalizationSummary: buildValidationSummaryText(input.validationSummary),
-        hardErrorCount: input.validationSummary.hardErrorCount,
-        warningCount: input.validationSummary.warningCount,
-        reasonCodes: input.validationSummary.reasonCodes,
-      },
-      metrics: buildDiagnosticsMetrics([
-        ["hard_error_count", "Hard Errors", input.validationSummary.hardErrorCount],
-        ["warning_count", "Warnings", input.validationSummary.warningCount],
-      ]),
-      warnings: validationWarnings,
+      inputs: validationDiagnostics.inputs,
+      outputs: validationDiagnostics.outputs,
+      metrics: validationDiagnostics.metrics,
+      warnings: validationDiagnostics.warnings,
       model: {
         name: input.primaryModel,
         promptVersion: input.versions.promptVersion ?? input.promptHash,

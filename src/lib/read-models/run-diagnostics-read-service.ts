@@ -149,6 +149,26 @@ function humanReadableFallbackNote(stepKey: DiagnosticsStepContract["stepKey"], 
   return notes[stepKey][section];
 }
 
+function buildLegacyGapOutcome(status: string, rationale: string | null | undefined): string {
+  if (status === "0 gaps") {
+    return "The portfolio gap scan ran and found no material gaps worth surfacing in this run.";
+  }
+  if (status === "Not run") {
+    return "The portfolio gap scan did not persist enough information to confirm whether it ran meaningfully.";
+  }
+  return rationale || `The portfolio gap scan surfaced ${status.toLowerCase()} for this run.`;
+}
+
+function buildLegacyCandidateOutcome(status: string, rationale: string | null | undefined): string {
+  if (status === "0 added") {
+    return "Candidate screening ran and no external candidates passed the screen for this run.";
+  }
+  if (status === "Not run") {
+    return "Candidate screening did not persist enough information to confirm whether it ran meaningfully.";
+  }
+  return rationale || `Candidate screening produced ${status.toLowerCase()} in this run.`;
+}
+
 function ensureStepSections(
   step: DiagnosticsStepContract,
   notes: {
@@ -240,14 +260,25 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
       summary: normalizeLegacySummary(systemVerification.gapAnalysis?.status ?? "Not run"),
       inputs: {
         portfolioReview: "Existing holdings were reviewed for concentration, redundancy, and missing themes.",
+        searchBasis: systemVerification.gapAnalysis?.rationale ?? "No explicit gap-search brief was persisted for this older bundle.",
+        inputAvailability: "Legacy fallback confirms the gap scan had at least holdings-level portfolio context, but not the richer canonical telemetry captured by newer bundles.",
       },
       outputs: {
         gapAssessment: normalizeLegacySummary(systemVerification.gapAnalysis?.status ?? "Not run"),
+        outcomeExplanation: buildLegacyGapOutcome(
+          normalizeLegacySummary(systemVerification.gapAnalysis?.status ?? "Not run"),
+          systemVerification.gapAnalysis?.rationale ?? null
+        ),
         rationale: systemVerification.gapAnalysis?.rationale ?? null,
+        emptyResultReason: normalizeLegacySummary(systemVerification.gapAnalysis?.status ?? "Not run") === "0 gaps"
+          ? "The older bundle indicates the gap scan ran but found no material gaps worth surfacing."
+          : null,
       },
       metrics: [],
       sources: [],
-      warnings: [],
+      warnings: normalizeLegacySummary(systemVerification.gapAnalysis?.status ?? "Not run") === "Not run"
+        ? buildWarnings([["gap_scan_legacy_missing", "Legacy fallback could not confirm whether the gap scan completed meaningfully.", "warning"]])
+        : [],
       model: null,
       hashes: { evidenceHash, promptHash },
       versions,
@@ -259,14 +290,25 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
       summary: normalizeLegacySummary(systemVerification.candidateScreening?.status ?? "Not run"),
       inputs: {
         screeningContext: "Held names and externally screened candidates were evaluated against the gap-scan output.",
+        rankingBasis: "Legacy fallback confirms screening occurred, but only limited candidate-ranking telemetry was persisted for this older bundle.",
+        screeningGoal: systemVerification.gapAnalysis?.rationale ?? "No explicit candidate-screening brief was persisted for this older bundle.",
       },
       outputs: {
         screeningResult: normalizeLegacySummary(systemVerification.candidateScreening?.status ?? "Not run"),
+        outcomeExplanation: buildLegacyCandidateOutcome(
+          normalizeLegacySummary(systemVerification.candidateScreening?.status ?? "Not run"),
+          systemVerification.candidateScreening?.rationale ?? null
+        ),
         rationale: systemVerification.candidateScreening?.rationale ?? null,
+        emptyResultReason: normalizeLegacySummary(systemVerification.candidateScreening?.status ?? "Not run") === "0 added"
+          ? "Legacy fallback indicates the screening step ran but no candidates passed."
+          : null,
       },
       metrics: [],
       sources: [],
-      warnings: [],
+      warnings: normalizeLegacySummary(systemVerification.candidateScreening?.status ?? "Not run") === "Not run"
+        ? buildWarnings([["candidate_screening_legacy_missing", "Legacy fallback could not confirm whether candidate screening completed meaningfully.", "warning"]])
+        : [],
       model: null,
       hashes: { evidenceHash, promptHash },
       versions,
@@ -281,11 +323,16 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
           ? "Yahoo Finance fallback headlines"
           : "Breaking 24h plus broader company, sector, and macro search",
         fallbackUsed: qualityMeta.usingFallbackNews ?? evidencePacket.usingFallbackNews ?? false,
+        searchScope: "Legacy fallback confirms the news step searched the analyzed ticker set, but only limited request-scope telemetry was persisted.",
       },
       outputs: {
         sourceCoverage: normalizeLegacySummary(systemVerification.fastSearchResearch?.status ?? "Not run"),
+        outcomeExplanation: sourceList.length > 0
+          ? `${sourceList.length} source(s) were persisted for this run.`
+          : "The news step did not persist any source-backed items for this older bundle.",
         rationale: systemVerification.fastSearchResearch?.rationale || (sourceList.length > 0 ? "Citations were persisted for this run." : null),
         topSourceTitles: sourceList.slice(0, 5).map((source) => source?.title ?? source?.source ?? "Untitled source"),
+        emptyResultReason: sourceList.length === 0 ? "Legacy fallback has no persisted sources for this run." : null,
       },
       metrics: buildMetrics([
         ["source_count", "Source Count", sourceList.length],
@@ -305,9 +352,13 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
       summary: normalizeLegacySummary(systemVerification.finbertSentiment?.status ?? "Not run"),
       inputs: {
         scoringScope: "Holdings and screened candidates were evaluated for sentiment signals.",
+        inputAvailability: "Legacy fallback retains the sentiment step outcome but not the richer per-ticker coverage telemetry captured in newer bundles.",
       },
       outputs: {
         sentimentSummary: normalizeLegacySummary(systemVerification.finbertSentiment?.status ?? "Not run"),
+        outcomeExplanation: normalizeLegacySummary(systemVerification.finbertSentiment?.status ?? "Not run") === "0 scored"
+          ? "Sentiment scoring ran and found no non-zero signals worth surfacing."
+          : `Sentiment scoring produced ${normalizeLegacySummary(systemVerification.finbertSentiment?.status ?? "Not run").toLowerCase()} in this run.`,
         rationale: systemVerification.finbertSentiment?.rationale ?? null,
         sentimentOverlay: systemVerification.sentimentOverlay?.overlay ?? [],
       },
@@ -331,9 +382,13 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
         adjudicatorSupport: Array.isArray(qualityMeta.adjudicatorTickers) && qualityMeta.adjudicatorTickers.length > 0
           ? `${qualityMeta.adjudicatorTickers.length} low-confidence ticker(s) received adjudicator notes.`
           : "No low-confidence adjudicator pass was needed for this run.",
+        inputScope: "Legacy fallback retains the overall reasoning-context size, but not the richer per-step reasoning telemetry captured in newer bundles.",
       },
       outputs: {
         reasoningSummary: normalizeLegacySummary(systemVerification.gpt5Strategic?.status ?? "Not run"),
+        outcomeExplanation: normalizeLegacySummary(systemVerification.gpt5Strategic?.status ?? "Not run") === "Not run"
+          ? "Legacy fallback could not confirm a meaningful final reasoning result for this bundle."
+          : `The reasoning stage produced ${normalizeLegacySummary(systemVerification.gpt5Strategic?.status ?? "Not run").toLowerCase()} in this run.`,
         rationale: systemVerification.gpt5Strategic?.rationale ?? null,
         adjudicatorTickers: qualityMeta.adjudicatorTickers ?? [],
       },

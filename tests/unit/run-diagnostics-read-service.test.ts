@@ -154,9 +154,16 @@ describe("run diagnostics read service", () => {
         portfolioReview: "Existing holdings were reviewed for concentration, redundancy, and missing themes.",
       })
     );
+    expect(result?.steps.find((step) => step.stepKey === "gap_scan")?.outputs).toEqual(
+      expect.objectContaining({
+        gapAssessment: "2 gaps",
+        outcomeExplanation: "Two gaps",
+      })
+    );
     expect(result?.steps.find((step) => step.stepKey === "candidate_screening")?.outputs).toEqual(
       expect.objectContaining({
         screeningResult: "3 added",
+        outcomeExplanation: "Three candidates",
         rationale: "Three candidates",
       })
     );
@@ -170,5 +177,59 @@ describe("run diagnostics read service", () => {
     expect(result?.steps.find((step) => step.stepKey === "validation_finalization")?.warnings).toEqual([
       expect.objectContaining({ code: "low_source_density" }),
     ]);
+  });
+
+  test("fallback diagnostics clearly explain an older bundle with zero gaps and zero candidates", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_legacy_empty",
+      sourceRunId: "run_legacy_empty",
+      bundleOutcome: "validated",
+      finalizedAt: new Date("2026-04-02T00:00:00.000Z"),
+      evidenceHash: "evidence_hash",
+      schemaVersion: "v1",
+      analysisPolicyVersion: "v1",
+      viewModelVersion: "v1",
+      primaryModel: "gpt-5.4",
+      promptVersion: "prompt_hash",
+      llmResponseHash: "response_hash",
+      evidencePacketJson: JSON.stringify({
+        evidencePacketId: "packet_1",
+        promptHash: "prompt_hash",
+      }),
+      validationSummaryJson: JSON.stringify({
+        hardErrorCount: 0,
+        warningCount: 0,
+        reasonCodes: [],
+      }),
+      sourceListJson: JSON.stringify([]),
+    });
+    (prisma.analysisRun.findUnique as jest.Mock).mockResolvedValue({
+      qualityMeta: JSON.stringify({
+        promptHash: "prompt_hash",
+        systemVerification: {
+          gapAnalysis: { status: "!0 gaps", rationale: "No gaps identified based on holdings." },
+          candidateScreening: { status: "!0 added", rationale: "No candidates found." },
+        },
+      }),
+    });
+
+    const result = await getRunDiagnostics("bundle_legacy_empty");
+
+    expect(result?.steps.find((step) => step.stepKey === "gap_scan")).toEqual(
+      expect.objectContaining({
+        outputs: expect.objectContaining({
+          outcomeExplanation: "The portfolio gap scan ran and found no material gaps worth surfacing in this run.",
+          emptyResultReason: "The older bundle indicates the gap scan ran but found no material gaps worth surfacing.",
+        }),
+      })
+    );
+    expect(result?.steps.find((step) => step.stepKey === "candidate_screening")).toEqual(
+      expect.objectContaining({
+        outputs: expect.objectContaining({
+          outcomeExplanation: "Candidate screening ran and no external candidates passed the screen for this run.",
+          emptyResultReason: "Legacy fallback indicates the screening step ran but no candidates passed.",
+        }),
+      })
+    );
   });
 });

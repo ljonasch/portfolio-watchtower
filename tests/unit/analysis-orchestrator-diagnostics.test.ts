@@ -83,13 +83,14 @@ describe("analysis orchestrator diagnostics", () => {
       expect.objectContaining({
         heldTickerCount: 6,
         screeningGoal: "One gap found.",
-        candidateSourcesReviewed: "gap screener",
+        categoriesConsidered: "Existing holdings plus externally screened candidates were considered.",
+        rankingBasis: "Gap fit and externally screened candidate reasoning.",
       })
     );
     expect(artifact.steps.find((step) => step.stepKey === "candidate_screening")?.outputs).toEqual(
       expect.objectContaining({
         screenedInCount: 1,
-        selectionSummary: "1 candidates advanced from screening into the analysis set.",
+        outcomeExplanation: "1 candidate(s) passed screening and were advanced into the analyzed ticker set.",
       })
     );
     expect(artifact.steps.find((step) => step.stepKey === "news_sources")?.inputs).toEqual(
@@ -110,6 +111,140 @@ describe("analysis orchestrator diagnostics", () => {
           "US 10-year Treasury yield",
           "US Dollar Index",
         ],
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "gap_scan")?.outputs).toEqual(
+      expect.objectContaining({
+        outcomeExplanation: "1 material portfolio gap(s) were identified from the current holdings and profile context.",
+      })
+    );
+  });
+
+  test("gap scan clearly distinguishes a clean no-gap result from degraded inputs", () => {
+    const cleanNoGapArtifact = buildRunDiagnosticsArtifact({
+      bundleId: "pending",
+      runId: "run_clean",
+      outcome: "validated",
+      generatedAt: "2026-04-02T00:00:00.000Z",
+      evidencePacketId: "packet_1",
+      evidenceHash: "evidence_hash",
+      promptHash: "prompt_hash",
+      versions: {
+        schemaVersion: "v1",
+        analysisPolicyVersion: "v1",
+        viewModelVersion: "v1",
+      },
+      primaryModel: "gpt-5.4",
+      responseHash: "response_hash",
+      gapReport: {
+        gaps: [],
+        searchBrief: "Look for concentration risk and missing themes.",
+        profilePreferences: "AI, healthcare",
+      },
+      reportData: { recommendations: [] },
+      validationSummary: {
+        hardErrorCount: 0,
+        warningCount: 0,
+        reasonCodes: [],
+      },
+      existingHoldingsCount: 6,
+      allTickers: ["AAPL", "MSFT", "AVGO"],
+    });
+
+    const degradedArtifact = buildRunDiagnosticsArtifact({
+      bundleId: "pending",
+      runId: "run_degraded",
+      outcome: "validated",
+      generatedAt: "2026-04-02T00:00:00.000Z",
+      evidencePacketId: "packet_1",
+      evidenceHash: "evidence_hash",
+      promptHash: "prompt_hash",
+      versions: {
+        schemaVersion: "v1",
+        analysisPolicyVersion: "v1",
+        viewModelVersion: "v1",
+      },
+      primaryModel: "gpt-5.4",
+      responseHash: "response_hash",
+      gapReport: {
+        gaps: [],
+      },
+      reportData: { recommendations: [] },
+      validationSummary: {
+        hardErrorCount: 0,
+        warningCount: 0,
+        reasonCodes: [],
+      },
+    });
+
+    expect(cleanNoGapArtifact.steps.find((step) => step.stepKey === "gap_scan")).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        outputs: expect.objectContaining({
+          outcomeExplanation: "The gap scan ran successfully and found no material portfolio gaps worth actioning in this run.",
+          emptyResultReason: "No material gaps cleared the step's threshold for surfacing in this run.",
+        }),
+      })
+    );
+
+    expect(degradedArtifact.steps.find((step) => step.stepKey === "gap_scan")).toEqual(
+      expect.objectContaining({
+        status: "warning",
+        outputs: expect.objectContaining({
+          outcomeExplanation: "Gap scan degraded because the run did not persist enough holdings or search-basis context to explain an empty result confidently.",
+        }),
+        warnings: [
+          expect.objectContaining({
+            code: "gap_scan_inputs_incomplete",
+          }),
+        ],
+      })
+    );
+  });
+
+  test("candidate screening clearly explains a no-pass result", () => {
+    const artifact = buildRunDiagnosticsArtifact({
+      bundleId: "pending",
+      runId: "run_candidates",
+      outcome: "validated",
+      generatedAt: "2026-04-02T00:00:00.000Z",
+      evidencePacketId: "packet_1",
+      evidenceHash: "evidence_hash",
+      promptHash: "prompt_hash",
+      versions: {
+        schemaVersion: "v1",
+        analysisPolicyVersion: "v1",
+        viewModelVersion: "v1",
+      },
+      primaryModel: "gpt-5.4",
+      responseHash: "response_hash",
+      gapReport: {
+        gaps: [],
+        searchBrief: "Find external candidates that fill missing healthcare exposure.",
+      },
+      candidates: [],
+      reportData: { recommendations: [] },
+      validationSummary: {
+        hardErrorCount: 0,
+        warningCount: 0,
+        reasonCodes: [],
+      },
+      existingHoldingsCount: 5,
+      allTickers: ["AAPL", "MSFT", "LLY", "UNH", "CASH"],
+    });
+
+    expect(artifact.steps.find((step) => step.stepKey === "candidate_screening")).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        inputs: expect.objectContaining({
+          heldTickerCount: 5,
+          screeningGoal: "Find external candidates that fill missing healthcare exposure.",
+        }),
+        outputs: expect.objectContaining({
+          screenedInCount: 0,
+          outcomeExplanation: "Candidate screening ran and no external candidates passed the screen for this run.",
+          emptyResultReason: "No screened candidates met the bar to be advanced into the final analyzed set.",
+        }),
       })
     );
   });
