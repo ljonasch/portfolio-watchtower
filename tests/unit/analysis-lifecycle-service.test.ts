@@ -26,7 +26,12 @@ jest.mock("@/lib/research/analysis-orchestrator", () => ({
 
 import { prisma } from "@/lib/prisma";
 import { runFullAnalysis } from "@/lib/research/analysis-orchestrator";
-import { finalizeAnalysisRun, runStreamAnalysis, type FinalizeAnalysisRunInput } from "@/lib/services";
+import {
+  finalizeAnalysisRun,
+  persistBackfilledLegacyBundle,
+  runStreamAnalysis,
+  type FinalizeAnalysisRunInput,
+} from "@/lib/services";
 
 function buildValidatedInput(): FinalizeAnalysisRunInput {
   return {
@@ -170,5 +175,64 @@ describe("analysis-lifecycle-service", () => {
       reportId: "report_1",
       outcome: "validated",
     });
+  });
+
+  test("returns an existing persisted backfilled bundle without re-running writes", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_existing",
+    });
+
+    const result = await persistBackfilledLegacyBundle({
+      legacyArtifactId: "report_1",
+      artifactIdentityKey: "artifact::user_1::PRIMARY_PORTFOLIO::run_1::snapshot_1",
+      userId: "user_1",
+      bundleScope: "PRIMARY_PORTFOLIO",
+      analysisRunId: "run_1",
+      snapshotId: "snapshot_1",
+      createdAt: new Date("2026-04-01T00:00:00.000Z"),
+      finalizedAt: new Date("2026-04-01T00:00:00.000Z"),
+      summary: "Legacy summary",
+      reasoning: "Legacy reasoning",
+      marketContext: {},
+      recommendations: [
+        {
+          id: "rec_1",
+          ticker: "MSFT",
+          companyName: "Microsoft",
+          role: "Core",
+          currentShares: 1,
+          targetShares: 2,
+          shareDelta: 1,
+          currentWeight: 10,
+          targetWeight: 20,
+          valueDelta: 100,
+          dollarDelta: 100,
+          acceptableRangeLow: 18,
+          acceptableRangeHigh: 22,
+          action: "Buy",
+          confidence: "high",
+          positionStatus: "underweight",
+          evidenceQuality: "high",
+          thesisSummary: "Strong thesis",
+          detailedReasoning: "Detailed",
+          whyChanged: "Changed",
+          systemNote: null,
+          reasoningSources: [],
+        },
+      ],
+      profileSnapshot: { riskTolerance: "medium" },
+      convictionsSnapshot: [],
+    });
+
+    expect(result).toEqual({
+      bundleId: "bundle_existing",
+      origin: "backfilled_legacy",
+      artifactIdentityKey: "artifact::user_1::PRIMARY_PORTFOLIO::run_1::snapshot_1",
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.analysisBundle.create).not.toHaveBeenCalled();
+    expect(prisma.analysisBundle.updateMany).not.toHaveBeenCalled();
+    expect(prisma.analysisBundle.update).not.toHaveBeenCalled();
+    expect(prisma.holdingRecommendation.createMany).not.toHaveBeenCalled();
   });
 });
