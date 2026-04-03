@@ -41,6 +41,7 @@ import { fetchValuationForAll, formatValuationSection } from "./valuation-fetche
 import { buildCorrelationMatrix, formatCorrelationSection } from "./correlation-matrix";
 import { recordRunStats } from "./model-tracker";
 import { finalizeAnalysisRun, type FinalizeAnalysisRunInput } from "@/lib/services/analysis-lifecycle-service";
+import { buildFrozenMacroEvidence, replayMacroOutputsFromFrozenEvidence } from "./macro-evidence-freeze";
 import {
   buildPromptHash,
   buildPerSectionChars,
@@ -1616,11 +1617,25 @@ export async function runFullAnalysis(
   emit({ type: "stage_start", stage: "stage3", label: "Stage 3 · Primary AI Reasoning", detail: "Single gpt-5.4 call with json_schema — authoritative recommendations" });
 
   const frozenNewsResult = freezeRunEvidenceSet(newsResult);
-  const frozenMacroEnvironment = freezeRunEvidenceSet(macroEnvironment);
-  const frozenMacroConsensus = freezeRunEvidenceSet(macroConsensus);
-  const frozenMacroBridge = freezeRunEvidenceSet(macroBridge);
-  const frozenEnvironmentalGaps = freezeRunEvidenceSet(environmentalGaps);
-  const frozenMacroCandidateSearchLanes = freezeRunEvidenceSet(macroCandidateSearchLanes);
+  const frozenMacroEvidence = freezeRunEvidenceSet(buildFrozenMacroEvidence({
+    macroEnvironment,
+    macroConsensus,
+    macroBridge,
+    environmentalGaps,
+    candidateSearchLanes: macroCandidateSearchLanes,
+  }));
+  const replayedMacro = replayMacroOutputsFromFrozenEvidence({
+    frozenMacroEvidence,
+    holdings: ctx.holdings,
+    structuralGapReport,
+    profile: user.profile,
+    marketRegime: regime,
+  });
+  const frozenMacroEnvironment = freezeRunEvidenceSet(replayedMacro.macroEnvironment);
+  const frozenMacroConsensus = freezeRunEvidenceSet(replayedMacro.macroConsensus);
+  const frozenMacroBridge = freezeRunEvidenceSet(replayedMacro.macroBridge);
+  const frozenEnvironmentalGaps = freezeRunEvidenceSet(replayedMacro.environmentalGaps);
+  const frozenMacroCandidateSearchLanes = freezeRunEvidenceSet(replayedMacro.candidateSearchLanes);
   const frozenValuations = freezeRunEvidenceSet(valuations);
   const frozenCorrelationMatrix = freezeRunEvidenceSet(correlationMatrix);
   const frozenTimelines = new Map(freezeRunEvidenceSet(Array.from(timelines.entries())));
@@ -1714,6 +1729,7 @@ export async function runFullAnalysis(
         valuationText: valuationSection,
         correlationText: correlationSection,
         candidateText: candidateSection,
+        macroEvidence: frozenMacroEvidence,
         customPrompt,
         holdingCount: snapshot.holdings.filter(h => !h.isCash).length,
         candidateCount: activeCandidates.length,
@@ -1741,6 +1757,7 @@ export async function runFullAnalysis(
         evidencePacketId: null,
         promptHash,
         stage: "stage3",
+        macroEvidence: frozenMacroEvidence,
         diagnosticsArtifact: buildRunDiagnosticsArtifact({
           bundleId: "pending",
           runId,
@@ -1884,6 +1901,7 @@ export async function runFullAnalysis(
         evidencePacketId,
         promptHash,
         stage: "stage3",
+        macroEvidence: frozenMacroEvidence,
         diagnosticsArtifact: buildRunDiagnosticsArtifact({
           bundleId: "pending",
           runId,
@@ -2182,6 +2200,7 @@ export async function runFullAnalysis(
       usingFallbackNews,
       priceDataMissing,
       regime: frozenFinalRegime,
+      macroEvidence: frozenMacroEvidence,
       diagnosticsArtifact,
     },
     evidenceHash: promptHash,
@@ -2273,6 +2292,7 @@ export async function runFullAnalysis(
       macroBridgeHits: frozenMacroBridge.hits ?? [],
       environmentalGaps: frozenEnvironmentalGaps,
       macroCandidateSearchLanes: frozenMacroCandidateSearchLanes,
+      frozenMacroEvidence,
       newsAvailabilityStatus: frozenNewsResult.availabilityStatus ?? null,
       newsStatusSummary: frozenNewsResult.statusSummary ?? null,
       newsIssues: frozenNewsResult.issues ?? [],

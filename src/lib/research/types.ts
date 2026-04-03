@@ -255,6 +255,16 @@ export interface CandidateSearchLane {
   rationaleSummary: string;
 }
 
+export interface FrozenMacroEvidencePacket {
+  schemaVersion: "macro_evidence_v1";
+  macroEnvironment: MacroNewsEnvironmentResult;
+  actionableThemeIds: string[];
+  bridgeHitIds: string[];
+  macroBridge: MacroExposureBridgeResult;
+  environmentalGapIds: string[];
+  candidateLaneIds: string[];
+}
+
 export interface GapReport {
   gaps: GapItem[];
   structuralGaps: GapItem[];

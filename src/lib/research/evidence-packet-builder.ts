@@ -10,6 +10,7 @@ import * as crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 import type { MarketRegime } from "./market-regime";
 import type { SentimentSignal } from "./sentiment-scorer";
+import type { FrozenMacroEvidencePacket } from "./types";
 
 export interface EvidencePacketInput {
   snapshotId: string;
@@ -26,6 +27,7 @@ export interface EvidencePacketInput {
   valuationText: string;
   correlationText: string;
   candidateText: string;
+  macroEvidence?: FrozenMacroEvidencePacket | null;
   customPrompt: string | undefined;
   holdingCount: number;
   candidateCount: number;
@@ -73,7 +75,7 @@ export async function writeEvidencePacket(
     data: {
       runId: input.runId,
       snapshotId: input.snapshotId,
-      schemaVersion: 2,  // F2: sentimentJson now stores structured array (v1 = prose string)
+      schemaVersion: 3,  // v3 adds frozen macro evidence to candidatesJson for per-run replayability
       frozenAt: new Date(),
       outcome: "pending",
       holdingsJson: JSON.stringify({ holdingCount: input.holdingCount }),
@@ -95,7 +97,11 @@ export async function writeEvidencePacket(
         }))
       ),
       regimeJson: JSON.stringify(input.regime),
-      candidatesJson: JSON.stringify({ text: input.candidateText, candidateCount: input.candidateCount }),
+      candidatesJson: JSON.stringify({
+        text: input.candidateText,
+        candidateCount: input.candidateCount,
+        macroEvidence: input.macroEvidence ?? null,
+      }),
       valuationJson: JSON.stringify({ text: input.valuationText }),
       correlationJson: JSON.stringify({ text: input.correlationText }),
       promptHash,
