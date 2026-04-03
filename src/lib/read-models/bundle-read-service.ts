@@ -3,6 +3,7 @@ import type {
   AnalysisBundleContract,
   CurrentBundleSelectionInput,
   HistoryItemViewModelContract,
+  RecommendationRowViewModelContract,
   ReportViewModelContract,
 } from "@/lib/contracts";
 import {
@@ -216,6 +217,104 @@ export async function getCurrentBundleReport(userId: string) {
     historicalValidatedBundle: null,
     latestRun: bundleResult.latestRun,
     legacyReport,
+  };
+}
+
+export async function getLatestVisibleReportSurface(userId: string): Promise<{
+  source: "bundle" | "legacy";
+  reportLinkId: string;
+  snapshotId: string;
+  summary: string | null;
+  reasoning: string | null;
+  recommendations: RecommendationRowViewModelContract[] | any[];
+} | null> {
+  const latestVisibleBundle = await prisma.analysisBundle.findFirst({
+    where: {
+      userId,
+      bundleScope: "PRIMARY_PORTFOLIO",
+      archivedAt: null,
+    },
+    orderBy: { finalizedAt: "desc" },
+    select: {
+      id: true,
+      portfolioSnapshotId: true,
+      reportViewModelJson: true,
+    },
+  });
+
+  if (latestVisibleBundle) {
+    const reportViewModel = parseJsonField<ReportViewModelContract>(
+      latestVisibleBundle.reportViewModelJson,
+      "reportViewModelJson"
+    );
+
+    return {
+      source: "bundle",
+      reportLinkId: latestVisibleBundle.id,
+      snapshotId: latestVisibleBundle.portfolioSnapshotId,
+      summary: reportViewModel.summaryMessage,
+      reasoning: reportViewModel.reasoning,
+      recommendations: reportViewModel.recommendations,
+    };
+  }
+
+  const bundles = await prisma.analysisBundle.findMany({
+    where: { userId, bundleScope: "PRIMARY_PORTFOLIO" },
+    select: {
+      userId: true,
+      bundleScope: true,
+      sourceRunId: true,
+      portfolioSnapshotId: true,
+    },
+  });
+
+  const bundleArtifactKeys = new Set(
+    bundles.map((bundle) =>
+      buildBundleArtifactIdentityKey({
+        userId: bundle.userId ?? userId,
+        bundleScope: bundle.bundleScope,
+        sourceRunId: bundle.sourceRunId,
+        portfolioSnapshotId: bundle.portfolioSnapshotId,
+      })
+    )
+  );
+
+  const legacyReports = await prisma.portfolioReport.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    include: {
+      recommendations: true,
+    },
+  });
+
+  const latestVisibleLegacy = legacyReports.find((report) => {
+    const legacyArtifactIdentityKey = buildLegacyReportArtifactIdentityKey({
+      userId,
+      bundleScope: "PRIMARY_PORTFOLIO",
+      analysisRunId: report.analysisRunId,
+      portfolioSnapshotId: report.snapshotId,
+    });
+    const coexistence = resolveBundleLegacyCoexistence({
+      bundleArtifactIdentityKey: legacyArtifactIdentityKey && bundleArtifactKeys.has(legacyArtifactIdentityKey)
+        ? legacyArtifactIdentityKey
+        : null,
+      legacyArtifactIdentityKey,
+    });
+
+    return !coexistence.suppressLegacy;
+  });
+
+  if (!latestVisibleLegacy) {
+    return null;
+  }
+
+  return {
+    source: "legacy",
+    reportLinkId: latestVisibleLegacy.id,
+    snapshotId: latestVisibleLegacy.snapshotId,
+    summary: latestVisibleLegacy.summary,
+    reasoning: latestVisibleLegacy.reasoning,
+    recommendations: latestVisibleLegacy.recommendations,
   };
 }
 

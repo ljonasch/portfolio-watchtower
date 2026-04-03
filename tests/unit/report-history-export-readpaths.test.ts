@@ -25,6 +25,19 @@ describe("report/history/export read paths", () => {
     expect(source).toContain("await getHistoryBundles(");
   });
 
+  test("homepage latest-report surfaces use the bundle-aware latest visible read helper", () => {
+    const source = fs.readFileSync(path.join(ROOT, "app/page.tsx"), "utf-8");
+    expect(source).toContain('import { getLatestVisibleReportSurface } from "@/lib/read-models"');
+    expect(source).toContain("getLatestVisibleReportSurface(");
+    expect(source).not.toContain("prisma.portfolioReport.findFirst({");
+  });
+
+  test("layout nav latest-report link uses the bundle-aware latest visible read helper", () => {
+    const source = fs.readFileSync(path.join(ROOT, "app/layout.tsx"), "utf-8");
+    expect(source).toContain('import { getLatestVisibleReportSurface } from "@/lib/read-models"');
+    expect(source).toContain("await getLatestVisibleReportSurface(");
+  });
+
   test("export route uses bundle-backed export reads", () => {
     const source = fs.readFileSync(path.join(ROOT, "app/api/export/[type]/route.ts"), "utf-8");
     expect(source).toContain('import { getExportPayload } from "@/lib/read-models"');

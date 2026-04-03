@@ -22,6 +22,7 @@ import {
   getCurrentBundleReport,
   getExportPayload,
   getHistoryBundles,
+  getLatestVisibleReportSurface,
   getRequestedReportArtifact,
   isCurrentBundleId,
 } from "@/lib/read-models";
@@ -438,6 +439,114 @@ describe("bundle-read-service", () => {
         report: expect.objectContaining({ id: "legacy_distinct" }),
       }),
     ]);
+  });
+
+  test("latest visible report surface prefers the newest non-archived bundle", async () => {
+    (prisma.analysisBundle.findFirst as jest.Mock).mockResolvedValue({
+      id: "bundle_visible",
+      portfolioSnapshotId: "snapshot_visible",
+      reportViewModelJson: JSON.stringify({
+        bundleId: "bundle_visible",
+        bundleOutcome: "validated",
+        renderState: "validated_actionable",
+        createdAt: "2026-04-03T00:00:00.000Z",
+        finalizedAt: "2026-04-03T00:00:00.000Z",
+        summaryMessage: "Visible summary",
+        reasoning: "Visible reasoning",
+        reasonCodes: [],
+        recommendations: [
+          {
+            id: "rec_1",
+            ticker: "MSFT",
+            companyName: "Microsoft",
+            role: "Core",
+            currentShares: 10,
+            targetShares: 12,
+            shareDelta: 2,
+            currentWeight: 8,
+            targetWeight: 9,
+            acceptableRangeLow: null,
+            acceptableRangeHigh: null,
+            dollarDelta: 500,
+            action: "Buy",
+            actionLabel: "Buy",
+            actionBadgeVariant: "buy",
+            sortPriority: 1,
+            confidence: "high",
+            positionStatus: "underweight",
+            evidenceQuality: "high",
+            thesisSummary: "Thesis",
+            detailedReasoning: "Reasoning",
+            whyChanged: "Why changed",
+            systemNote: null,
+            sources: [],
+            isNewPosition: false,
+            isExiting: false,
+            hasStcgWarning: false,
+            isFractionalRebalance: false,
+          },
+        ],
+        deliveryStatus: "awaiting_ack",
+        isActionable: true,
+        isSuperseded: false,
+        historicalValidatedContextBundleId: null,
+      }),
+    });
+
+    const result = await getLatestVisibleReportSurface("user_1");
+
+    expect(result).toEqual({
+      source: "bundle",
+      reportLinkId: "bundle_visible",
+      snapshotId: "snapshot_visible",
+      summary: "Visible summary",
+      reasoning: "Visible reasoning",
+      recommendations: expect.any(Array),
+    });
+    expect(prisma.portfolioReport.findMany).not.toHaveBeenCalled();
+  });
+
+  test("latest visible report surface falls back to true legacy-only reports when no visible bundle remains", async () => {
+    (prisma.analysisBundle.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.analysisBundle.findMany as jest.Mock).mockResolvedValue([
+      {
+        userId: "user_1",
+        bundleScope: "PRIMARY_PORTFOLIO",
+        sourceRunId: "run_archived",
+        portfolioSnapshotId: "snapshot_archived",
+      },
+    ]);
+    (prisma.portfolioReport.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "legacy_duplicate",
+        analysisRunId: "run_archived",
+        snapshotId: "snapshot_archived",
+        summary: "Duplicate",
+        reasoning: "Duplicate",
+        recommendations: [],
+        createdAt: new Date("2026-04-03T00:00:00.000Z"),
+      },
+      {
+        id: "legacy_visible",
+        analysisRunId: "run_visible",
+        snapshotId: "snapshot_visible",
+        summary: "Legacy summary",
+        reasoning: "Legacy reasoning",
+        recommendations: [{ ticker: "BRK.B", currentWeight: 5, targetWeight: 5 }],
+        createdAt: new Date("2026-04-02T00:00:00.000Z"),
+      },
+    ]);
+
+    const result = await getLatestVisibleReportSurface("user_1");
+
+    expect(result).toEqual({
+      source: "legacy",
+      reportLinkId: "legacy_visible",
+      snapshotId: "snapshot_visible",
+      summary: "Legacy summary",
+      reasoning: "Legacy reasoning",
+      recommendations: [{ ticker: "BRK.B", currentWeight: 5, targetWeight: 5 }],
+    });
   });
 
   test("bundle email payload reads from the bundle snapshot only", async () => {

@@ -108,6 +108,28 @@ describe("report-archive-service", () => {
     ).rejects.toThrow("Archive is only available for bundle-backed reports in phase 1");
   });
 
+  test("archive is idempotent when the bundle is already archived", async () => {
+    const archivedAt = new Date("2026-04-03T12:00:00.000Z");
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_1",
+      userId: "user_1",
+      archivedAt,
+    });
+
+    const result = await archiveBundleBackedReport({
+      userId: "user_1",
+      requestedId: "bundle_1",
+    });
+
+    expect(prisma.analysisBundle.updateMany).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      bundleId: "bundle_1",
+      archivedAt: archivedAt.toISOString(),
+      alreadyArchived: true,
+      resolution: "bundle_id",
+    });
+  });
+
   test("clears archivedAt for an archived bundle", async () => {
     (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
       id: "bundle_1",
@@ -139,5 +161,57 @@ describe("report-archive-service", () => {
     });
     expect(revalidatePath).toHaveBeenCalledWith("/history");
     expect(revalidatePath).toHaveBeenCalledWith("/report/bundle_1");
+  });
+
+  test("unarchive is idempotent when the bundle is already visible", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_1",
+      userId: "user_1",
+      archivedAt: null,
+    });
+
+    const result = await unarchiveBundleBackedReport({
+      userId: "user_1",
+      requestedId: "bundle_1",
+    });
+
+    expect(prisma.analysisBundle.updateMany).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      bundleId: "bundle_1",
+      unarchived: false,
+      resolution: "bundle_id",
+    });
+  });
+
+  test("users cannot archive bundles they do not own", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_foreign",
+      userId: "user_2",
+      archivedAt: null,
+    });
+    (prisma.portfolioReport.findFirst as jest.Mock).mockResolvedValue(null);
+
+    await expect(
+      archiveBundleBackedReport({
+        userId: "user_1",
+        requestedId: "bundle_foreign",
+      })
+    ).rejects.toThrow("Archive is only available for bundle-backed reports in phase 1");
+  });
+
+  test("users cannot unarchive bundles they do not own", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_foreign",
+      userId: "user_2",
+      archivedAt: new Date("2026-04-03T12:00:00.000Z"),
+    });
+    (prisma.portfolioReport.findFirst as jest.Mock).mockResolvedValue(null);
+
+    await expect(
+      unarchiveBundleBackedReport({
+        userId: "user_1",
+        requestedId: "bundle_foreign",
+      })
+    ).rejects.toThrow("Archive is only available for bundle-backed reports in phase 1");
   });
 });

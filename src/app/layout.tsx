@@ -4,6 +4,7 @@ import Link from "next/link";
 import { GlobalWorkflowNav } from "@/components/GlobalWorkflowNav";
 
 import { prisma } from "@/lib/prisma";
+import { getLatestVisibleReportSurface } from "@/lib/read-models";
 
 export const metadata: Metadata = {
   title: "Portfolio Watchtower",
@@ -15,10 +16,12 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const latestReport = await prisma.portfolioReport.findFirst({
-    orderBy: { createdAt: "desc" },
+  const user = await prisma.user.findFirst({
     select: { id: true },
   });
+  const latestVisibleReport = user
+    ? await getLatestVisibleReportSurface(user.id)
+    : null;
 
   return (
     <html lang="en" className="dark">
@@ -33,7 +36,7 @@ export default async function RootLayout({
               Portfolio Watchtower
             </Link>
             <div className="flex-1 overflow-x-auto no-scrollbar py-2">
-              <GlobalWorkflowNav latestReportId={latestReport?.id} />
+              <GlobalWorkflowNav latestReportId={latestVisibleReport?.reportLinkId} />
             </div>
           </div>
         </header>

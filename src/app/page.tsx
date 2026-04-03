@@ -4,6 +4,7 @@ import { Upload, Play, ShieldAlert, BadgeCheck, Settings, ArrowRight, BookOpen, 
 import { MissingInfoGate } from "@/components/MissingInfoGate";
 import { DebugPanel } from "@/components/DebugPanel";
 import { WeightChart } from "@/components/WeightChart";
+import { getLatestVisibleReportSurface } from "@/lib/read-models";
 
 export const dynamic = "force-dynamic";
 
@@ -14,16 +15,10 @@ import { SortableHoldingsTable } from "@/components/SortableHoldingsTable";
 export default async function Dashboard() {
   const profile = await prisma.userProfile.findFirst({ include: { user: true } });
   const recipients = await prisma.notificationRecipient.findMany({ where: { active: true } });
+  const userId = profile?.user?.id ?? (await prisma.user.findFirst({ select: { id: true } }))?.id ?? null;
 
   const [latestReport, latestSnapshot, latestRun, recentRuns, allConvictions] = await Promise.all([
-    prisma.portfolioReport.findFirst({
-      orderBy: { createdAt: "desc" },
-      include: {
-        recommendations: true,
-        snapshot: { include: { holdings: true } },
-        analysisRun: { include: { changeLogs: true } },
-      },
-    }),
+    userId ? getLatestVisibleReportSurface(userId) : Promise.resolve(null),
     prisma.portfolioSnapshot.findFirst({
       orderBy: { createdAt: "desc" },
       include: { holdings: true },
@@ -149,7 +144,9 @@ export default async function Dashboard() {
         <div className={`rounded-xl border border-slate-800 bg-slate-900/30 p-5 space-y-3 transition-all ${isOutdated ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold">What Changed Since Last Run</h2>
-            <Link href={`/report/${latestReport?.id}`} className="text-xs text-blue-400 hover:text-blue-300">View full report →</Link>
+            {latestReport && (
+              <Link href={`/report/${latestReport.reportLinkId}`} className="text-xs text-blue-400 hover:text-blue-300">View full report →</Link>
+            )}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {adds.length > 0 && (
@@ -224,7 +221,7 @@ export default async function Dashboard() {
               <a href="/api/export/runs" className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors">
                 <Download className="w-3 h-3" /> Run history CSV
               </a>
-              <Link href={`/report/${latestReport.id}`} className="text-xs text-blue-400 hover:text-blue-300 font-medium">
+              <Link href={`/report/${latestReport.reportLinkId}`} className="text-xs text-blue-400 hover:text-blue-300 font-medium">
                 View full report →
               </Link>
             </div>
