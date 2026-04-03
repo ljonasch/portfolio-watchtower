@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { buildDeliveryEligibility } from "@/lib/read-models";
+import { buildDeliveryEligibility, isCurrentBundleId } from "@/lib/read-models";
 
 export interface AcknowledgeBundleInput {
   bundleId: string;
@@ -15,17 +15,18 @@ export async function acknowledgeBundle(input: AcknowledgeBundleInput) {
     throw new Error("Bundle not found");
   }
 
+  const isCurrentBundle = await isCurrentBundleId(input.userId, bundle.id);
   const eligibility = buildDeliveryEligibility({
     bundleId: bundle.id,
     bundleOutcome: bundle.bundleOutcome,
-    isCurrentBundle: !bundle.isSuperseded,
+    isCurrentBundle,
     isSuperseded: bundle.isSuperseded,
     acknowledgedAt: bundle.acknowledgedAt,
     deliveryStatus: bundle.deliveryStatus as any,
     emailPayloadJson: bundle.emailPayloadJson,
   });
 
-  if (!eligibility.isValidated || bundle.isSuperseded || bundle.bundleOutcome !== "validated") {
+  if (!eligibility.isValidated || !eligibility.isCurrentBundle || bundle.isSuperseded || bundle.bundleOutcome !== "validated") {
     throw new Error("Bundle is not eligible for acknowledgement");
   }
 

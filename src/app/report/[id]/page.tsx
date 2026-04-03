@@ -13,7 +13,7 @@ import type { ConvictionThreadData } from "@/components/ConvictionThread";
 import type { MarketContext } from "@/lib/analyzer";
 import { projectRecommendation } from "@/lib/view-models";
 import type { SourceViewModel } from "@/lib/view-models/types";
-import { getCurrentBundleReport } from "@/lib/read-models";
+import { getRequestedReportArtifact } from "@/lib/read-models";
 
 function SourceChip({ source }: { source: SourceViewModel }) {
   return (
@@ -91,13 +91,12 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
   const user = await prisma.user.findFirst();
   if (!user) return notFound();
 
-  const bundleRead = await getCurrentBundleReport(user.id);
-  if (bundleRead.source === "bundle") {
-    const reportViewModel = bundleRead.reportViewModel;
-    const bundle = bundleRead.bundle;
-    if (!bundle || bundle.id !== params.id) {
-      return notFound();
-    }
+  const artifact = await getRequestedReportArtifact(user.id, params.id);
+  if (!artifact) return notFound();
+
+  if (artifact.source === "bundle") {
+    const reportViewModel = artifact.reportViewModel;
+    const bundle = artifact.bundle;
 
     return (
       <div className="space-y-10 max-w-6xl mx-auto">
@@ -147,14 +146,7 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
   }
 
   const [report, allConvictions] = await Promise.all([
-    prisma.portfolioReport.findUnique({
-      where: { id: params.id },
-      include: {
-        recommendations: { orderBy: { targetWeight: "desc" } },
-        snapshot: { include: { holdings: true } },
-        analysisRun: true,
-      },
-    }),
+    Promise.resolve(artifact.report),
     (prisma as any).userConviction.findMany({
       where: { active: true },
       include: { messages: { orderBy: { createdAt: "asc" } } },

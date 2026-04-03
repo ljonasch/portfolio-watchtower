@@ -77,6 +77,7 @@ export interface EmailPayloadContract {
   generatedAt: string;
   subject: string;
   summary: string;
+  html: string;
   recommendations: EmailRecommendationRowContract[];
 }
 

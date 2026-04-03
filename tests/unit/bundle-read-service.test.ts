@@ -21,6 +21,8 @@ import {
   getCurrentBundleReport,
   getExportPayload,
   getHistoryBundles,
+  getRequestedReportArtifact,
+  isCurrentBundleId,
 } from "@/lib/read-models";
 
 describe("bundle-read-service", () => {
@@ -68,6 +70,45 @@ describe("bundle-read-service", () => {
     expect(prisma.portfolioReport.findFirst).not.toHaveBeenCalled();
   });
 
+  test("requested report artifact resolves historical bundle by id", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_historical",
+      reportViewModelJson: JSON.stringify({
+        bundleId: "bundle_historical",
+        bundleOutcome: "validated",
+        renderState: "validated_actionable",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        finalizedAt: "2026-04-01T00:00:00.000Z",
+        summaryMessage: "Historical",
+        reasoning: "Historical reasoning",
+        reasonCodes: [],
+        recommendations: [],
+        deliveryStatus: "sent",
+        isActionable: false,
+        isSuperseded: true,
+        historicalValidatedContextBundleId: null,
+      }),
+    });
+
+    const result = await getRequestedReportArtifact("user_1", "bundle_historical");
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        source: "bundle",
+        bundle: expect.objectContaining({ id: "bundle_historical" }),
+      })
+    );
+  });
+
+  test("requested report artifact fails closed when bundle payload is invalid", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_1",
+      reportViewModelJson: "",
+    });
+
+    await expect(getRequestedReportArtifact("user_1", "bundle_1")).rejects.toThrow("reportViewModelJson is missing");
+  });
+
   test("export fails closed when bundle payload is missing", async () => {
     (prisma.analysisBundle.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.analysisRun.findFirst as jest.Mock).mockResolvedValue(null);
@@ -86,6 +127,7 @@ describe("bundle-read-service", () => {
         sourceRunId: "run_1",
         bundleOutcome: "validated",
         bundleScope: "PRIMARY_PORTFOLIO",
+        portfolioSnapshotId: "snapshot_1",
         finalizedAt: new Date("2026-04-02T00:00:00.000Z"),
         isSuperseded: false,
         deliveryStatus: "awaiting_ack",
@@ -95,6 +137,7 @@ describe("bundle-read-service", () => {
       {
         id: "report_legacy",
         analysisRunId: "run_legacy",
+        snapshotId: "snapshot_legacy",
         createdAt: new Date("2026-04-01T00:00:00.000Z"),
       },
     ]);
@@ -106,9 +149,79 @@ describe("bundle-read-service", () => {
     expect(result[1].source).toBe("legacy");
   });
 
+  test("history keeps bundle row and drops legacy duplicate for the same artifact", async () => {
+    (prisma.analysisBundle.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "bundle_1",
+        sourceRunId: "run_1",
+        bundleOutcome: "validated",
+        bundleScope: "PRIMARY_PORTFOLIO",
+        portfolioSnapshotId: "snapshot_1",
+        finalizedAt: new Date("2026-04-02T00:00:00.000Z"),
+        isSuperseded: false,
+        deliveryStatus: "awaiting_ack",
+      },
+    ]);
+    (prisma.portfolioReport.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "report_duplicate",
+        analysisRunId: "run_1",
+        snapshotId: "snapshot_1",
+        createdAt: new Date("2026-04-02T00:00:00.000Z"),
+      },
+    ]);
+
+    const result = await getHistoryBundles("user_1");
+
+    expect(result).toHaveLength(1);
+    expect(result[0].source).toBe("bundle");
+  });
+
+  test("history is globally ordered by effective timestamp", async () => {
+    (prisma.analysisBundle.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "bundle_old",
+        sourceRunId: "run_old",
+        bundleOutcome: "validated",
+        bundleScope: "PRIMARY_PORTFOLIO",
+        portfolioSnapshotId: "snapshot_1",
+        finalizedAt: new Date("2026-04-01T00:00:00.000Z"),
+        isSuperseded: false,
+        deliveryStatus: "awaiting_ack",
+      },
+    ]);
+    (prisma.portfolioReport.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "report_newer",
+        analysisRunId: "run_newer",
+        snapshotId: "snapshot_legacy",
+        createdAt: new Date("2026-04-02T12:00:00.000Z"),
+      },
+    ]);
+
+    const result = await getHistoryBundles("user_1");
+
+    expect(result[0]).toEqual(expect.objectContaining({ source: "legacy" }));
+    expect(result[1]).toEqual(expect.objectContaining({ source: "bundle" }));
+  });
+
   test("bundle email payload reads from the bundle snapshot only", async () => {
+    (prisma.analysisBundle.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "bundle_1",
+        bundleScope: "PRIMARY_PORTFOLIO",
+        portfolioSnapshotId: "snapshot_1",
+        userProfileHash: "p1",
+        convictionHash: "c1",
+        bundleOutcome: "validated",
+        finalizedAt: new Date("2026-04-02T00:00:00.000Z"),
+        isSuperseded: false,
+      },
+    ]);
+    (prisma.analysisRun.findFirst as jest.Mock).mockResolvedValue(null);
     (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
       id: "bundle_1",
+      userId: "user_1",
       bundleOutcome: "validated",
       isSuperseded: false,
       acknowledgedAt: new Date("2026-04-02T00:00:00.000Z"),
@@ -120,5 +233,24 @@ describe("bundle-read-service", () => {
 
     expect(result.emailPayload).toEqual({ subject: "Subject", html: "<p>Hello</p>" });
     expect(result.eligibility.isEligibleForInitialSend).toBe(true);
+  });
+
+  test("bundle email payload uses actual current-bundle selection", async () => {
+    (prisma.analysisBundle.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: "bundle_current",
+        bundleScope: "PRIMARY_PORTFOLIO",
+        portfolioSnapshotId: "snapshot_1",
+        userProfileHash: "p1",
+        convictionHash: "c1",
+        bundleOutcome: "validated",
+        finalizedAt: new Date("2026-04-02T00:00:00.000Z"),
+        isSuperseded: false,
+      },
+    ]);
+    (prisma.analysisRun.findFirst as jest.Mock).mockResolvedValue(null);
+
+    const isCurrent = await isCurrentBundleId("user_1", "bundle_current");
+    expect(isCurrent).toBe(true);
   });
 });

@@ -6,8 +6,8 @@ const ROOT = path.resolve(__dirname, "../../src");
 describe("report/history/export read paths", () => {
   test("report page uses bundle-backed read service", () => {
     const source = fs.readFileSync(path.join(ROOT, "app/report/[id]/page.tsx"), "utf-8");
-    expect(source).toContain('import { getCurrentBundleReport } from "@/lib/read-models"');
-    expect(source).toContain("await getCurrentBundleReport(");
+    expect(source).toContain('import { getRequestedReportArtifact } from "@/lib/read-models"');
+    expect(source).toContain("await getRequestedReportArtifact(");
   });
 
   test("history page uses bundle-backed history reads", () => {

@@ -1,6 +1,6 @@
 import type { DeliveryEligibilityContract, DeliveryStatus } from "@/lib/contracts";
 
-const INITIAL_SEND_STATUSES: DeliveryStatus[] = ["acknowledged", "send_failed"];
+const INITIAL_SEND_STATUSES: DeliveryStatus[] = ["acknowledged"];
 
 export function buildDeliveryEligibility(input: {
   bundleId: string;

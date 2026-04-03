@@ -111,6 +111,43 @@ export async function getCurrentBundleRecord(userId: string) {
   };
 }
 
+export async function isCurrentBundleId(userId: string, bundleId: string): Promise<boolean> {
+  const { selection } = await getCurrentBundleRecord(userId);
+  return selection.currentBundleId === bundleId;
+}
+
+export async function getRequestedReportArtifact(userId: string, requestedId: string) {
+  const bundle = await prisma.analysisBundle.findUnique({
+    where: { id: requestedId },
+  });
+
+  if (bundle) {
+    return {
+      source: "bundle" as const,
+      bundle,
+      reportViewModel: parseJsonField<ReportViewModelContract>(bundle.reportViewModelJson, "reportViewModelJson"),
+    };
+  }
+
+  const legacyReport = await prisma.portfolioReport.findFirst({
+    where: { id: requestedId, userId },
+    include: {
+      analysisRun: true,
+      recommendations: { orderBy: { targetWeight: "desc" } },
+      snapshot: { include: { holdings: true } },
+    },
+  });
+
+  if (!legacyReport) {
+    return null;
+  }
+
+  return {
+    source: "legacy" as const,
+    report: legacyReport,
+  };
+}
+
 export async function getCurrentBundleReport(userId: string) {
   const bundleResult = await getCurrentBundleRecord(userId);
   if (bundleResult.currentBundle) {
@@ -172,14 +209,15 @@ export async function getHistoryBundles(userId: string): Promise<Array<
     },
   }));
 
-  const coveredRunIds = new Set(bundles.map((bundle) => bundle.sourceRunId));
+  const bundleArtifactKeys = new Set(
+    bundles.flatMap((bundle) => [
+      `run:${bundle.sourceRunId}`,
+      `scope:${bundle.portfolioSnapshotId}:${bundle.bundleScope}:${bundle.finalizedAt.toISOString()}`,
+    ])
+  );
   const legacyReports = await prisma.portfolioReport.findMany({
     where: {
       userId,
-      OR: [
-        { analysisRunId: null },
-        { analysisRunId: { notIn: Array.from(coveredRunIds) } },
-      ],
     },
     orderBy: { createdAt: "desc" },
     include: {
@@ -189,13 +227,38 @@ export async function getHistoryBundles(userId: string): Promise<Array<
     },
   });
 
-  return [
-    ...historyItems,
-    ...legacyReports.map((report) => ({
+  const legacyItems = legacyReports
+    .filter((report) => {
+      const artifactKeys = [
+        report.analysisRunId ? `run:${report.analysisRunId}` : null,
+        `scope:${report.snapshotId}:PRIMARY_PORTFOLIO:${report.createdAt.toISOString()}`,
+      ].filter(Boolean) as string[];
+
+      return !artifactKeys.some((key) => bundleArtifactKeys.has(key));
+    })
+    .map((report) => ({
       source: "legacy" as const,
       report,
+      effectiveTimestamp: report.createdAt.getTime(),
+    }));
+
+  return [
+    ...historyItems.map((item) => ({
+      ...item,
+      effectiveTimestamp: item.bundle.finalizedAt.getTime(),
     })),
-  ];
+    ...legacyItems,
+  ]
+    .sort((a, b) => b.effectiveTimestamp - a.effectiveTimestamp)
+    .map((item) => {
+      if (item.source === "bundle") {
+        const { effectiveTimestamp, ...rest } = item;
+        return rest;
+      }
+
+      const { effectiveTimestamp, ...rest } = item;
+      return rest;
+    });
 }
 
 export async function getExportPayload(userId: string, bundleId?: string | null) {
@@ -224,10 +287,12 @@ export async function getBundleEmailPayload(bundleId: string) {
     throw new Error("Bundle not found");
   }
 
+  const isCurrentBundle = await isCurrentBundleId(bundle.userId, bundle.id);
+
   const eligibility = buildDeliveryEligibility({
     bundleId: bundle.id,
     bundleOutcome: bundle.bundleOutcome,
-    isCurrentBundle: !bundle.isSuperseded,
+    isCurrentBundle,
     isSuperseded: bundle.isSuperseded,
     acknowledgedAt: bundle.acknowledgedAt,
     deliveryStatus: bundle.deliveryStatus as any,

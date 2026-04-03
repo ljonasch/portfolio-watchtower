@@ -52,7 +52,7 @@ describe("delivery-eligibility", () => {
       emailPayloadJson: "{\"subject\":\"ok\"}",
     });
 
-    expect(result.isEligibleForInitialSend).toBe(true);
+    expect(result.isEligibleForInitialSend).toBe(false);
     expect(result.isEligibleForManualResend).toBe(true);
   });
 });

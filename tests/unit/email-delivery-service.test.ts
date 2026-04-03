@@ -89,4 +89,43 @@ describe("email-delivery-service", () => {
       })
     ).rejects.toThrow("Bundle is not eligible for email delivery");
   });
+
+  test("fails closed when bundle payload is missing required fields", async () => {
+    (getBundleEmailPayload as jest.Mock).mockResolvedValue({
+      emailPayload: { subject: "Bundle subject", html: "" },
+      eligibility: { isEligibleForInitialSend: true, isEligibleForManualResend: false },
+    });
+
+    await expect(
+      sendEmailNotification({
+        userId: "user_1",
+        type: "daily_alert",
+        recipient: "user@example.com",
+        subject: "",
+        html: "",
+        analysisBundleId: "bundle_1",
+      })
+    ).rejects.toThrow("emailPayloadJson is missing required fields");
+  });
+
+  test("allows manual resend only through manual resend eligibility", async () => {
+    (sendMail as jest.Mock).mockResolvedValue({ ok: true });
+    (prisma.notificationEvent.create as jest.Mock).mockResolvedValue({ id: "evt_3" });
+    (prisma.analysisBundle.update as jest.Mock).mockResolvedValue({ id: "bundle_1" });
+    (getBundleEmailPayload as jest.Mock).mockResolvedValue({
+      emailPayload: { subject: "Bundle subject", html: "<p>Bundle body</p>" },
+      eligibility: { isEligibleForInitialSend: false, isEligibleForManualResend: true },
+    });
+
+    await sendEmailNotification({
+      userId: "user_1",
+      type: "daily_alert",
+      recipient: "user@example.com",
+      subject: "",
+      html: "",
+      analysisBundleId: "bundle_1",
+    });
+
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
 });
