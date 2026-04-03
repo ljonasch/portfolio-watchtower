@@ -15,7 +15,7 @@ export type MarketFactor = { factor: string; explanation: string; sources: { tit
 export type MarketContext = { shortTerm: MarketFactor[]; mediumTerm: MarketFactor[]; longTerm: MarketFactor[] };
 
 import { buildResearchContext } from "./research/context-loader";
-import { fetchAllNewsWithFallback } from "./research/news-fetcher";
+import { buildEmptyNewsResult, fetchAllNewsWithFallback } from "./research/news-fetcher";
 import {
   filterToTrustedSources,
   summarizeSourceQuality,
@@ -32,6 +32,8 @@ import {
 import { applyLowChurnRecommendationPolicy } from "./policy/low-churn-recommendation-policy";
 import { validatePortfolioReport } from "./research/recommendation-validator";
 import type {
+  NewsResult,
+  NewsSignalSet,
   ResearchContext,
   RecommendationV3,
   PortfolioReportV3,
@@ -56,6 +58,129 @@ function deriveActionFromTargets(rec: RecommendationV3): RecommendationV3["actio
   if (expectedDelta < 0 && (rec.targetShares ?? 0) === 0) return "Exit";
   if (expectedDelta < 0) return "Trim";
   return "Hold";
+}
+
+function promoteConfidence(confidence: RecommendationV3["confidence"]): RecommendationV3["confidence"] {
+  if (confidence === "low") return "medium";
+  if (confidence === "medium") return "high";
+  return "high";
+}
+
+function demoteConfidence(confidence: RecommendationV3["confidence"]): RecommendationV3["confidence"] {
+  if (confidence === "high") return "medium";
+  if (confidence === "medium") return "low";
+  return "low";
+}
+
+function buildNewsStatusNote(newsResult: NewsResult): string {
+  switch (newsResult.availabilityStatus) {
+    case "primary_success":
+      return "";
+    case "fallback_success":
+      return `\n[NEWS STATUS: ${newsResult.statusSummary} Treat fallback headlines as lower-confidence supporting context, not as equivalent to healthy primary coverage.]\n`;
+    case "primary_transport_failure":
+    case "primary_rate_limited":
+    case "primary_empty":
+    case "no_usable_news":
+    default:
+      return `\n[NEWS STATUS: ${newsResult.statusSummary} Reduce company-news confidence for this run and do not infer missing headlines.]\n`;
+  }
+}
+
+export function buildPromptNewsContext(newsResult: NewsResult, today: string): {
+  newsSection: string;
+  newsStatusNote: string;
+} {
+  const breakingText = typeof newsResult.breaking24h === "string" ? newsResult.breaking24h.trim() : "";
+  const combinedText = newsResult.combinedSummary?.trim() ?? "";
+
+  const breaking24hSection = breakingText
+    ? `=== ⚡ BREAKING NEWS (last 24 hours — ${today}) ===
+${breakingText}
+=== END BREAKING NEWS ===
+
+24-HOUR WEIGHTING RULES (apply to SHORT-TERM section of detailedReasoning):
+- STRONG signal: override the 30-day thesis if it directly contradicts prior action. Change recommendation.
+- MODERATE signal: adjust target weight ±3–5% within acceptable range. Note in whyChanged.
+- NOISE signal: log it in thesisSummary but do NOT change the recommendation.
+- If no breaking news exists for a ticker, state "No breaking developments" in SHORT-TERM.
+=== END 24-HOUR RULES ===`
+    : "";
+
+  const thirtyDaySection = combinedText
+    ? `=== VERIFIED CURRENT NEWS (last 30 days — ${today}) ===\n${combinedText.slice(0, 2000)}\n=== END CURRENT NEWS ===`
+    : "";
+
+  const newsSection = [
+    breaking24hSection,
+    thirtyDaySection,
+  ].filter(Boolean).join("\n\n") ||
+    `[NEWS STATUS: ${newsResult.statusSummary} Do not fabricate news events. Treat news support as unavailable or degraded for this run.]`;
+
+  return {
+    newsSection,
+    newsStatusNote: buildNewsStatusNote(newsResult),
+  };
+}
+
+export function applyStructuredNewsOverlay(
+  recommendations: RecommendationV3[],
+  newsSignals: NewsSignalSet | null | undefined
+): RecommendationV3[] {
+  if (!newsSignals) return recommendations;
+
+  return recommendations.map((rec) => {
+    const tickerSignal = newsSignals.tickerSignals[rec.ticker?.toUpperCase?.() ?? ""];
+    if (!tickerSignal) {
+      return rec;
+    }
+
+    let nextConfidence = rec.confidence;
+    let nextEvidence = rec.evidenceQuality;
+    const notes: string[] = [];
+
+    if (tickerSignal.availabilityStatus !== "primary_success") {
+      if (nextConfidence === "high") {
+        nextConfidence = demoteConfidence(nextConfidence);
+      }
+      if (nextEvidence === "high") {
+        nextEvidence = "mixed";
+      }
+      notes.push(`News overlay: ${tickerSignal.explanatoryNote}`);
+    } else {
+      if (
+        tickerSignal.newsConfidence === "high" &&
+        (tickerSignal.catalystPresence || tickerSignal.riskEventPresence) &&
+        nextConfidence === "low"
+      ) {
+        nextConfidence = promoteConfidence(nextConfidence);
+        notes.push("News overlay: recent primary coverage added enough corroborating signal to lift confidence modestly.");
+      }
+      if (tickerSignal.newsConfidence !== "low" && nextEvidence === "low") {
+        nextEvidence = "mixed";
+      }
+    }
+
+    if (tickerSignal.contradictionLevel === "high") {
+      nextConfidence = demoteConfidence(nextConfidence);
+      nextEvidence = nextEvidence === "high" ? "mixed" : nextEvidence;
+      notes.push("News overlay: recent coverage was mixed or contradictory, so confidence was reduced.");
+    }
+
+    if (notes.length === 0) {
+      notes.push(`News overlay: ${tickerSignal.explanatoryNote}`);
+    }
+
+    const newsNote = notes.join(" ");
+
+    return {
+      ...rec,
+      confidence: nextConfidence,
+      evidenceQuality: nextEvidence,
+      systemNote: appendSystemNote(rec, newsNote),
+      whyChanged: buildConsistencyWhyChanged(rec.whyChanged, newsNote),
+    };
+  });
 }
 
 function collapseActionToHold(
@@ -166,7 +291,7 @@ function buildAnalysisPrompt(
   newsSection: string,
   trustedSources: Source[],
   convictions: Array<{ ticker: string; rationale: string; messages?: Array<{ role: string; content: string; createdAt: string }> }>,
-  usingFallback: boolean
+  newsStatusNote: string
 ): string {
   const {
     today, age, profile, constraints, holdings, totalValue,
@@ -211,12 +336,6 @@ ${convictions.map(c => {
   return `[${c.ticker}] Thread (oldest → newest):\n${thread}\n  → [${today}] Write your next AI response now. MUST start with ACKNOWLEDGMENT:, COUNTERPOINT:, or AGREEMENT:`;
 }).join("\n\n")}\n`
     : "";
-
-
-  const newsQualityNote = usingFallback
-    ? "\n[WARNING: Primary live news fetch failed. Using Yahoo Finance fallback only. Lower confidence. Note in summary.]\n"
-    : "";
-
   const trustedSourceList = trustedSources.length > 0
     ? `\nVerified sources you may cite:\n${trustedSources.slice(0, 30).map(s => `- ${s.title}: ${s.url}`).join("\n")}`
     : "";
@@ -265,7 +384,7 @@ ${JSON.stringify(holdings.map(h => {
   };
 }), null, 2)}
 
-${newsSection}${newsQualityNote}${trustedSourceList}
+${newsSection}${newsStatusNote}${trustedSourceList}
 
 ${priorRecsSection}${convictionsSection}
 === D. FIVE-PHASE ANALYSIS (execute in order) ===
@@ -437,7 +556,8 @@ export async function generatePortfolioReport(
   customPrompt?: string,
   convictions?: Array<{ ticker: string; rationale: string; messages?: Array<{ role: string; content: string; createdAt: string }> }>,
   /** Pre-built context block from orchestrator (regime, sentiment, price reactions, candidates) */
-  additionalContext?: string
+  additionalContext?: string,
+  prefetchedNewsResult?: NewsResult
 ): Promise<PortfolioReportV3> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY in your .env file.");
@@ -448,55 +568,40 @@ export async function generatePortfolioReport(
   const ctx = buildResearchContext({ profile, holdings, priorRecommendations, customPrompt });
 
   // Step 2: Fetch live news — SKIP when orchestrator already injected additionalContext (F6: removes duplicate fetch)
-  let combinedSummary = "";
-  let allSources: Source[] = [];
-  let usingFallback = false;
-  let breaking24h = "";
+  let newsResult: NewsResult;
 
-  if (!additionalContext) {
+  if (prefetchedNewsResult) {
+    newsResult = prefetchedNewsResult;
+  } else if (!additionalContext) {
     // Standalone call (no orchestrator): fetch news ourselves with 55s timeout
-    const newsResult = await Promise.race([
+    newsResult = await Promise.race([
       fetchAllNewsWithFallback(openai, ctx.holdings.map(h => h.ticker), ctx.today, onProgress),
-      new Promise<{ combinedSummary: string; allSources: Source[]; usingFallback: boolean; breaking24h: string }>(
-        (resolve) => setTimeout(() => resolve({ combinedSummary: "", allSources: [], usingFallback: true, breaking24h: "" }), 55000)
+      new Promise<NewsResult>(
+        (resolve) => setTimeout(() => resolve(buildEmptyNewsResult({
+          tickers: ctx.holdings.map((holding) => holding.ticker),
+          availabilityStatus: "primary_transport_failure",
+          degradedReason: "primary_transport_failure",
+          message: "Primary live-news search timed out before returning usable coverage.",
+        })), 55000)
       ),
     ]);
-    combinedSummary = newsResult.combinedSummary;
-    allSources = newsResult.allSources;
-    usingFallback = newsResult.usingFallback;
-    breaking24h = (newsResult as any).breaking24h ?? "";
   } else {
-    // Orchestrator already fetched and injected news via additionalContext — skip redundant fetch
-    usingFallback = false;
+    newsResult = buildEmptyNewsResult({
+      tickers: ctx.holdings.map((holding) => holding.ticker),
+      availabilityStatus: "no_usable_news",
+      degradedReason: "no_usable_news",
+      message: "Additional analysis context was present, but no authoritative news result was supplied.",
+    });
   }
+
+  const combinedSummary = newsResult.combinedSummary ?? "";
+  const allSources = (newsResult.allSources ?? []) as Source[];
+  const usingFallback = newsResult.usingFallback ?? false;
 
   // Step 3: Filter to high-quality sources, deduplicate
   const trustedSources = filterToTrustedSources(deduplicateSources(allSources));
   const sourceQuality = summarizeSourceQuality(allSources);
-
-  // Build news section: breaking 24h block appears first with highest priority
-  const breaking24hSection = breaking24h.trim()
-    ? `=== ⚡ BREAKING NEWS (last 24 hours — ${ctx.today}) ===
-${breaking24h}
-=== END BREAKING NEWS ===
-
-24-HOUR WEIGHTING RULES (apply to SHORT-TERM section of detailedReasoning):
-- STRONG signal: override the 30-day thesis if it directly contradicts prior action. Change recommendation.
-- MODERATE signal: adjust target weight ±3–5% within acceptable range. Note in whyChanged.
-- NOISE signal: log it in thesisSummary but do NOT change the recommendation.
-- If no breaking news exists for a ticker, state "No breaking developments" in SHORT-TERM.
-=== END 24-HOUR RULES ===`
-    : "";
-
-  const thirtyDaySection = combinedSummary.trim()
-    ? `=== VERIFIED CURRENT NEWS (last 30 days — ${ctx.today}) ===\n${combinedSummary.slice(0, 2000)}\n=== END CURRENT NEWS ===`
-    : "";
-
-  const newsSection = [
-    breaking24hSection,
-    thirtyDaySection,
-  ].filter(Boolean).join("\n\n") ||
-    `[NO LIVE NEWS: Primary search returned no content. Lower confidence across all company-specific recommendations. Do not fabricate news events.]`;
+  const { newsSection, newsStatusNote } = buildPromptNewsContext(newsResult, ctx.today);
 
   // Step 4a: Dynamic max_completion_tokens (Batch 3 — replaces hardcoded value)
   // Formula: min(holdingCount × 500 + 1500, 16000)
@@ -519,7 +624,7 @@ ${breaking24h}
   // Step 4b: Build prompt and call LLM with single retry on JSON parse failure
   // (Replaces prohibited 8-attempt multi-model waterfall — Batch 3)
   onProgress?.(3);
-  const prompt = buildAnalysisPrompt(ctx, newsSection, trustedSources, convictions ?? [], usingFallback);
+  const prompt = buildAnalysisPrompt(ctx, newsSection, trustedSources, convictions ?? [], newsStatusNote);
 
   // Prepend orchestrator-provided context (regime, sentiment, price reactions, candidates)
   const fullPrompt = additionalContext
@@ -658,6 +763,7 @@ ${breaking24h}
     ...rec,
     valueDelta: rec.dollarDelta,
   }));
+  recommendations = applyStructuredNewsOverlay(recommendations, newsResult.signals);
 
   const portfolioMath = buildPortfolioMathSummary(recommendations, ctx);
 
@@ -676,6 +782,10 @@ ${breaking24h}
     sourceQualitySummary: sourceQuality,
     frozenProfileJson: ctx.frozenProfileJson,
     usingFallback,
+    newsAvailabilityStatus: newsResult.availabilityStatus,
+    newsStatusSummary: newsResult.statusSummary,
+    newsIssues: newsResult.issues,
+    newsSignals: newsResult.signals,
     validationErrors: validation.errors,
     validationWarnings: validation.warnings,
     lowChurnPolicy: lowChurnResult.meta,

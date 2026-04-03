@@ -5,8 +5,20 @@
  * Returns EvidenceItem[] rather than raw strings.
  */
 
-import type { EvidenceItem, Source } from "./types";
-import { deduplicateSources, rankSources } from "./source-ranker";
+import type {
+  EvidenceItem,
+  NewsAvailabilityStatus,
+  NewsConfidenceLevel,
+  NewsContradictionLevel,
+  NewsDegradedReason,
+  NewsDirectionalSupport,
+  NewsFetchIssue,
+  NewsResult,
+  NewsSignalSet,
+  Source,
+  TickerNewsSignal,
+} from "./types";
+import { deduplicateSources, rankSources, summarizeSourceQuality } from "./source-ranker";
 import {
   NEWS_SEARCH_FETCHER_VERSION,
   buildNewsSearchCacheKey,
@@ -17,6 +29,374 @@ import {
 interface RawNewsResult {
   summary: string;
   sources: Source[];
+}
+
+interface SearchAttemptResult extends RawNewsResult {
+  availabilityStatus: NewsAvailabilityStatus;
+  degradedReason: NewsDegradedReason | null;
+  issues: NewsFetchIssue[];
+  modelUsed: string | null;
+}
+
+const POSITIVE_NEWS_KEYWORDS = [
+  "beats",
+  "beat",
+  "raises guidance",
+  "strong demand",
+  "upgrade",
+  "approved",
+  "partnership",
+  "expansion",
+  "launch",
+  "wins contract",
+  "record revenue",
+];
+
+const NEGATIVE_NEWS_KEYWORDS = [
+  "misses",
+  "miss",
+  "cuts guidance",
+  "downgrade",
+  "investigation",
+  "lawsuit",
+  "recall",
+  "delay",
+  "warning",
+  "fraud",
+  "data breach",
+];
+
+const CATALYST_KEYWORDS = [
+  "earnings",
+  "guidance",
+  "launch",
+  "approval",
+  "contract",
+  "acquisition",
+  "partnership",
+  "outlook",
+];
+
+const RISK_EVENT_KEYWORDS = [
+  "downgrade",
+  "investigation",
+  "probe",
+  "lawsuit",
+  "tariff",
+  "regulation",
+  "sanction",
+  "recall",
+  "delay",
+  "default",
+];
+
+function normalizeNewsText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function countKeywordMatches(text: string, keywords: string[]): number {
+  return keywords.reduce((count, keyword) => count + (text.includes(keyword) ? 1 : 0), 0);
+}
+
+function extractCauseMessage(cause: unknown): string | null {
+  if (!cause) return null;
+  if (typeof cause === "string") return cause;
+  if (typeof cause === "object" && cause !== null && "message" in cause && typeof (cause as { message?: unknown }).message === "string") {
+    return (cause as { message: string }).message;
+  }
+  return null;
+}
+
+function describeAvailabilityStatus(
+  availabilityStatus: NewsAvailabilityStatus,
+  degradedReason: NewsDegradedReason | null,
+  usingFallback: boolean,
+  articleCount: number
+): string {
+  switch (availabilityStatus) {
+    case "primary_success":
+      return articleCount > 0
+        ? `Primary live-news search succeeded and produced ${articleCount} cited source(s) for this run.`
+        : "Primary live-news search succeeded, but only thin source coverage was captured for this run.";
+    case "primary_empty":
+      return usingFallback
+        ? "Primary live-news search returned no usable results, so Yahoo Finance fallback headlines were used."
+        : "Primary live-news search returned no usable results for this run.";
+    case "primary_transport_failure":
+      return usingFallback
+        ? "Primary live-news search failed due to a connection/provider error, so Yahoo Finance fallback headlines were used."
+        : "Primary live-news search failed due to a connection/provider error and no usable fallback coverage was captured.";
+    case "primary_rate_limited":
+      return usingFallback
+        ? "Primary live-news search was rate-limited, so Yahoo Finance fallback headlines were used."
+        : "Primary live-news search was rate-limited and no usable fallback coverage was captured.";
+    case "fallback_success":
+      if (degradedReason === "primary_rate_limited") {
+        return "Primary live-news search was rate-limited, so Yahoo Finance fallback headlines were used for this run.";
+      }
+      if (degradedReason === "primary_transport_failure") {
+        return "Primary live-news search failed due to a connection/provider issue, so Yahoo Finance fallback headlines were used.";
+      }
+      if (degradedReason === "primary_empty_result") {
+        return "Primary live-news search returned no usable results, so Yahoo Finance fallback headlines were used.";
+      }
+      return "Yahoo Finance fallback headlines were used because primary live-news coverage was unavailable for this run.";
+    case "no_usable_news":
+    default:
+      return "No usable news could be captured from the primary provider or the Yahoo fallback for this run.";
+  }
+}
+
+function classifyDirectionalSupport(text: string): NewsDirectionalSupport {
+  const normalized = normalizeNewsText(text);
+  if (!normalized) return "insufficient";
+
+  const positiveMatches = countKeywordMatches(normalized, POSITIVE_NEWS_KEYWORDS);
+  const negativeMatches = countKeywordMatches(normalized, NEGATIVE_NEWS_KEYWORDS);
+
+  if (positiveMatches === 0 && negativeMatches === 0) return "neutral";
+  if (positiveMatches > 0 && negativeMatches > 0) return "mixed";
+  return positiveMatches > negativeMatches ? "positive" : "negative";
+}
+
+function classifyContradictionLevel(text: string): NewsContradictionLevel {
+  const normalized = normalizeNewsText(text);
+  const positiveMatches = countKeywordMatches(normalized, POSITIVE_NEWS_KEYWORDS);
+  const negativeMatches = countKeywordMatches(normalized, NEGATIVE_NEWS_KEYWORDS);
+
+  if (positiveMatches > 0 && negativeMatches > 0) return "high";
+  if (positiveMatches > 0 || negativeMatches > 0) return "medium";
+  return "low";
+}
+
+function detectTickerText(text: string, ticker: string): string {
+  return text
+    .split("\n")
+    .filter((line) => line.toUpperCase().includes(ticker.toUpperCase()))
+    .join("\n");
+}
+
+function classifyNewsConfidence(
+  availabilityStatus: NewsAvailabilityStatus,
+  articleCount: number,
+  sourceDiversityCount: number,
+  contradictionLevel: NewsContradictionLevel
+): NewsConfidenceLevel {
+  if (availabilityStatus === "no_usable_news" || availabilityStatus === "primary_transport_failure" || availabilityStatus === "primary_rate_limited") {
+    return "low";
+  }
+  if (availabilityStatus === "fallback_success" || availabilityStatus === "primary_empty") {
+    return articleCount >= 3 && sourceDiversityCount >= 2 && contradictionLevel !== "high" ? "medium" : "low";
+  }
+  if (articleCount >= 4 && sourceDiversityCount >= 2 && contradictionLevel === "low") {
+    return "high";
+  }
+  if (articleCount >= 2) {
+    return "medium";
+  }
+  return "low";
+}
+
+function buildTickerSignal(params: {
+  ticker: string;
+  fullText: string;
+  sources: Source[];
+  availabilityStatus: NewsAvailabilityStatus;
+  degradedReason: NewsDegradedReason | null;
+}): TickerNewsSignal {
+  const tickerText = detectTickerText(params.fullText, params.ticker);
+  const normalizedTickerText = normalizeNewsText(tickerText);
+  const directionalSupport = classifyDirectionalSupport(normalizedTickerText);
+  const contradictionLevel = classifyContradictionLevel(normalizedTickerText);
+  const articleCount = tickerText ? tickerText.split("\n").filter(Boolean).length : 0;
+  const sourceSubset = params.sources.filter((source) => {
+    const haystack = `${source.title} ${source.url}`.toUpperCase();
+    return haystack.includes(params.ticker.toUpperCase());
+  });
+  const rankedSubset = rankSources(sourceSubset);
+  const sourceDiversityCount = new Set(rankedSubset.map((source) => source.domain ?? source.url)).size;
+  const trustedSourceCount = rankedSubset.filter((source) => source.quality === "high" || source.quality === "medium").length;
+  const recent24hCount = tickerText
+    .split("\n")
+    .filter((line) => /\[.*\]/.test(line) || line.toLowerCase().includes("breaking"))
+    .length;
+  const recent7dCount = articleCount;
+  const catalystPresence = countKeywordMatches(normalizedTickerText, CATALYST_KEYWORDS) > 0;
+  const riskEventPresence = countKeywordMatches(normalizedTickerText, RISK_EVENT_KEYWORDS) > 0;
+  const newsConfidence = classifyNewsConfidence(
+    params.availabilityStatus,
+    articleCount,
+    sourceDiversityCount,
+    contradictionLevel
+  );
+
+  const explanatoryNote = articleCount === 0
+    ? describeAvailabilityStatus(params.availabilityStatus, params.degradedReason, params.availabilityStatus === "fallback_success", 0)
+    : `${articleCount} ticker-specific news mention(s) were captured with ${directionalSupport} directional support and ${newsConfidence} news confidence.`;
+
+  return {
+    ticker: params.ticker,
+    availabilityStatus: params.availabilityStatus,
+    degradedReason: params.degradedReason,
+    articleCount,
+    trustedSourceCount,
+    sourceDiversityCount,
+    recent24hCount,
+    recent7dCount,
+    directionalSupport,
+    catalystPresence,
+    riskEventPresence,
+    contradictionLevel,
+    newsConfidence,
+    explanatoryNote,
+  };
+}
+
+export function buildNewsSignalSet(params: {
+  tickers: string[];
+  combinedSummary: string;
+  breaking24h: string;
+  sources: Source[];
+  availabilityStatus: NewsAvailabilityStatus;
+  degradedReason: NewsDegradedReason | null;
+  issues: NewsFetchIssue[];
+  usingFallback: boolean;
+}): NewsSignalSet {
+  const rankedSources = rankSources(params.sources);
+  const sourceQuality = summarizeSourceQuality(rankedSources);
+  const fullText = `${params.breaking24h ?? ""}\n${params.combinedSummary ?? ""}`.trim();
+  const directionalSupport = classifyDirectionalSupport(fullText);
+  const contradictionLevel = classifyContradictionLevel(fullText);
+  const articleCount = rankedSources.length;
+  const sourceDiversityCount = new Set(rankedSources.map((source) => source.domain ?? source.url)).size;
+  const recent24hCount = params.breaking24h
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.toLowerCase().startsWith("no breaking news"))
+    .length;
+  const recent7dCount = articleCount;
+  const catalystPresence = countKeywordMatches(normalizeNewsText(fullText), CATALYST_KEYWORDS) > 0;
+  const riskEventPresence = countKeywordMatches(normalizeNewsText(fullText), RISK_EVENT_KEYWORDS) > 0;
+  const confidence = classifyNewsConfidence(
+    params.availabilityStatus,
+    articleCount,
+    sourceDiversityCount,
+    contradictionLevel
+  );
+
+  const sortedTickers = [...new Set(params.tickers.map((ticker) => ticker.toUpperCase()))].sort();
+  const tickerSignals = sortedTickers.reduce<Record<string, TickerNewsSignal>>((acc, ticker) => {
+    acc[ticker] = buildTickerSignal({
+      ticker,
+      fullText,
+      sources: rankedSources,
+      availabilityStatus: params.availabilityStatus,
+      degradedReason: params.degradedReason,
+    });
+    return acc;
+  }, {});
+
+  return {
+    availabilityStatus: params.availabilityStatus,
+    degradedReason: params.degradedReason,
+    articleCount,
+    trustedSourceCount: sourceQuality.high + sourceQuality.medium,
+    sourceDiversityCount,
+    recent24hCount,
+    recent7dCount,
+    directionalSupport,
+    contradictionLevel,
+    catalystPresence,
+    riskEventPresence,
+    confidence,
+    statusSummary: describeAvailabilityStatus(
+      params.availabilityStatus,
+      params.degradedReason,
+      params.usingFallback,
+      articleCount
+    ),
+    tickerSignals,
+    issues: params.issues,
+  };
+}
+
+function logStructuredNewsIssue(issue: NewsFetchIssue): void {
+  console.warn(
+    `[news-fetcher] ${issue.kind}: ${issue.message} ${JSON.stringify({
+      model: issue.model,
+      attempt: issue.attempt,
+      status: issue.status,
+      code: issue.code,
+      type: issue.type,
+      cause: issue.cause,
+      retryPath: issue.retryPath,
+    })}`
+  );
+}
+
+function buildNewsFetchIssue(params: {
+  kind: NewsFetchIssue["kind"];
+  model: string | null;
+  attempt: number | null;
+  message: string;
+  retryPath?: string | null;
+  error?: any;
+}): NewsFetchIssue {
+  return {
+    kind: params.kind,
+    model: params.model,
+    attempt: params.attempt,
+    message: params.message,
+    name: params.error?.name ?? null,
+    status: typeof params.error?.status === "number" ? params.error.status : null,
+    code: typeof params.error?.code === "string" ? params.error.code : null,
+    type: typeof params.error?.type === "string" ? params.error.type : null,
+    cause: extractCauseMessage(params.error?.cause),
+    retryPath: params.retryPath ?? null,
+  };
+}
+
+export function buildEmptyNewsResult(params: {
+  tickers: string[];
+  availabilityStatus?: NewsAvailabilityStatus;
+  degradedReason?: NewsDegradedReason | null;
+  message?: string;
+  issues?: NewsFetchIssue[];
+}): NewsResult {
+  const availabilityStatus = params.availabilityStatus ?? "no_usable_news";
+  const degradedReason = params.degradedReason ?? "no_usable_news";
+  const issues = params.issues ?? [
+    buildNewsFetchIssue({
+      kind: "no_usable_news",
+      model: null,
+      attempt: null,
+      message: params.message ?? "No usable news was available for this run.",
+      retryPath: "none",
+    }),
+  ];
+
+  return {
+    evidence: [],
+    combinedSummary: "",
+    allSources: [],
+    usingFallback: false,
+    breaking24h: "",
+    availabilityStatus,
+    degradedReason,
+    statusSummary: describeAvailabilityStatus(availabilityStatus, degradedReason, false, 0),
+    issues,
+    signals: buildNewsSignalSet({
+      tickers: params.tickers,
+      combinedSummary: "",
+      breaking24h: "",
+      sources: [],
+      availabilityStatus,
+      degradedReason,
+      issues,
+      usingFallback: false,
+    }),
+    fetchedAt: new Date().toISOString(),
+  };
 }
 
 // ─── Yahoo Finance fallback ───────────────────────────────────────────────────
@@ -149,8 +529,9 @@ async function openaiSearchCall(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   openai: any,
   prompt: string,
-  attempt = 1
-): Promise<RawNewsResult> {
+  attempt = 1,
+  priorIssues: NewsFetchIssue[] = []
+): Promise<SearchAttemptResult> {
   for (const model of SEARCH_MODELS) {
     try {
       const payload: any = {
@@ -178,23 +559,97 @@ async function openaiSearchCall(
         }));
 
       const rankedSources = rankSources(rawSources);
-      return { summary: textContent, sources: rankedSources };
+      if (!textContent.trim() && rankedSources.length === 0) {
+        const emptyIssue = buildNewsFetchIssue({
+          kind: "primary_empty_result",
+          model,
+          attempt,
+          message: "Primary live-news search returned no usable content for this batch.",
+          retryPath: "yahoo_fallback",
+        });
+        logStructuredNewsIssue(emptyIssue);
+        return {
+          summary: "",
+          sources: [],
+          availabilityStatus: "primary_empty",
+          degradedReason: "primary_empty_result",
+          issues: [...priorIssues, emptyIssue],
+          modelUsed: model,
+        };
+      }
+
+      return {
+        summary: textContent,
+        sources: rankedSources,
+        availabilityStatus: "primary_success",
+        degradedReason: null,
+        issues: priorIssues,
+        modelUsed: model,
+      };
     } catch (err: any) {
       if (err?.status === 429 && attempt < 8) {
-        console.warn(`[news-fetcher] Rate limit (429) hit for model ${model}. Waiting 65s for bucket to refill...`);
+        const rateLimitIssue = buildNewsFetchIssue({
+          kind: "primary_rate_limited",
+          model,
+          attempt,
+          message: `Rate limit (429) hit for model ${model}. Waiting 65 seconds before retrying.`,
+          retryPath: "retry_primary",
+          error: err,
+        });
+        logStructuredNewsIssue(rateLimitIssue);
         await new Promise(r => setTimeout(r, 65000));
-        return openaiSearchCall(openai, prompt, attempt + 1);
+        return openaiSearchCall(openai, prompt, attempt + 1, [...priorIssues, rateLimitIssue]);
       }
       const isDeprecated = err?.status === 404 || err?.message?.includes("deprecated") || err?.message?.includes("not found");
       if (isDeprecated && model !== SEARCH_MODELS[SEARCH_MODELS.length - 1]) {
-        console.warn(`[news-fetcher] Model ${model} unavailable, trying fallback...`);
+        const deprecationIssue = buildNewsFetchIssue({
+          kind: "primary_transport_failure",
+          model,
+          attempt,
+          message: `Primary search model ${model} was unavailable; trying fallback model.`,
+          retryPath: "fallback_model",
+          error: err,
+        });
+        logStructuredNewsIssue(deprecationIssue);
+        priorIssues = [...priorIssues, deprecationIssue];
         continue; // try next model
       }
-      console.warn("[news-fetcher] Search call failed:", err?.message);
-      return { summary: "", sources: [] };
+      const kind: NewsFetchIssue["kind"] = err?.status === 429 ? "primary_rate_limited" : "primary_transport_failure";
+      const issue = buildNewsFetchIssue({
+        kind,
+        model,
+        attempt,
+        message: err?.message ?? "Primary live-news search failed before returning a usable response.",
+        retryPath: "yahoo_fallback",
+        error: err,
+      });
+      logStructuredNewsIssue(issue);
+      return {
+        summary: "",
+        sources: [],
+        availabilityStatus: kind === "primary_rate_limited" ? "primary_rate_limited" : "primary_transport_failure",
+        degradedReason: kind === "primary_rate_limited" ? "primary_rate_limited" : "primary_transport_failure",
+        issues: [...priorIssues, issue],
+        modelUsed: model,
+      };
     }
   }
-  return { summary: "", sources: [] };
+  const finalIssue = buildNewsFetchIssue({
+    kind: "primary_transport_failure",
+    model: null,
+    attempt,
+    message: "Primary live-news search exhausted all configured models without producing a usable result.",
+    retryPath: "yahoo_fallback",
+  });
+  logStructuredNewsIssue(finalIssue);
+  return {
+    summary: "",
+    sources: [],
+    availabilityStatus: "primary_transport_failure",
+    degradedReason: "primary_transport_failure",
+    issues: [...priorIssues, finalIssue],
+    modelUsed: null,
+  };
 }
 
 // ─── Single unified news search ───────────────────────────────────────────────
@@ -204,16 +659,15 @@ export async function fetchAllNewsWithFallback(
   tickers: string[],
   today: string,
   onProgress?: (step: number, customMessage?: string) => void
-): Promise<{
-  evidence: EvidenceItem[];
-  combinedSummary: string;
-  allSources: Source[];
-  usingFallback: boolean;
-  breaking24h: string;
-}> {
+): Promise<NewsResult> {
   const nonCash = tickers.filter((t) => t !== "CASH");
   if (nonCash.length === 0) {
-    return { evidence: [], combinedSummary: "", allSources: [], usingFallback: false, breaking24h: "" };
+    return buildEmptyNewsResult({
+      tickers,
+      availabilityStatus: "no_usable_news",
+      degradedReason: "no_usable_news",
+      message: "No non-cash tickers were available for news collection.",
+    });
   }
 
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split("T")[0];
@@ -227,7 +681,9 @@ export async function fetchAllNewsWithFallback(
   let fullCombinedText = "";
   let fullBreakingText = "";
   let allSourcesRef: Source[] = [];
-  let isFallback = false;
+  let availabilityStatus: NewsAvailabilityStatus = "primary_success";
+  let degradedReason: NewsDegradedReason | null = null;
+  let issues: NewsFetchIssue[] = [];
 
   onProgress?.(0, `Fetching unified news across ${chunks.length} batches...`);
 
@@ -266,7 +722,7 @@ Search for specific news (earnings, product launches, downgrades) for EACH indiv
 Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) for every claim.`;
     }
 
-    const result = await getOrLoadRuntimeCache<RawNewsResult>({
+    const result = await getOrLoadRuntimeCache<SearchAttemptResult>({
       domain: "news_search_cache",
       key: buildNewsSearchCacheKey({
         ticker: chunkTickers,
@@ -276,6 +732,12 @@ Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) 
       versionTag: buildRuntimeVersionTag(["openai_search", NEWS_SEARCH_FETCHER_VERSION]),
       loader: () => openaiSearchCall(openai, prompt),
     });
+
+    issues.push(...(result.issues ?? []));
+    if (result.availabilityStatus !== "primary_success") {
+      availabilityStatus = result.availabilityStatus;
+      degradedReason = result.degradedReason ?? degradedReason;
+    }
     let breakingChunk = "";
     let combinedChunk = result.summary;
 
@@ -308,23 +770,95 @@ Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) 
 
   // If primary fetch failed entirely, use Yahoo fallback
   if (!fullCombinedText.trim() && !fullBreakingText) {
-    console.log("[news-fetcher] Primary fetch returned empty. Using Yahoo Finance fallback.");
+    const fallbackTriggerIssue = issues.find((issue) =>
+      issue.kind === "primary_transport_failure" || issue.kind === "primary_rate_limited" || issue.kind === "primary_empty_result"
+    );
     const fallback = await fetchYahooFinanceFallback(tickers);
-    return {
-      evidence: [
-        {
-          content: fallback.summary,
-          sources: fallback.sources,
-          evidenceType: "secondary",
-          category: "macro",
-        },
-      ],
-      combinedSummary: fallback.summary,
-      allSources: fallback.sources,
-      usingFallback: true,
-      breaking24h: "",
-    };
+    const fallbackSucceeded = Boolean(fallback.summary.trim() || fallback.sources.length > 0);
+
+    if (fallbackSucceeded) {
+      const fallbackIssue = buildNewsFetchIssue({
+        kind: "fallback_used",
+        model: fallbackTriggerIssue?.model ?? null,
+        attempt: fallbackTriggerIssue?.attempt ?? null,
+        message: "Yahoo Finance fallback headlines supplied usable coverage for this run.",
+        retryPath: "yahoo_fallback",
+      });
+      logStructuredNewsIssue(fallbackIssue);
+      const combinedIssues = [...issues, fallbackIssue];
+      const fallbackAvailability: NewsAvailabilityStatus = "fallback_success";
+      const fallbackReason = degradedReason ?? "fallback_used";
+      const signals = buildNewsSignalSet({
+        tickers,
+        combinedSummary: fallback.summary,
+        breaking24h: "",
+        sources: fallback.sources,
+        availabilityStatus: fallbackAvailability,
+        degradedReason: fallbackReason,
+        issues: combinedIssues,
+        usingFallback: true,
+      });
+
+      return {
+        evidence: [
+          {
+            content: fallback.summary,
+            sources: fallback.sources,
+            evidenceType: "secondary",
+            category: "macro",
+          },
+        ],
+        combinedSummary: fallback.summary,
+        allSources: fallback.sources,
+        usingFallback: true,
+        breaking24h: "",
+        availabilityStatus: fallbackAvailability,
+        degradedReason: fallbackReason,
+        statusSummary: signals.statusSummary,
+        issues: combinedIssues,
+        signals,
+        fetchedAt: new Date().toISOString(),
+      };
+    }
+
+    const noUsableNewsIssue = buildNewsFetchIssue({
+      kind: "no_usable_news",
+      model: fallbackTriggerIssue?.model ?? null,
+      attempt: fallbackTriggerIssue?.attempt ?? null,
+      message: "Neither the primary provider nor Yahoo Finance fallback produced usable news for this run.",
+      retryPath: "none",
+    });
+    logStructuredNewsIssue(noUsableNewsIssue);
+    return buildEmptyNewsResult({
+      tickers,
+      availabilityStatus: "no_usable_news",
+      degradedReason: degradedReason ?? "no_usable_news",
+      issues: [...issues, noUsableNewsIssue],
+    });
   }
 
-  return { evidence: [evidenceItem], combinedSummary: fullCombinedText.trim(), allSources, usingFallback: false, breaking24h: fullBreakingText.trim() };
+  const signals = buildNewsSignalSet({
+    tickers,
+    combinedSummary: fullCombinedText.trim(),
+    breaking24h: fullBreakingText.trim(),
+    sources: allSources,
+    availabilityStatus,
+    degradedReason,
+    issues,
+    usingFallback: false,
+  });
+
+  return {
+    evidence: [evidenceItem],
+    combinedSummary: fullCombinedText.trim(),
+    allSources,
+    usingFallback: false,
+    breaking24h: fullBreakingText.trim(),
+    availabilityStatus,
+    degradedReason,
+    statusSummary: signals.statusSummary,
+    issues,
+    signals,
+    fetchedAt: new Date().toISOString(),
+  };
 }

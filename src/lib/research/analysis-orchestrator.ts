@@ -371,32 +371,50 @@ function buildNewsSourceDiagnostics(input: {
   sourceRefs: DiagnosticsSourceRefContract[];
 }): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics" | "sources"> {
   const allTickers = Array.isArray(input.allTickers) ? input.allTickers : [];
-  const breakingItems = input.newsResult?.breaking24h?.length ?? 0;
+  const breakingText = typeof input.newsResult?.breaking24h === "string" ? input.newsResult.breaking24h : "";
+  const newsSignals = input.newsResult?.signals ?? null;
+  const availabilityStatus = input.newsResult?.availabilityStatus ?? (input.usingFallbackNews ? "fallback_success" : "primary_success");
+  const statusSummary = input.newsResult?.statusSummary
+    ?? (input.usingFallbackNews
+      ? "Yahoo Finance fallback headlines were used because primary live-news coverage was unavailable for this run."
+      : "Primary live-news coverage was captured for this run.");
+  const breakingItems = breakingText
+    .split("\n")
+    .map((line: string) => line.trim())
+    .filter((line: string) => line.length > 0 && !line.toLowerCase().startsWith("no breaking news"))
+    .length;
   const sourceCount = input.sourceRefs.length;
   const hasSearchContext = allTickers.length > 0;
   const collectedSources = sourceCount > 0;
 
-  const status: DiagnosticsStepContract["status"] = collectedSources
+  const status: DiagnosticsStepContract["status"] =
+    availabilityStatus === "primary_transport_failure" || availabilityStatus === "primary_rate_limited" || availabilityStatus === "no_usable_news"
+      ? "warning"
+      : collectedSources
     ? "ok"
     : hasSearchContext
       ? "warning"
       : "warning";
 
   const outcomeExplanation = collectedSources
-    ? `${sourceCount} source(s) were collected for the analyzed ticker set.`
-    : hasSearchContext
-      ? "News search ran for the analyzed tickers, but no sourceable events were persisted into this run."
-      : "News source search context was incomplete, so the empty result may reflect degraded execution.";
+    ? statusSummary
+    : availabilityStatus === "no_usable_news"
+      ? "No usable primary or fallback news could be persisted for this run."
+      : hasSearchContext
+        ? statusSummary
+        : "News source search context was incomplete, so the empty result may reflect degraded execution.";
 
   return {
     status,
     summary: outcomeExplanation,
     inputs: {
       tickersReviewed: allTickers.length > 0 ? allTickers : null,
-      searchWindow: input.usingFallbackNews
+      searchWindow: availabilityStatus === "fallback_success"
         ? "Yahoo Finance fallback headlines"
         : "Breaking 24h plus broader 30-day company, sector, and macro search",
       fallbackUsed: input.usingFallbackNews ?? false,
+      newsAvailabilityStatus: availabilityStatus,
+      degradedReason: input.newsResult?.degradedReason ?? null,
       searchScope: hasSearchContext
         ? "The step searched company, sector, and macro events relevant to the analyzed tickers."
         : "The run did not persist enough ticker scope to describe the news search inputs fully.",
@@ -404,11 +422,19 @@ function buildNewsSourceDiagnostics(input: {
     outputs: {
       outcomeExplanation,
       sourceCount,
-      breakingNewsSummary: truncateText(input.newsResult?.breaking24h ?? null),
+      newsSupportStrength: newsSignals
+        ? `${newsSignals.directionalSupport} support, ${newsSignals.confidence} confidence, ${newsSignals.sourceDiversityCount} distinct source domain(s).`
+        : null,
+      breakingNewsSummary: truncateText(breakingText || null),
       combinedResearchSummary: truncateText(input.newsResult?.combinedSummary ?? null),
       topSourceTitles: input.sourceRefs.slice(0, 5).map((source) => source.title),
+      issueSummary: Array.isArray(input.newsResult?.issues)
+        ? input.newsResult.issues.slice(0, 3).map((issue: any) => issue.message)
+        : [],
       emptyResultReason: collectedSources
         ? null
+        : availabilityStatus === "no_usable_news"
+          ? "No usable news could be recovered from either the primary provider or the Yahoo fallback for this run."
         : hasSearchContext
           ? "The news search completed but did not persist any source-backed items for this run."
           : "The step did not persist enough input scope to explain an empty source result confidently.",
@@ -417,10 +443,18 @@ function buildNewsSourceDiagnostics(input: {
       ["source_count", "Source Count", sourceCount],
       ["breaking_items", "Breaking Items", breakingItems],
       ["tickers_reviewed", "Tickers Reviewed", allTickers.length || null],
+      ["news_article_count", "News Article Count", newsSignals?.articleCount ?? null],
+      ["source_diversity", "Source Diversity", newsSignals?.sourceDiversityCount ?? null],
     ]),
     sources: input.sourceRefs,
-    warnings: input.usingFallbackNews
-      ? buildDiagnosticsWarnings([["fallback_news", "Fallback news path was used.", "warning"]])
+    warnings: Array.isArray(input.newsResult?.issues) && input.newsResult.issues.length > 0
+      ? input.newsResult.issues.map((issue: any) => ({
+          code: issue.kind ?? "news_issue",
+          message: issue.message ?? "News fetch issue",
+          severity: issue.kind === "primary_transport_failure" || issue.kind === "primary_rate_limited" || issue.kind === "no_usable_news"
+            ? "warning"
+            : "info",
+        }))
       : !collectedSources
         ? buildDiagnosticsWarnings([["news_sources_empty", "News search returned no persisted sources for this run.", "warning"]])
         : [],
@@ -1135,9 +1169,10 @@ export async function runFullAnalysis(
   const frozenSentimentSignals = new Map(freezeRunEvidenceSet(Array.from(sentimentSignals.entries())));
   const frozenTickerArticles = new Map(freezeRunEvidenceSet(Array.from(tickerArticles.entries())));
   const frozenFinalRegime = freezeRunEvidenceSet(finalRegime);
+  const frozenBreakingText = typeof frozenNewsResult.breaking24h === "string" ? frozenNewsResult.breaking24h : "";
 
-  const breaking24hSection = frozenNewsResult.breaking24h?.trim()
-    ? `=== ⚡ BREAKING NEWS (last 24 hours — ${today}) ===\n${guardContextLength(frozenNewsResult.breaking24h, 3000, "breaking")}\n=== END BREAKING NEWS ===\n\n24-HOUR WEIGHTING RULES:\n- STRONG signal: override 30-day thesis\n- MODERATE: adjust weight ±3-5%\n- NOISE: log but don't change recommendation`
+  const breaking24hSection = frozenBreakingText.trim()
+    ? `=== ⚡ BREAKING NEWS (last 24 hours — ${today}) ===\n${guardContextLength(frozenBreakingText, 3000, "breaking")}\n=== END BREAKING NEWS ===\n\n24-HOUR WEIGHTING RULES:\n- STRONG signal: override 30-day thesis\n- MODERATE: adjust weight ±3-5%\n- NOISE: log but don't change recommendation`
     : "";
 
   const priceReactionSection = Array.from(frozenTimelines.values())
@@ -1204,7 +1239,7 @@ export async function runFullAnalysis(
         runId,
         regime: frozenFinalRegime,
         newsText: newsSection,
-        breaking24h: frozenNewsResult.breaking24h ?? "",
+        breaking24h: frozenBreakingText,
         // F2: pass structured signal map + articleTitles (replaces prior prose string)
         sentimentSignals: frozenSentimentSignals,
         articleTitles: new Map(Array.from(frozenTickerArticles.entries()).map(([t, arts]) => [t, arts.map(a => a.title)])),
@@ -1344,7 +1379,8 @@ export async function runFullAnalysis(
       latestReport?.recommendations,
       customPrompt,
       convictions,
-      additionalContext
+      additionalContext,
+      frozenNewsResult
     );
   } catch (primaryErr: any) {
     // Q3 trace: finish_reason_length, validation_enforce_block, and generic LLM failures
@@ -1539,7 +1575,7 @@ export async function runFullAnalysis(
     },
     fastSearchResearch: {
       status: (frozenNewsResult.combinedSummary?.length ?? 0) > 10 || (frozenNewsResult.breaking24h?.length ?? 0) > 10 ? `${frozenNewsResult.allSources?.length ?? 0} sources` : "!0 sources",
-      rationale: ""
+      rationale: frozenNewsResult.statusSummary ?? ""
     },
     finbertSentiment: {
       status: Array.from(frozenSentimentSignals.values()).some(s => (s.finbertScore ?? 0) !== 0 || (s.fingptScore ?? 0) !== 0) ? `${Array.from(frozenSentimentSignals.values()).filter(s => (s.finbertScore ?? 0) !== 0 || (s.fingptScore ?? 0) !== 0).length} scored` : "!0 scored",
@@ -1733,6 +1769,10 @@ export async function runFullAnalysis(
     qualityMeta: {
       promptHash,
       usingFallbackNews,
+      newsAvailabilityStatus: frozenNewsResult.availabilityStatus ?? null,
+      newsStatusSummary: frozenNewsResult.statusSummary ?? null,
+      newsIssues: frozenNewsResult.issues ?? [],
+      newsSignals: frozenNewsResult.signals ?? null,
       validationWarningCount,
       perSectionChars,
       totalInputChars: additionalContext.length,

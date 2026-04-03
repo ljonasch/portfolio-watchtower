@@ -323,23 +323,31 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
           ? "Yahoo Finance fallback headlines"
           : "Breaking 24h plus broader company, sector, and macro search",
         fallbackUsed: qualityMeta.usingFallbackNews ?? evidencePacket.usingFallbackNews ?? false,
+        newsAvailabilityStatus: qualityMeta.newsAvailabilityStatus ?? null,
         searchScope: "Legacy fallback confirms the news step searched the analyzed ticker set, but only limited request-scope telemetry was persisted.",
       },
       outputs: {
         sourceCoverage: normalizeLegacySummary(systemVerification.fastSearchResearch?.status ?? "Not run"),
+        statusSummary: qualityMeta.newsStatusSummary ?? (qualityMeta.usingFallbackNews
+          ? "Yahoo Finance fallback headlines were used because primary live-news coverage was unavailable for this run."
+          : null),
         outcomeExplanation: sourceList.length > 0
           ? `${sourceList.length} source(s) were persisted for this run.`
           : "The news step did not persist any source-backed items for this older bundle.",
         rationale: systemVerification.fastSearchResearch?.rationale || (sourceList.length > 0 ? "Citations were persisted for this run." : null),
         topSourceTitles: sourceList.slice(0, 5).map((source) => source?.title ?? source?.source ?? "Untitled source"),
-        emptyResultReason: sourceList.length === 0 ? "Legacy fallback has no persisted sources for this run." : null,
+        emptyResultReason: sourceList.length === 0
+          ? (qualityMeta.usingFallbackNews
+            ? "Legacy fallback indicates the run had degraded primary news coverage and no fallback sources were persisted."
+            : "Legacy fallback has no persisted sources for this run.")
+          : null,
       },
       metrics: buildMetrics([
         ["source_count", "Source Count", sourceList.length],
       ]),
       sources: sourceList.map(toSourceRef),
       warnings: qualityMeta.usingFallbackNews
-        ? buildWarnings([["fallback_news", "Fallback news path was used for this run.", "warning"]])
+        ? buildWarnings([["fallback_news", qualityMeta.newsStatusSummary ?? "Fallback news path was used for this run.", "warning"]])
         : [],
       model: null,
       hashes: { evidenceHash, promptHash },

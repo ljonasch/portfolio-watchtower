@@ -118,6 +118,8 @@ describe("run diagnostics read service", () => {
         promptHash: "prompt_hash",
         evidencePacketId: "packet_1",
         usingFallbackNews: true,
+        newsAvailabilityStatus: "fallback_success",
+        newsStatusSummary: "Yahoo Finance fallback headlines were used because primary live-news coverage was unavailable for this run.",
         adjudicatorTickers: ["MSFT"],
         totalInputChars: 1234,
         systemVerification: {
@@ -170,12 +172,19 @@ describe("run diagnostics read service", () => {
     expect(result?.steps.find((step) => step.stepKey === "news_sources")?.outputs).toEqual(
       expect.objectContaining({
         sourceCoverage: "5 sources",
+        statusSummary: "Yahoo Finance fallback headlines were used because primary live-news coverage was unavailable for this run.",
         topSourceTitles: ["News item"],
       })
     );
     expect(result?.steps.find((step) => step.stepKey === "news_sources")?.sources).toHaveLength(1);
     expect(result?.steps.find((step) => step.stepKey === "validation_finalization")?.warnings).toEqual([
       expect.objectContaining({ code: "low_source_density" }),
+    ]);
+    expect(result?.steps.find((step) => step.stepKey === "news_sources")?.warnings).toEqual([
+      expect.objectContaining({
+        code: "fallback_news",
+        message: "Yahoo Finance fallback headlines were used because primary live-news coverage was unavailable for this run.",
+      }),
     ]);
   });
 

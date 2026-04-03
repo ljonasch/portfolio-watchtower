@@ -30,8 +30,18 @@ describe("analysis orchestrator diagnostics", () => {
       },
       candidates: [{ ticker: "AVGO", companyName: "Broadcom", reason: "AI infra gap", source: "gap_screener" }],
       newsResult: {
+        availabilityStatus: "primary_success",
+        degradedReason: null,
+        statusSummary: "Primary live-news search succeeded and produced cited sources for this run.",
+        issues: [],
+        signals: {
+          articleCount: 1,
+          sourceDiversityCount: 1,
+          confidence: "medium",
+          directionalSupport: "positive",
+        },
         allSources: [{ title: "News item", url: "https://example.com", source: "example", publishedAt: null }],
-        breaking24h: [{ title: "Breaking" }],
+        breaking24h: "Breaking",
         combinedSummary: "Combined summary",
       },
       sentimentSignals: new Map([
@@ -96,6 +106,13 @@ describe("analysis orchestrator diagnostics", () => {
     expect(artifact.steps.find((step) => step.stepKey === "news_sources")?.inputs).toEqual(
       expect.objectContaining({
         searchWindow: "Breaking 24h plus broader 30-day company, sector, and macro search",
+        newsAvailabilityStatus: "primary_success",
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "news_sources")?.outputs).toEqual(
+      expect.objectContaining({
+        outcomeExplanation: "Primary live-news search succeeded and produced cited sources for this run.",
+        newsSupportStrength: "positive support, medium confidence, 1 distinct source domain(s).",
       })
     );
     expect(artifact.steps.find((step) => step.stepKey === "gpt5_reasoning")?.outputs).toEqual(
@@ -244,6 +261,64 @@ describe("analysis orchestrator diagnostics", () => {
           screenedInCount: 0,
           outcomeExplanation: "Candidate screening ran and no external candidates passed the screen for this run.",
           emptyResultReason: "No screened candidates met the bar to be advanced into the final analyzed set.",
+        }),
+      })
+    );
+  });
+
+  test("news diagnostics distinguish degraded primary transport failure from true no-news", () => {
+    const degradedArtifact = buildRunDiagnosticsArtifact({
+      bundleId: "pending",
+      runId: "run_news_degraded",
+      outcome: "validated",
+      generatedAt: "2026-04-02T00:00:00.000Z",
+      evidencePacketId: "packet_1",
+      evidenceHash: "evidence_hash",
+      promptHash: "prompt_hash",
+      versions: {
+        schemaVersion: "v1",
+        analysisPolicyVersion: "v1",
+        viewModelVersion: "v1",
+      },
+      primaryModel: "gpt-5.4",
+      responseHash: "response_hash",
+      usingFallbackNews: true,
+      newsResult: {
+        availabilityStatus: "fallback_success",
+        degradedReason: "primary_transport_failure",
+        statusSummary: "Primary live-news search failed due to a connection/provider issue, so Yahoo Finance fallback headlines were used.",
+        issues: [
+          { kind: "primary_transport_failure", message: "Connection error.", severity: "warning" },
+          { kind: "fallback_used", message: "Yahoo Finance fallback headlines supplied usable coverage for this run.", severity: "info" },
+        ],
+        signals: {
+          articleCount: 2,
+          sourceDiversityCount: 1,
+          confidence: "low",
+          directionalSupport: "neutral",
+        },
+        breaking24h: "",
+        combinedSummary: "Fallback summary",
+        allSources: [{ title: "Fallback item", url: "https://finance.yahoo.com/apple", source: "yahoo", publishedAt: null }],
+      },
+      reportData: { recommendations: [] },
+      validationSummary: {
+        hardErrorCount: 0,
+        warningCount: 0,
+        reasonCodes: [],
+      },
+      allTickers: ["AAPL"],
+    });
+
+    expect(degradedArtifact.steps.find((step) => step.stepKey === "news_sources")).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        inputs: expect.objectContaining({
+          searchWindow: "Yahoo Finance fallback headlines",
+          degradedReason: "primary_transport_failure",
+        }),
+        outputs: expect.objectContaining({
+          outcomeExplanation: "Primary live-news search failed due to a connection/provider issue, so Yahoo Finance fallback headlines were used.",
         }),
       })
     );

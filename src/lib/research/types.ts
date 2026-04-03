@@ -238,11 +238,83 @@ export interface NewsArticle {
   ticker: string | null;
 }
 
+export type NewsAvailabilityStatus =
+  | "primary_success"
+  | "primary_empty"
+  | "primary_transport_failure"
+  | "primary_rate_limited"
+  | "fallback_success"
+  | "no_usable_news";
+
+export type NewsDirectionalSupport = "positive" | "negative" | "mixed" | "neutral" | "insufficient";
+export type NewsContradictionLevel = "low" | "medium" | "high";
+export type NewsConfidenceLevel = "high" | "medium" | "low";
+export type NewsDegradedReason =
+  | "primary_transport_failure"
+  | "primary_rate_limited"
+  | "primary_empty_result"
+  | "fallback_used"
+  | "no_usable_news";
+
+export interface NewsFetchIssue {
+  kind: "primary_transport_failure" | "primary_rate_limited" | "primary_empty_result" | "fallback_used" | "no_usable_news";
+  model: string | null;
+  attempt: number | null;
+  message: string;
+  name?: string | null;
+  status?: number | null;
+  code?: string | null;
+  type?: string | null;
+  cause?: string | null;
+  retryPath?: string | null;
+}
+
+export interface TickerNewsSignal {
+  ticker: string;
+  availabilityStatus: NewsAvailabilityStatus;
+  degradedReason: NewsDegradedReason | null;
+  articleCount: number;
+  trustedSourceCount: number;
+  sourceDiversityCount: number;
+  recent24hCount: number;
+  recent7dCount: number;
+  directionalSupport: NewsDirectionalSupport;
+  catalystPresence: boolean;
+  riskEventPresence: boolean;
+  contradictionLevel: NewsContradictionLevel;
+  newsConfidence: NewsConfidenceLevel;
+  explanatoryNote: string;
+}
+
+export interface NewsSignalSet {
+  availabilityStatus: NewsAvailabilityStatus;
+  degradedReason: NewsDegradedReason | null;
+  articleCount: number;
+  trustedSourceCount: number;
+  sourceDiversityCount: number;
+  recent24hCount: number;
+  recent7dCount: number;
+  directionalSupport: NewsDirectionalSupport;
+  contradictionLevel: NewsContradictionLevel;
+  catalystPresence: boolean;
+  riskEventPresence: boolean;
+  confidence: NewsConfidenceLevel;
+  statusSummary: string;
+  tickerSignals: Record<string, TickerNewsSignal>;
+  issues: NewsFetchIssue[];
+}
+
 export interface NewsResult {
+  evidence: EvidenceItem[];
   combinedSummary: string;
-  breaking24h: NewsArticle[];
-  allSources: NewsArticle[];
+  breaking24h: NewsArticle[] | string;
+  allSources: NewsArticle[] | Source[];
   usingFallback: boolean;
+  availabilityStatus: NewsAvailabilityStatus;
+  degradedReason?: NewsDegradedReason | null;
+  statusSummary: string;
+  issues: NewsFetchIssue[];
+  signals: NewsSignalSet;
   fetchedAt: string;
 }
 
