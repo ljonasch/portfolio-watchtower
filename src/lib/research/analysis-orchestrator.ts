@@ -139,6 +139,29 @@ function buildStepBase(
   };
 }
 
+function ensureSection(
+  data: Record<string, unknown>,
+  note: string
+): Record<string, unknown> {
+  return Object.keys(data).length > 0
+    ? data
+    : { note };
+}
+
+function ensureStepSections(
+  step: DiagnosticsStepContract,
+  notes: {
+    inputs: string;
+    outputs: string;
+  }
+): DiagnosticsStepContract {
+  return {
+    ...step,
+    inputs: ensureSection(step.inputs, notes.inputs),
+    outputs: ensureSection(step.outputs, notes.outputs),
+  };
+}
+
 export function buildRunDiagnosticsArtifact(input: {
   bundleId: string;
   runId: string;
@@ -393,13 +416,20 @@ export function buildRunDiagnosticsArtifact(input: {
     },
   ];
 
+  const stepsWithSections = steps.map((step) =>
+    ensureStepSections(step, {
+      inputs: "No explicit input telemetry was captured for this step in this run.",
+      outputs: "No explicit output summary was captured for this step in this run.",
+    })
+  );
+
   return {
     bundleId: input.bundleId,
     runId: input.runId,
     outcome: input.outcome,
     generatedAt: input.generatedAt,
     evidencePacketId: input.evidencePacketId,
-    steps,
+    steps: stepsWithSections,
   };
 }
 

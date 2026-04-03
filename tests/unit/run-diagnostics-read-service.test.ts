@@ -68,6 +68,10 @@ describe("run diagnostics read service", () => {
         stepCount: 1,
       })
     );
+    for (const step of result?.steps ?? []) {
+      expect(Object.keys(step.inputs).length).toBeGreaterThan(0);
+      expect(Object.keys(step.outputs).length).toBeGreaterThan(0);
+    }
     expect(prisma.analysisRun.findUnique).not.toHaveBeenCalled();
   });
 
@@ -125,6 +129,15 @@ describe("run diagnostics read service", () => {
         hasPersistedArtifact: false,
         artifactSource: "fallback",
         stepCount: 7,
+      })
+    );
+    for (const step of result?.steps ?? []) {
+      expect(Object.keys(step.inputs).length).toBeGreaterThan(0);
+      expect(Object.keys(step.outputs).length).toBeGreaterThan(0);
+    }
+    expect(result?.steps.find((step) => step.stepKey === "gap_scan")?.inputs).toEqual(
+      expect.objectContaining({
+        note: "Unavailable in fallback diagnostics for this older bundle.",
       })
     );
     expect(result?.steps.find((step) => step.stepKey === "news_sources")?.sources).toHaveLength(1);

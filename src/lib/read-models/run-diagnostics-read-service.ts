@@ -66,6 +66,42 @@ function toSourceRef(source: any): DiagnosticsSourceRefContract {
   };
 }
 
+function ensureSection(
+  data: Record<string, unknown>,
+  note: string
+): Record<string, unknown> {
+  return Object.keys(data).length > 0
+    ? data
+    : { note };
+}
+
+function ensureStepSections(
+  step: DiagnosticsStepContract,
+  notes: {
+    inputs: string;
+    outputs: string;
+  }
+): DiagnosticsStepContract {
+  return {
+    ...step,
+    inputs: ensureSection(step.inputs, notes.inputs),
+    outputs: ensureSection(step.outputs, notes.outputs),
+  };
+}
+
+function normalizeArtifactSections(
+  artifact: RunDiagnosticsArtifact,
+  notes: {
+    inputs: string;
+    outputs: string;
+  }
+): RunDiagnosticsArtifact {
+  return {
+    ...artifact,
+    steps: artifact.steps.map((step) => ensureStepSections(step, notes)),
+  };
+}
+
 function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDiagnosticsArtifact {
   const evidencePacket = parseJsonField<Record<string, any>>(bundle.evidencePacketJson, "evidencePacketJson");
   const validationSummary = parseJsonField<Record<string, any>>(bundle.validationSummaryJson, "validationSummaryJson");
@@ -238,13 +274,20 @@ function buildFallbackDiagnosticsArtifact(bundle: any, analysisRun: any): RunDia
     },
   ];
 
+  const normalizedSteps = legacySteps.map((step) =>
+    ensureStepSections(step, {
+      inputs: "Unavailable in fallback diagnostics for this older bundle.",
+      outputs: "No persisted output summary was available in fallback diagnostics for this older bundle.",
+    })
+  );
+
   return {
     bundleId: bundle.id,
     runId: bundle.sourceRunId,
     outcome: bundle.bundleOutcome,
     generatedAt: bundle.finalizedAt.toISOString(),
     evidencePacketId: qualityMeta.evidencePacketId ?? evidencePacket.evidencePacketId ?? null,
-    steps: legacySteps,
+    steps: normalizedSteps,
   };
 }
 
@@ -267,7 +310,10 @@ export async function getRunDiagnostics(bundleId: string) {
     hasPersistedArtifact = persistedDiagnostics !== undefined;
 
     if (isRunDiagnosticsArtifact(persistedDiagnostics)) {
-      artifact = persistedDiagnostics;
+      artifact = normalizeArtifactSections(persistedDiagnostics, {
+        inputs: "Inputs were not explicitly persisted for this diagnostics step.",
+        outputs: "Outputs were not explicitly persisted for this diagnostics step.",
+      });
       artifactSource = "persisted";
     } else {
       artifact = buildFallbackDiagnosticsArtifact(

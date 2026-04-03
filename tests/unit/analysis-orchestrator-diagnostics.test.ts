@@ -67,5 +67,14 @@ describe("analysis orchestrator diagnostics", () => {
     expect(artifact.steps.find((step) => step.stepKey === "gpt5_reasoning")?.model).toEqual(
       expect.objectContaining({ name: "gpt-5.4", responseHash: "response_hash" })
     );
+    for (const step of artifact.steps) {
+      expect(Object.keys(step.inputs).length).toBeGreaterThan(0);
+      expect(Object.keys(step.outputs).length).toBeGreaterThan(0);
+    }
+    expect(artifact.steps.find((step) => step.stepKey === "gap_scan")?.inputs).toEqual(
+      expect.objectContaining({
+        note: "No explicit input telemetry was captured for this step in this run.",
+      })
+    );
   });
 });

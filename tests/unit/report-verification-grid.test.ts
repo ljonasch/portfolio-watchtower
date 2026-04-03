@@ -20,6 +20,7 @@ describe("report verification grid", () => {
     expect(source).toContain("Key Outputs");
     expect(source).toContain("Warnings & Reasons");
     expect(source).toContain("Sources (");
+    expect(source).toContain("No diagnostics details were persisted for this section.");
   });
 
   test("report page renders explicit unavailable-state messaging instead of a silent blank diagnostics section", () => {

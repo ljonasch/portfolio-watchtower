@@ -112,21 +112,26 @@ function StepStatusPill({ status }: { status: DiagnosticsStepContract["status"] 
 
 function DiagnosticDataBlock({ title, data }: { title: string; data: Record<string, unknown> }) {
   const entries = Object.entries(data).filter(([, value]) => value !== undefined);
-  if (entries.length === 0) return null;
 
   return (
     <div className="space-y-2">
       <h5 className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">{title}</h5>
-      <div className="grid grid-cols-1 gap-2">
-        {entries.map(([key, value]) => (
-          <div key={key} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500">{key}</div>
-            <pre className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-300 font-mono">
-              {formatDiagnosticValue(value)}
-            </pre>
-          </div>
-        ))}
-      </div>
+      {entries.length > 0 ? (
+        <div className="grid grid-cols-1 gap-2">
+          {entries.map(([key, value]) => (
+            <div key={key} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500">{key}</div>
+              <pre className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-300 font-mono">
+                {formatDiagnosticValue(value)}
+              </pre>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-400">
+          No diagnostics details were persisted for this section.
+        </div>
+      )}
     </div>
   );
 }
