@@ -1,5 +1,23 @@
 jest.mock("@/lib/prisma", () => ({
   prisma: {
+    user: {
+      findFirst: jest.fn(),
+    },
+    appSettings: {
+      findFirst: jest.fn(),
+    },
+    portfolioSnapshot: {
+      findFirst: jest.fn(),
+    },
+    holding: {
+      update: jest.fn(),
+    },
+    notificationRecipient: {
+      findMany: jest.fn(),
+    },
+    notificationEvent: {
+      findFirst: jest.fn(),
+    },
     analysisBundle: {
       findUnique: jest.fn(),
       updateMany: jest.fn(),
@@ -14,6 +32,8 @@ jest.mock("@/lib/prisma", () => ({
       createMany: jest.fn(),
     },
     analysisRun: {
+      findFirst: jest.fn(),
+      updateMany: jest.fn(),
       update: jest.fn(),
     },
     $transaction: jest.fn(),
@@ -24,11 +44,16 @@ jest.mock("@/lib/research/analysis-orchestrator", () => ({
   runFullAnalysis: jest.fn(),
 }));
 
+jest.mock("@/app/actions", () => ({
+  enrichPricesWithLLM: jest.fn().mockResolvedValue({}),
+}));
+
 import { prisma } from "@/lib/prisma";
 import { runFullAnalysis } from "@/lib/research/analysis-orchestrator";
 import {
   finalizeAnalysisRun,
   persistBackfilledLegacyBundle,
+  runDailyCheck,
   runStreamAnalysis,
   type FinalizeAnalysisRunInput,
 } from "@/lib/services";
@@ -116,17 +141,37 @@ describe("analysis-lifecycle-service", () => {
     jest.clearAllMocks();
     (prisma.$transaction as jest.Mock).mockImplementation(async (callback: any) =>
       callback({
+        user: prisma.user,
+        appSettings: prisma.appSettings,
+        portfolioSnapshot: prisma.portfolioSnapshot,
+        holding: prisma.holding,
+        notificationRecipient: prisma.notificationRecipient,
+        notificationEvent: prisma.notificationEvent,
         analysisBundle: prisma.analysisBundle,
         portfolioReport: prisma.portfolioReport,
         holdingRecommendation: prisma.holdingRecommendation,
         analysisRun: prisma.analysisRun,
       })
     );
+    (prisma.user.findFirst as jest.Mock).mockResolvedValue({
+      id: "user_1",
+      name: "Lucas",
+      profile: { trackedAccountRiskTolerance: "high" },
+    });
+    (prisma.appSettings.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.portfolioSnapshot.findFirst as jest.Mock).mockResolvedValue({
+      id: "snapshot_1",
+      holdings: [],
+    });
+    (prisma.notificationRecipient.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.notificationEvent.findFirst as jest.Mock).mockResolvedValue(null);
     (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue(null);
     (prisma.analysisBundle.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
     (prisma.analysisBundle.create as jest.Mock).mockResolvedValue({ id: "bundle_1" });
     (prisma.analysisBundle.update as jest.Mock).mockResolvedValue({ id: "bundle_1" });
     (prisma.portfolioReport.create as jest.Mock).mockResolvedValue({ id: "report_1" });
+    (prisma.analysisRun.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.analysisRun.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
     (prisma.analysisRun.update as jest.Mock).mockResolvedValue({ id: "run_1" });
     (prisma.holdingRecommendation.createMany as jest.Mock).mockResolvedValue({ count: 1 });
   });
@@ -234,5 +279,27 @@ describe("analysis-lifecycle-service", () => {
     expect(prisma.analysisBundle.updateMany).not.toHaveBeenCalled();
     expect(prisma.analysisBundle.update).not.toHaveBeenCalled();
     expect(prisma.holdingRecommendation.createMany).not.toHaveBeenCalled();
+  });
+
+  test("runDailyCheck enriches concurrent-run failures with active run context", async () => {
+    (prisma.portfolioSnapshot.findFirst as jest.Mock).mockResolvedValue({
+      id: "snapshot_1",
+      holdings: [],
+    });
+    (runFullAnalysis as jest.Mock).mockRejectedValue(
+      new Error("An analysis run is already in progress for this user. Please wait for it to complete.")
+    );
+    (prisma.analysisRun.findFirst as jest.Mock).mockResolvedValue({
+      id: "run_conflict",
+      triggerType: "manual",
+      stage: "queued",
+      startedAt: new Date("2026-04-03T15:00:00.000Z"),
+    });
+
+    await expect(
+      runDailyCheck({ triggerType: "scheduled", triggeredBy: "cron-scheduler" })
+    ).rejects.toThrow(
+      'An analysis run is already in progress for this user. Please wait for it to complete. Active run run_conflict (manual, stage queued, started 2026-04-03T15:00:00.000Z).'
+    );
   });
 });

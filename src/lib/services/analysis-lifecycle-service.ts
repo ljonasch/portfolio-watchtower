@@ -2,6 +2,12 @@ import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
 import type { ProgressEvent } from "@/lib/research/progress-events";
 import type { DeliveryStatus } from "@/lib/contracts";
+import {
+  enrichConcurrentRunMessage,
+  isConcurrentRunError,
+  startOfToday,
+  type ActiveRunSummary,
+} from "./daily-check-concurrency";
 
 export interface RunStreamAnalysisInput {
   snapshotId: string;
@@ -615,6 +621,30 @@ export async function runStreamAnalysis(input: RunStreamAnalysisInput) {
   );
 }
 
+async function findLatestActiveRun(userId: string): Promise<ActiveRunSummary | null> {
+  const activeRun = await prisma.analysisRun.findFirst({
+    where: { userId, status: "running" },
+    orderBy: { startedAt: "desc" },
+    select: {
+      id: true,
+      triggerType: true,
+      stage: true,
+      startedAt: true,
+    },
+  });
+
+  if (!activeRun) {
+    return null;
+  }
+
+  return {
+    id: activeRun.id,
+    triggerType: activeRun.triggerType,
+    stage: activeRun.stage,
+    startedAt: activeRun.startedAt,
+  };
+}
+
 export async function runDailyCheck(opts: {
   triggerType?: "scheduled" | "manual" | "debug";
   triggeredBy?: string;
@@ -674,18 +704,28 @@ export async function runDailyCheck(opts: {
       console.warn("Pricing live-fetch failed during scheduled run, falling back to db values.", e);
     }
 
-    const result = await runStreamAnalysis({
-      snapshotId: snapshot.id,
-      emit: (event: any) => {
-        if (event.type === "log") {
-          console.log(`[scheduler-ai] ${event.message}`);
-        } else if (event.type === "stage_start") {
-          console.log(`[scheduler-ai] >>> Starting Stage: ${event.label} - ${event.detail}`);
-        }
-      },
-      triggerType: triggerType as any,
-      triggeredBy,
-    });
+    let result;
+    try {
+      result = await runStreamAnalysis({
+        snapshotId: snapshot.id,
+        emit: (event: any) => {
+          if (event.type === "log") {
+            console.log(`[scheduler-ai] ${event.message}`);
+          } else if (event.type === "stage_start") {
+            console.log(`[scheduler-ai] >>> Starting Stage: ${event.label} - ${event.detail}`);
+          }
+        },
+        triggerType: triggerType as any,
+        triggeredBy,
+      });
+    } catch (err: any) {
+      if (!isConcurrentRunError(err)) {
+        throw err;
+      }
+
+      const activeRun = await findLatestActiveRun(user.id);
+      throw new Error(enrichConcurrentRunMessage(err.message, activeRun), { cause: err });
+    }
 
     const shouldEmailDaily = result.alertLevel === "red" || result.alertLevel === "yellow";
     if (shouldEmailDaily) {
@@ -693,7 +733,7 @@ export async function runDailyCheck(opts: {
         where: { userId: user.id, active: true },
       });
 
-      const today = new Date().toISOString().split("T")[0];
+      const today = startOfToday().toISOString().split("T")[0];
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
       const { renderDailyAlertEmail } = await import("@/lib/email-templates");
       const { sendEmailNotification } = await import("./email-delivery-service");
