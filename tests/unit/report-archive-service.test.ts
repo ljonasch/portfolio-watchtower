@@ -17,7 +17,10 @@ jest.mock("@/lib/prisma", () => ({
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { archiveBundleBackedReport } from "@/lib/services/report-archive-service";
+import {
+  archiveBundleBackedReport,
+  unarchiveBundleBackedReport,
+} from "@/lib/services/report-archive-service";
 
 describe("report-archive-service", () => {
   beforeEach(() => {
@@ -103,5 +106,38 @@ describe("report-archive-service", () => {
         requestedId: "legacy_only_report",
       })
     ).rejects.toThrow("Archive is only available for bundle-backed reports in phase 1");
+  });
+
+  test("clears archivedAt for an archived bundle", async () => {
+    (prisma.analysisBundle.findUnique as jest.Mock).mockResolvedValue({
+      id: "bundle_1",
+      userId: "user_1",
+      archivedAt: new Date("2026-04-03T12:00:00.000Z"),
+    });
+    (prisma.analysisBundle.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+    const result = await unarchiveBundleBackedReport({
+      userId: "user_1",
+      requestedId: "bundle_1",
+    });
+
+    expect(prisma.analysisBundle.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: "bundle_1",
+          userId: "user_1",
+        }),
+        data: {
+          archivedAt: null,
+        },
+      })
+    );
+    expect(result).toEqual({
+      bundleId: "bundle_1",
+      unarchived: true,
+      resolution: "bundle_id",
+    });
+    expect(revalidatePath).toHaveBeenCalledWith("/history");
+    expect(revalidatePath).toHaveBeenCalledWith("/report/bundle_1");
   });
 });

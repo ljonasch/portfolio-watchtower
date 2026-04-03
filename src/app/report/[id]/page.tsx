@@ -16,7 +16,7 @@ import type { SourceViewModel } from "@/lib/view-models/types";
 import type { DiagnosticsStepContract } from "@/lib/contracts";
 import { getRequestedReportArtifact, getRunDiagnostics } from "@/lib/read-models";
 import { normalizeBundleRecommendationRows } from "./bundle-report-normalization";
-import { archiveReportAction } from "./actions";
+import { archiveReportAction, unarchiveReportAction } from "./actions";
 
 function SourceChip({ source }: { source: SourceViewModel }) {
   return (
@@ -417,9 +417,20 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
           <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
             <h3 className="text-sm font-semibold text-slate-100">Report Archive</h3>
             {bundle.archivedAt ? (
-              <p className="mt-2 text-sm leading-relaxed text-slate-400">
-                This report was archived on {new Date(bundle.archivedAt).toLocaleString()}. Direct access still works, but it no longer appears in the normal report history list.
-              </p>
+              <>
+                <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                  This report was archived on {new Date(bundle.archivedAt).toLocaleString()}. Direct access still works, but it no longer appears in the normal report history list.
+                </p>
+                <form action={unarchiveReportAction} className="mt-4">
+                  <input type="hidden" name="requestedId" value={params.id} />
+                  <button
+                    type="submit"
+                    className="inline-flex items-center rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 transition-colors hover:bg-slate-800"
+                  >
+                    Unarchive Report
+                  </button>
+                </form>
+              </>
             ) : (
               <>
                 <p className="mt-2 text-sm leading-relaxed text-slate-400">

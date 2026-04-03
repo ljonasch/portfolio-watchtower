@@ -16,6 +16,12 @@ export interface ArchiveBundleReportResult {
   resolution: ArchiveResolution;
 }
 
+export interface UnarchiveBundleReportResult {
+  bundleId: string;
+  unarchived: boolean;
+  resolution: ArchiveResolution;
+}
+
 async function resolveArchiveTarget(userId: string, requestedId: string): Promise<ResolvedArchiveTarget | null> {
   const directBundle = await prisma.analysisBundle.findUnique({
     where: { id: requestedId },
@@ -131,6 +137,57 @@ export async function archiveBundleBackedReport(input: {
     bundleId: target.bundleId,
     archivedAt: persistedArchivedAt.toISOString(),
     alreadyArchived: updateResult.count === 0,
+    resolution: target.resolution,
+  };
+}
+
+export async function unarchiveBundleBackedReport(input: {
+  userId: string;
+  requestedId: string;
+}): Promise<UnarchiveBundleReportResult> {
+  const requestedId = input.requestedId.trim();
+  if (!requestedId) {
+    throw new Error("Report id is required");
+  }
+
+  const target = await resolveArchiveTarget(input.userId, requestedId);
+  if (!target) {
+    throw new Error("Archive is only available for bundle-backed reports in phase 1");
+  }
+
+  if (!target.archivedAt) {
+    revalidatePath("/history");
+    revalidatePath(`/report/${requestedId}`);
+    if (requestedId !== target.bundleId) {
+      revalidatePath(`/report/${target.bundleId}`);
+    }
+
+    return {
+      bundleId: target.bundleId,
+      unarchived: false,
+      resolution: target.resolution,
+    };
+  }
+
+  await prisma.analysisBundle.updateMany({
+    where: {
+      id: target.bundleId,
+      userId: input.userId,
+    },
+    data: {
+      archivedAt: null,
+    },
+  });
+
+  revalidatePath("/history");
+  revalidatePath(`/report/${requestedId}`);
+  if (requestedId !== target.bundleId) {
+    revalidatePath(`/report/${target.bundleId}`);
+  }
+
+  return {
+    bundleId: target.bundleId,
+    unarchived: true,
     resolution: target.resolution,
   };
 }
