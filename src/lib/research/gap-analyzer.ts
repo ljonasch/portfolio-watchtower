@@ -3,9 +3,17 @@
  */
 
 import type { ProgressEvent } from "./progress-events";
+import {
+  createStageProviderPressureDiagnostics,
+  finalizeStageProviderPressureDiagnostics,
+  recordStageProviderBackoff,
+  recordStageProviderCall,
+} from "./provider-pressure-diagnostics";
 import type {
   CandidateSearchLane,
   EnvironmentalGap,
+  GapAnalysisDiagnostics,
+  GapAnalysisResult,
   GapItem,
   GapReport,
   HoldingInput,
@@ -67,6 +75,21 @@ export async function runStructuralGapAnalysis(
   today: string,
   emit: (e: ProgressEvent) => void
 ): Promise<GapReport> {
+  const result = await runStructuralGapAnalysisDetailed(openai, holdings, profile, today, emit);
+  return result.report;
+}
+
+export async function runStructuralGapAnalysisDetailed(
+  openai: any,
+  holdings: StructuralGapHoldingsRow[],
+  profile: Record<string, any>,
+  today: string,
+  emit: (e: ProgressEvent) => void,
+  options?: {
+    fingerprint?: string;
+    reuseMissReason?: string | null;
+  }
+): Promise<GapAnalysisResult> {
   emit({
     type: "stage_start",
     stage: "gap",
@@ -74,6 +97,8 @@ export async function runStructuralGapAnalysis(
     detail: "Searching market landscape and analyzing structural portfolio blind spots",
   });
   const startedAt = Date.now();
+  const providerDiagnostics = createStageProviderPressureDiagnostics("fresh");
+  providerDiagnostics.reuseMissReason = options?.reuseMissReason ?? null;
 
   const holdingsSummary = holdings
     .filter((holding) => !holding.isCash)
@@ -81,6 +106,7 @@ export async function runStructuralGapAnalysis(
     .join(", ");
 
   async function fetchWithRetry(prompt: string, attempt = 1): Promise<any> {
+    recordStageProviderCall(providerDiagnostics);
     try {
       return await openai.chat.completions.create({
         model: "gpt-5-search-api",
@@ -89,6 +115,7 @@ export async function runStructuralGapAnalysis(
       });
     } catch (error: any) {
       if (error?.status === 429 && attempt < 8) {
+        recordStageProviderBackoff(providerDiagnostics, 65);
         emit({ type: "log", message: "Gap analyzer rate limit hit, waiting 65s...", level: "warn" });
         await new Promise((resolve) => setTimeout(resolve, 65000));
         return fetchWithRetry(prompt, attempt + 1);
@@ -138,6 +165,7 @@ Return plain text, 4-5 paragraphs.`;
   let structuralGaps: GapItem[] = [];
   if (landscapeText || exposureText) {
     try {
+      recordStageProviderCall(providerDiagnostics);
       const parseRes = await openai.chat.completions.create({
         model: "gpt-5-search-api",
         max_completion_tokens: 250,
@@ -184,16 +212,25 @@ Limit to the highest-signal gaps only. Valid types: critical | opportunity | red
     .map((gap) => gap.description)
     .join("; ");
   const profileSectors = [profile.sectorsToEmphasize, profile.trackedAccountObjective].filter(Boolean).join(", ");
-
-  emit({ type: "stage_complete", stage: "gap", durationMs: Date.now() - startedAt });
-
-  return {
+  const report: GapReport = {
     gaps: structuralGaps,
     structuralGaps,
     environmentalGaps: [],
     candidateSearchLanes: [],
     searchBrief: opportunities || profileSectors || "diversified growth opportunities",
     profilePreferences: profileSectors,
+  };
+  const diagnostics: GapAnalysisDiagnostics = {
+    ...finalizeStageProviderPressureDiagnostics(providerDiagnostics, Date.now() - startedAt),
+    fingerprint: options?.fingerprint ?? "",
+    reuseHit: false,
+  };
+
+  emit({ type: "stage_complete", stage: "gap", durationMs: Date.now() - startedAt });
+
+  return {
+    report,
+    diagnostics,
   };
 }
 

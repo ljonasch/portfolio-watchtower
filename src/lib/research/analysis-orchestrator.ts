@@ -20,7 +20,7 @@ import OpenAI from "openai";
 import { freezeRuntimeEvidence } from "@/lib/cache";
 import { prisma } from "@/lib/prisma";
 import { detectMarketRegime }      from "./market-regime";
-import { deriveEnvironmentalGaps, runStructuralGapAnalysis } from "./gap-analyzer";
+import { deriveEnvironmentalGaps, runStructuralGapAnalysisDetailed } from "./gap-analyzer";
 import { screenCandidatesDetailed } from "./candidate-screener";
 import { fetchAllNewsWithFallback } from "./news-fetcher";
 import { fetchPriceTimelines }     from "./price-timeline";
@@ -56,6 +56,8 @@ import type { ProgressEvent }      from "./progress-events";
 import {
   AnalysisAbstainedError,
   type AbstainResult,
+  type GapAnalysisArtifact,
+  type GapAnalysisDiagnostics,
   type CandidateScreeningArtifact,
   type CandidateScreeningDiagnostics,
   type CandidateScreeningMode,
@@ -66,6 +68,11 @@ import {
   type MacroNewsEnvironmentResult,
   type MacroThemeConsensusResult,
 } from "./types";
+import {
+  buildGapAnalysisFingerprint,
+  extractGapAnalysisArtifactFromEvidencePacket,
+  GAP_ANALYSIS_REUSE_MAX_AGE_HOURS,
+} from "./gap-analysis-fingerprint";
 import {
   buildCandidateScreeningFingerprint,
   CANDIDATE_SCREENING_MODE_RULES,
@@ -258,6 +265,82 @@ function truncateText(value: string | null | undefined, maxLength = 240): string
   return `${value.slice(0, maxLength - 3)}...`;
 }
 
+function buildReusedGapAnalysisArtifact(input: {
+  artifact: GapAnalysisArtifact;
+  sourceBundleId: string;
+}): GapAnalysisArtifact {
+  return {
+    fingerprint: input.artifact.fingerprint,
+    report: input.artifact.report,
+    diagnostics: {
+      ...input.artifact.diagnostics,
+      resultState: "frozen_artifact_reuse",
+      reuseHit: true,
+      reuseSourceBundleId: input.sourceBundleId,
+      reuseMissReason: null,
+      providerCallCount: 0,
+      retryCount: 0,
+      totalBackoffSeconds: 0,
+      maxSingleBackoffSeconds: 0,
+      stageLatencyMs: 0,
+    },
+  };
+}
+
+export async function findReusableGapAnalysisBundle(input: {
+  userId: string;
+  bundleScope: string;
+  fingerprint: string;
+}): Promise<
+  | { match: true; bundleId: string; artifact: GapAnalysisArtifact }
+  | { match: false; reason: string; bundleId?: string | null }
+> {
+  const bundles = await prisma.analysisBundle.findMany({
+    where: {
+      userId: input.userId,
+      bundleScope: input.bundleScope,
+    },
+    orderBy: { finalizedAt: "desc" },
+    take: 1,
+    select: {
+      id: true,
+      finalizedAt: true,
+      evidencePacketJson: true,
+    },
+  });
+
+  const latestBundle = bundles[0];
+  if (!latestBundle) {
+    return { match: false, reason: "no_prior_finalized_bundle", bundleId: null };
+  }
+
+  const finalizedAt = latestBundle.finalizedAt instanceof Date
+    ? latestBundle.finalizedAt
+    : new Date(latestBundle.finalizedAt);
+  const artifactAgeHours = (Date.now() - finalizedAt.getTime()) / (1000 * 60 * 60);
+  if (!Number.isFinite(artifactAgeHours) || artifactAgeHours > GAP_ANALYSIS_REUSE_MAX_AGE_HOURS) {
+    return { match: false, reason: "stale_finalized_gap_analysis", bundleId: latestBundle.id };
+  }
+
+  try {
+    const evidencePacket = JSON.parse(latestBundle.evidencePacketJson);
+    const artifact = extractGapAnalysisArtifactFromEvidencePacket(evidencePacket);
+    if (!artifact) {
+      return { match: false, reason: "missing_gap_analysis_artifact", bundleId: latestBundle.id };
+    }
+    if (artifact.fingerprint !== input.fingerprint) {
+      return { match: false, reason: "gap_fingerprint_mismatch", bundleId: latestBundle.id };
+    }
+    return {
+      match: true,
+      bundleId: latestBundle.id,
+      artifact,
+    };
+  } catch {
+    return { match: false, reason: "malformed_gap_analysis_artifact", bundleId: latestBundle.id };
+  }
+}
+
 function toLabeledTickerList(
   values: Array<string | { ticker?: string | null; companyName?: string | null; action?: string | null }>
 ): string[] {
@@ -326,6 +409,7 @@ function summarizeTopSentimentSignals(signals: any[], overlay: any[]): Array<Rec
 function buildGapScanDiagnostics(input: {
   gapReport?: any;
   existingHoldingsCount?: number | null;
+  gapAnalysis?: GapAnalysisDiagnostics | null;
 }): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
   const gapRows = Array.isArray(input.gapReport?.structuralGaps)
     ? input.gapReport.structuralGaps
@@ -333,6 +417,7 @@ function buildGapScanDiagnostics(input: {
       ? input.gapReport.gaps
       : [];
   const holdingsReviewed = input.existingHoldingsCount ?? null;
+  const gapAnalysis = input.gapAnalysis ?? null;
   const hasHoldingsInput = typeof holdingsReviewed === "number" && holdingsReviewed > 0;
   const hasSearchBasis = Boolean(input.gapReport?.searchBrief || input.gapReport?.profilePreferences);
   const hasMeaningfulInputs = hasHoldingsInput || hasSearchBasis;
@@ -360,18 +445,28 @@ function buildGapScanDiagnostics(input: {
         ? "Existing portfolio holdings were scanned for concentration, redundancy, and missing-theme exposure."
         : "Holdings-scan scope was not fully persisted for this run.",
       searchBasis: input.gapReport?.searchBrief ?? "No explicit gap-search brief was persisted for this run.",
-      profilePreferenceContext: input.gapReport?.profilePreferences ?? "No additional profile-preference gap context was persisted for this run.",
-      authorityRule: "Structural gaps remain more authoritative than environmental gaps in phase 1.",
-      inputAvailability: hasMeaningfulInputs
-        ? "Enough portfolio context was available to run the gap scan."
-        : "Portfolio gap scan inputs were incomplete, so the empty result may reflect degraded telemetry rather than a clean no-gap outcome.",
-    },
-    outputs: {
-      outcomeExplanation,
-      gapCount: gapRows.length,
-      topFindings: gapRows.slice(0, 5).map((gap: any) => ({
-        type: gap?.type ?? null,
-        description: gap?.description ?? null,
+        profilePreferenceContext: input.gapReport?.profilePreferences ?? "No additional profile-preference gap context was persisted for this run.",
+        authorityRule: "Structural gaps remain more authoritative than environmental gaps in phase 1.",
+        inputAvailability: hasMeaningfulInputs
+          ? "Enough portfolio context was available to run the gap scan."
+          : "Portfolio gap scan inputs were incomplete, so the empty result may reflect degraded telemetry rather than a clean no-gap outcome.",
+        executionState: gapAnalysis?.reuseHit ? "reused_from_finalized_bundle" : "fresh_gap_analysis",
+        reuseFingerprint: gapAnalysis?.fingerprint ?? null,
+        reuseSourceBundleId: gapAnalysis?.reuseSourceBundleId ?? null,
+        reuseMissReason: gapAnalysis?.reuseMissReason ?? null,
+      },
+      outputs: {
+        outcomeExplanation,
+        gapCount: gapRows.length,
+        providerPressureState: gapAnalysis?.resultState ?? null,
+        providerCallCount: gapAnalysis?.providerCallCount ?? 0,
+        retryCount: gapAnalysis?.retryCount ?? 0,
+        totalBackoffSeconds: gapAnalysis?.totalBackoffSeconds ?? 0,
+        maxSingleBackoffSeconds: gapAnalysis?.maxSingleBackoffSeconds ?? 0,
+        stageLatencyMs: gapAnalysis?.stageLatencyMs ?? 0,
+        topFindings: gapRows.slice(0, 5).map((gap: any) => ({
+          type: gap?.type ?? null,
+          description: gap?.description ?? null,
         affectedTickers: gap?.affectedTickers ?? [],
         priority: gap?.priority ?? null,
       })),
@@ -385,12 +480,18 @@ function buildGapScanDiagnostics(input: {
     warnings: !hasMeaningfulInputs
       ? buildDiagnosticsWarnings([["gap_scan_inputs_incomplete", "Gap scan inputs were incomplete, so the step may have degraded before producing meaningful findings.", "warning"]])
       : [],
-    metrics: buildDiagnosticsMetrics([
-      ["gap_count", "Gap Count", gapRows.length],
-      ["holdings_scanned", "Holdings Scanned", holdingsReviewed],
-    ]),
-  };
-}
+      metrics: buildDiagnosticsMetrics([
+        ["gap_count", "Gap Count", gapRows.length],
+        ["holdings_scanned", "Holdings Scanned", holdingsReviewed],
+        ["gap_provider_calls", "Gap Provider Calls", gapAnalysis?.providerCallCount ?? 0],
+        ["gap_retry_count", "Gap Retry Count", gapAnalysis?.retryCount ?? 0],
+        ["gap_backoff_seconds", "Gap Backoff Seconds", gapAnalysis?.totalBackoffSeconds ?? 0],
+        ["gap_max_backoff_seconds", "Gap Max Backoff Seconds", gapAnalysis?.maxSingleBackoffSeconds ?? 0],
+        ["gap_stage_latency_ms", "Gap Stage Latency (ms)", gapAnalysis?.stageLatencyMs ?? 0],
+        ["gap_reuse_hit", "Gap Reuse Hit", gapAnalysis?.reuseHit ?? false],
+      ]),
+    };
+  }
 
 function buildReusedCandidateScreeningArtifact(input: {
   triggerType: "manual" | "scheduled" | "debug";
@@ -1214,11 +1315,12 @@ export function buildRunDiagnosticsArtifact(input: {
     promptVersion?: string | null;
   };
   primaryModel: string | null;
-  responseHash: string | null;
-  usingFallbackNews?: boolean;
-  regime?: any;
-  gapReport?: any;
-  macroEnvironment?: MacroNewsEnvironmentResult | null;
+    responseHash: string | null;
+    usingFallbackNews?: boolean;
+    regime?: any;
+    gapReport?: any;
+    gapAnalysis?: GapAnalysisDiagnostics | null;
+    macroEnvironment?: MacroNewsEnvironmentResult | null;
   macroConsensus?: MacroThemeConsensusResult | null;
   macroBridge?: MacroExposureBridgeResult | null;
   environmentalGaps?: EnvironmentalGap[] | null;
@@ -1290,6 +1392,7 @@ export function buildRunDiagnosticsArtifact(input: {
   const gapScanDiagnostics = buildGapScanDiagnostics({
     gapReport: input.gapReport,
     existingHoldingsCount,
+    gapAnalysis: input.gapAnalysis,
   });
   const macroNewsDiagnostics = buildMacroNewsCollectionDiagnostics({
     macroEnvironment: input.macroEnvironment,
@@ -1652,13 +1755,61 @@ export async function runFullAnalysis(
   // STAGE 0: Market Intelligence — regime + gap + candidates
   // ══════════════════════════════════════════════════════════════════════════════
   const regime = await detectMarketRegime(openai, today, emit);
-  const structuralGapReport = await runStructuralGapAnalysis(
-    openai,
-    ctx.holdings.map((holding) => ({ ticker: holding.ticker, currentWeight: holding.computedWeight, isCash: holding.isCash })),
-    user.profile,
-    today,
-    emit
-  );
+  const structuralGapHoldings = ctx.holdings.map((holding) => ({
+    ticker: holding.ticker,
+    currentWeight: holding.computedWeight,
+    isCash: holding.isCash,
+  }));
+  const gapAnalysisFingerprint = buildGapAnalysisFingerprint({
+    holdings: structuralGapHoldings,
+    profile: user.profile,
+  });
+  const reusableGapAnalysis = await findReusableGapAnalysisBundle({
+    userId: snapshot.userId,
+    bundleScope: "PRIMARY_PORTFOLIO",
+    fingerprint: gapAnalysisFingerprint,
+  });
+  let gapAnalysisArtifact: GapAnalysisArtifact;
+
+  if (reusableGapAnalysis.match) {
+    gapAnalysisArtifact = buildReusedGapAnalysisArtifact({
+      artifact: reusableGapAnalysis.artifact,
+      sourceBundleId: reusableGapAnalysis.bundleId,
+    });
+    emit({
+      type: "stage_start",
+      stage: "gap",
+      label: "Portfolio Gap Analysis",
+      detail: `Reusing exact-match gap analysis artifact from bundle ${reusableGapAnalysis.bundleId}`,
+    });
+    for (const gap of gapAnalysisArtifact.report.structuralGaps) {
+      emit({ type: "gap_found", description: gap.description, severity: gap.type, tickers: gap.affectedTickers });
+    }
+    emit({
+      type: "log",
+      message: `Gap analysis reused ${gapAnalysisArtifact.report.structuralGaps.length} structural gap(s) from finalized bundle ${reusableGapAnalysis.bundleId}.`,
+      level: "info",
+    });
+    emit({ type: "stage_complete", stage: "gap", durationMs: 0 });
+  } else {
+    const freshGapAnalysis = await runStructuralGapAnalysisDetailed(
+      openai,
+      structuralGapHoldings,
+      user.profile,
+      today,
+      emit,
+      {
+        fingerprint: gapAnalysisFingerprint,
+        reuseMissReason: reusableGapAnalysis.reason,
+      }
+    );
+    gapAnalysisArtifact = {
+      fingerprint: gapAnalysisFingerprint,
+      report: freshGapAnalysis.report,
+      diagnostics: freshGapAnalysis.diagnostics,
+    };
+  }
+  const structuralGapReport = gapAnalysisArtifact.report;
   const macroEnvironment = await collectMacroNewsEnvironment(openai, today, emit);
   const macroConsensus = deriveMacroThemeConsensus(macroEnvironment);
   const macroBridge = applyMacroExposureBridge({
@@ -2005,13 +2156,14 @@ export async function runFullAnalysis(
       responseHash: null,
       usingFallbackNews: frozenNewsResult.usingFallback ?? false,
       regime: frozenFinalRegime,
-      gapReport,
-      macroEnvironment: frozenMacroEnvironment,
+        gapReport,
+        gapAnalysis: gapAnalysisArtifact.diagnostics,
+        macroEnvironment: frozenMacroEnvironment,
       macroConsensus: frozenMacroConsensus,
       macroBridge: frozenMacroBridge,
       environmentalGaps: frozenEnvironmentalGaps,
-      candidateSearchLanes: frozenMacroCandidateSearchLanes,
-      candidateScreening: candidateScreeningArtifact.diagnostics,
+        candidateSearchLanes: frozenMacroCandidateSearchLanes,
+        candidateScreening: candidateScreeningArtifact.diagnostics,
       newsResult: frozenNewsResult,
       validationSummary: {
         hardErrorCount: 1,
@@ -2043,14 +2195,15 @@ export async function runFullAnalysis(
       errorMessage: budgetMessage,
       profileSnapshot: user.profile as Record<string, unknown>,
       convictionsSnapshot: [],
-      evidencePacket: {
-        evidencePacketId: null,
-        promptHash: budgetPromptHash,
-        stage: "stage3",
-        macroEvidence: frozenMacroEvidence,
-        candidateScreening: candidateScreeningArtifact,
-        contextBudget: stage3ContextBudget.budget,
-        diagnosticsArtifact,
+        evidencePacket: {
+          evidencePacketId: null,
+          promptHash: budgetPromptHash,
+          stage: "stage3",
+          macroEvidence: frozenMacroEvidence,
+          gapAnalysis: gapAnalysisArtifact,
+          candidateScreening: candidateScreeningArtifact,
+          contextBudget: stage3ContextBudget.budget,
+          diagnosticsArtifact,
       },
       evidenceHash: budgetPromptHash,
       evidenceFreshness: {
@@ -2154,14 +2307,15 @@ export async function runFullAnalysis(
       errorMessage: epErr?.message ?? "Evidence packet persist failed",
       profileSnapshot: user.profile as Record<string, unknown>,
       convictionsSnapshot: [],
-      evidencePacket: {
-        evidencePacketId: null,
-        promptHash,
-        stage: "stage3",
-        macroEvidence: frozenMacroEvidence,
-        candidateScreening: candidateScreeningArtifact,
-        contextBudget: stage3ContextBudget.budget,
-        diagnosticsArtifact: buildRunDiagnosticsArtifact({
+        evidencePacket: {
+          evidencePacketId: null,
+          promptHash,
+          stage: "stage3",
+          macroEvidence: frozenMacroEvidence,
+          gapAnalysis: gapAnalysisArtifact,
+          candidateScreening: candidateScreeningArtifact,
+          contextBudget: stage3ContextBudget.budget,
+          diagnosticsArtifact: buildRunDiagnosticsArtifact({
           bundleId: "pending",
           runId,
           outcome: "abstained",
@@ -2175,17 +2329,18 @@ export async function runFullAnalysis(
             viewModelVersion: TERMINAL_CONTRACT_VERSIONS.viewModelVersion,
             promptVersion: promptHash,
           },
-          primaryModel: "gpt-5.4",
-          responseHash: null,
-          usingFallbackNews: frozenNewsResult.usingFallback ?? false,
-          regime: frozenFinalRegime,
-          gapReport,
-          macroEnvironment: frozenMacroEnvironment,
+            primaryModel: "gpt-5.4",
+            responseHash: null,
+            usingFallbackNews: frozenNewsResult.usingFallback ?? false,
+            regime: frozenFinalRegime,
+            gapReport,
+            gapAnalysis: gapAnalysisArtifact.diagnostics,
+            macroEnvironment: frozenMacroEnvironment,
           macroConsensus: frozenMacroConsensus,
           macroBridge: frozenMacroBridge,
           environmentalGaps: frozenEnvironmentalGaps,
-          candidateSearchLanes: frozenMacroCandidateSearchLanes,
-          candidateScreening: candidateScreeningArtifact.diagnostics,
+            candidateSearchLanes: frozenMacroCandidateSearchLanes,
+            candidateScreening: candidateScreeningArtifact.diagnostics,
           validationSummary: {
             hardErrorCount: 1,
             warningCount: 0,
@@ -2310,14 +2465,15 @@ export async function runFullAnalysis(
       errorMessage: primaryErr?.message ?? "Analysis aborted",
       profileSnapshot: user.profile as Record<string, unknown>,
       convictionsSnapshot: convictions as Array<Record<string, unknown>>,
-      evidencePacket: {
-        evidencePacketId,
-        promptHash,
-        stage: "stage3",
-        macroEvidence: frozenMacroEvidence,
-        candidateScreening: candidateScreeningArtifact,
-        contextBudget: stage3ContextBudget.budget,
-        diagnosticsArtifact: buildRunDiagnosticsArtifact({
+        evidencePacket: {
+          evidencePacketId,
+          promptHash,
+          stage: "stage3",
+          macroEvidence: frozenMacroEvidence,
+          gapAnalysis: gapAnalysisArtifact,
+          candidateScreening: candidateScreeningArtifact,
+          contextBudget: stage3ContextBudget.budget,
+          diagnosticsArtifact: buildRunDiagnosticsArtifact({
           bundleId: "pending",
           runId,
           outcome: "abstained",
@@ -2331,17 +2487,18 @@ export async function runFullAnalysis(
             viewModelVersion: TERMINAL_CONTRACT_VERSIONS.viewModelVersion,
             promptVersion: promptHash,
           },
-          primaryModel: "gpt-5.4",
-          responseHash: null,
-          usingFallbackNews: frozenNewsResult.usingFallback ?? false,
-          regime: frozenFinalRegime,
-          gapReport,
-          macroEnvironment: frozenMacroEnvironment,
+            primaryModel: "gpt-5.4",
+            responseHash: null,
+            usingFallbackNews: frozenNewsResult.usingFallback ?? false,
+            regime: frozenFinalRegime,
+            gapReport,
+            gapAnalysis: gapAnalysisArtifact.diagnostics,
+            macroEnvironment: frozenMacroEnvironment,
           macroConsensus: frozenMacroConsensus,
           macroBridge: frozenMacroBridge,
           environmentalGaps: frozenEnvironmentalGaps,
-          candidateSearchLanes: frozenMacroCandidateSearchLanes,
-          candidateScreening: candidateScreeningArtifact.diagnostics,
+            candidateSearchLanes: frozenMacroCandidateSearchLanes,
+            candidateScreening: candidateScreeningArtifact.diagnostics,
           validationSummary: {
             hardErrorCount: 1,
             warningCount: 0,
@@ -2552,6 +2709,7 @@ export async function runFullAnalysis(
     usingFallbackNews,
     regime: frozenFinalRegime,
     gapReport,
+    gapAnalysis: gapAnalysisArtifact.diagnostics,
     macroEnvironment: frozenMacroEnvironment,
     macroConsensus: frozenMacroConsensus,
     macroBridge: frozenMacroBridge,
@@ -2629,6 +2787,7 @@ export async function runFullAnalysis(
       priceDataMissing,
       regime: frozenFinalRegime,
       macroEvidence: frozenMacroEvidence,
+      gapAnalysis: gapAnalysisArtifact,
       candidateScreening: candidateScreeningArtifact,
       diagnosticsArtifact,
     },

@@ -64,6 +64,18 @@ describe("analysis orchestrator diagnostics", () => {
         ],
         searchBrief: "One gap found.",
       },
+      gapAnalysis: {
+        fingerprint: "gap_fp_1",
+        providerCallCount: 3,
+        retryCount: 1,
+        totalBackoffSeconds: 65,
+        maxSingleBackoffSeconds: 65,
+        stageLatencyMs: 65200,
+        resultState: "fresh",
+        reuseHit: false,
+        reuseSourceBundleId: null,
+        reuseMissReason: "gap_fingerprint_mismatch",
+      },
       macroEnvironment: {
         availabilityStatus: "primary_success",
         degradedReason: null,
@@ -385,6 +397,16 @@ describe("analysis orchestrator diagnostics", () => {
     expect(artifact.steps.find((step) => step.stepKey === "gap_scan")?.outputs).toEqual(
       expect.objectContaining({
         outcomeExplanation: "1 material portfolio gap(s) were identified from the current holdings and profile context.",
+        providerCallCount: 3,
+        retryCount: 1,
+        totalBackoffSeconds: 65,
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "gap_scan")?.inputs).toEqual(
+      expect.objectContaining({
+        executionState: "fresh_gap_analysis",
+        reuseFingerprint: "gap_fp_1",
+        reuseMissReason: "gap_fingerprint_mismatch",
       })
     );
     expect(artifact.steps.find((step) => step.stepKey === "macro_theme_consensus")?.outputs).toEqual(

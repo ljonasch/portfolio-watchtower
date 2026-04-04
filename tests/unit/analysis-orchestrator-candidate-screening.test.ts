@@ -1,6 +1,6 @@
 const mockOpenAiCreate = jest.fn();
 const mockDetectMarketRegime = jest.fn();
-const mockRunStructuralGapAnalysis = jest.fn();
+const mockRunStructuralGapAnalysisDetailed = jest.fn();
 const mockDeriveEnvironmentalGaps = jest.fn();
 const mockScreenCandidatesDetailed = jest.fn();
 const mockFetchAllNewsWithFallback = jest.fn();
@@ -70,7 +70,7 @@ jest.mock("@/lib/research/market-regime", () => ({
 }));
 
 jest.mock("@/lib/research/gap-analyzer", () => ({
-  runStructuralGapAnalysis: mockRunStructuralGapAnalysis,
+  runStructuralGapAnalysisDetailed: mockRunStructuralGapAnalysisDetailed,
   deriveEnvironmentalGaps: mockDeriveEnvironmentalGaps,
 }));
 
@@ -170,6 +170,7 @@ jest.mock("@/lib/research/evidence-packet-builder", () => ({
 }));
 
 import { buildCandidateScreeningFingerprint } from "@/lib/research/candidate-screening-fingerprint";
+import { buildGapAnalysisFingerprint, GAP_ANALYSIS_REUSE_MAX_AGE_HOURS } from "@/lib/research/gap-analysis-fingerprint";
 import { runFullAnalysis } from "@/lib/research/analysis-orchestrator";
 import type { CandidateSearchLane } from "@/lib/research/types";
 
@@ -244,6 +245,48 @@ function buildStoredCandidateScreeningArtifact(fingerprint: string) {
   };
 }
 
+function buildStoredGapAnalysisArtifact(fingerprint: string) {
+  return {
+    gapAnalysis: {
+      fingerprint,
+      report: {
+        gaps: [
+          {
+            type: "opportunity",
+            description: "Underexposed to infrastructure beneficiaries",
+            affectedTickers: ["MSFT"],
+            priority: 1,
+          },
+        ],
+        structuralGaps: [
+          {
+            type: "opportunity",
+            description: "Underexposed to infrastructure beneficiaries",
+            affectedTickers: ["MSFT"],
+            priority: 1,
+          },
+        ],
+        environmentalGaps: [],
+        candidateSearchLanes: [],
+        searchBrief: "Find high-quality additions.",
+        profilePreferences: "Quality growth",
+      },
+      diagnostics: {
+        fingerprint,
+        providerCallCount: 2,
+        retryCount: 1,
+        totalBackoffSeconds: 65,
+        maxSingleBackoffSeconds: 65,
+        stageLatencyMs: 65010,
+        resultState: "fresh",
+        reuseHit: false,
+        reuseSourceBundleId: null,
+        reuseMissReason: null,
+      },
+    },
+  };
+}
+
 function installBaseMocks() {
   process.env.OPENAI_API_KEY = "test-key";
   mockOpenAiCreate.mockResolvedValue({
@@ -279,6 +322,7 @@ function installBaseMocks() {
   mockPrisma.analysisRun.create.mockResolvedValue({ id: "run_1" });
   mockPrisma.portfolioReport.findMany.mockResolvedValue([]);
   mockPrisma.portfolioReport.deleteMany.mockResolvedValue({ count: 0 });
+  mockPrisma.analysisBundle.findMany.mockResolvedValue([]);
   mockDetectMarketRegime.mockResolvedValue({
     riskMode: "risk_on",
     rateTrend: "stable",
@@ -286,12 +330,28 @@ function installBaseMocks() {
     vix: "normal",
     summary: "Risk-on regime.",
   });
-  mockRunStructuralGapAnalysis.mockResolvedValue({
-    gaps: [],
-    structuralGaps: [],
-    searchBrief: "Find high-quality additions.",
-    profilePreferences: "Quality growth",
-  });
+  mockRunStructuralGapAnalysisDetailed.mockImplementation(async (_openai, _holdings, _profile, _today, _emit, options) => ({
+    report: {
+      gaps: [],
+      structuralGaps: [],
+      environmentalGaps: [],
+      candidateSearchLanes: [],
+      searchBrief: "Find high-quality additions.",
+      profilePreferences: "Quality growth",
+    },
+    diagnostics: {
+      fingerprint: options?.fingerprint ?? "gap_fp",
+      providerCallCount: 2,
+      retryCount: 0,
+      totalBackoffSeconds: 0,
+      maxSingleBackoffSeconds: 0,
+      stageLatencyMs: 100,
+      resultState: "fresh",
+      reuseHit: false,
+      reuseSourceBundleId: null,
+      reuseMissReason: options?.reuseMissReason ?? null,
+    },
+  }));
   mockCollectMacroNewsEnvironment.mockResolvedValue({
     availabilityStatus: "primary_success",
     degradedReason: null,
@@ -636,7 +696,7 @@ describe("analysis orchestrator candidate screening reuse gate", () => {
 
     await runFullAnalysis("snap_1", undefined, jest.fn(), "scheduled", "cron");
 
-    expect(mockPrisma.analysisBundle.findMany).not.toHaveBeenCalled();
+    expect(mockPrisma.analysisBundle.findMany).toHaveBeenCalledTimes(1);
     expect(mockScreenCandidatesDetailed).toHaveBeenCalledTimes(1);
     expect(mockScreenCandidatesDetailed.mock.calls[0]?.[7]).toEqual(
       expect.objectContaining({
@@ -644,6 +704,198 @@ describe("analysis orchestrator candidate screening reuse gate", () => {
         triggerType: "scheduled",
         modeLabel: "normal",
         modeSelection: "default_normal",
+      })
+    );
+  });
+
+  test("matching latest finalized gap-analysis artifact reuses structural gaps and skips fresh gap provider calls", async () => {
+    const fingerprint = buildGapAnalysisFingerprint({
+      holdings: [
+        { ticker: "MSFT", currentWeight: 100, isCash: false },
+      ],
+      profile: {
+        trackedAccountObjective: undefined,
+        sectorsToEmphasize: undefined,
+      },
+    });
+    mockPrisma.analysisBundle.findMany.mockResolvedValue([
+      {
+        id: "bundle_gap_reuse",
+        finalizedAt: new Date("2026-04-02T12:00:00.000Z"),
+        evidencePacketJson: JSON.stringify(buildStoredGapAnalysisArtifact(fingerprint)),
+      },
+    ]);
+    mockScreenCandidatesDetailed.mockResolvedValue({
+      candidates: [],
+      diagnostics: {
+        triggerType: "manual",
+        mode: "full",
+        modeLabel: "normal",
+        modeSelection: "default_normal",
+        fingerprint: "screen_fp",
+        maxMacroLanes: null,
+        targetValidatedCandidateCount: 5,
+        totalProviderPromptCount: 1,
+        structuralPromptCount: 1,
+        macroLanePromptCount: 0,
+        retryCount: 0,
+        totalBackoffSeconds: 0,
+        rateLimitedPromptCount: 0,
+        macroLaneIdsAvailable: ["macro_lane:defense_fiscal_beneficiaries"],
+        macroLaneIdsConsidered: ["macro_lane:defense_fiscal_beneficiaries"],
+        queriedLaneIds: [],
+        skippedLaneIds: [],
+        laneCountQueried: 0,
+        laneCountSkipped: 0,
+        skippedLanesDueToEnoughSurvivors: 0,
+        rawCandidateCount: 0,
+        dedupedCandidateCount: 0,
+        candidatesSentToPriceValidation: 0,
+        validatedSurvivors: 0,
+        validatedSurvivorsByOrigin: {
+          structural: 0,
+          macroLane: 0,
+        },
+        reuseHit: false,
+        reuseSourceBundleId: null,
+        reuseMissReason: null,
+        stoppedEarly: false,
+      },
+    });
+
+    await runFullAnalysis("snap_1", undefined, jest.fn(), "manual", "user");
+
+    expect(mockRunStructuralGapAnalysisDetailed).not.toHaveBeenCalled();
+    expect(mockFinalizeAnalysisRun.mock.calls.at(-1)?.[0]?.evidencePacket?.gapAnalysis?.diagnostics).toEqual(
+      expect.objectContaining({
+        reuseHit: true,
+        reuseSourceBundleId: "bundle_gap_reuse",
+        resultState: "frozen_artifact_reuse",
+        providerCallCount: 0,
+      })
+    );
+  });
+
+  test("changed gap fingerprint falls through to fresh structural gap analysis", async () => {
+    mockPrisma.analysisBundle.findMany.mockResolvedValue([
+      {
+        id: "bundle_gap_old",
+        finalizedAt: new Date("2026-04-02T12:00:00.000Z"),
+        evidencePacketJson: JSON.stringify(buildStoredGapAnalysisArtifact("different_gap_fp")),
+      },
+    ]);
+    mockScreenCandidatesDetailed.mockResolvedValue({
+      candidates: [],
+      diagnostics: {
+        triggerType: "manual",
+        mode: "full",
+        modeLabel: "normal",
+        modeSelection: "default_normal",
+        fingerprint: "screen_fp",
+        maxMacroLanes: null,
+        targetValidatedCandidateCount: 5,
+        totalProviderPromptCount: 1,
+        structuralPromptCount: 1,
+        macroLanePromptCount: 0,
+        retryCount: 0,
+        totalBackoffSeconds: 0,
+        rateLimitedPromptCount: 0,
+        macroLaneIdsAvailable: ["macro_lane:defense_fiscal_beneficiaries"],
+        macroLaneIdsConsidered: ["macro_lane:defense_fiscal_beneficiaries"],
+        queriedLaneIds: [],
+        skippedLaneIds: [],
+        laneCountQueried: 0,
+        laneCountSkipped: 0,
+        skippedLanesDueToEnoughSurvivors: 0,
+        rawCandidateCount: 0,
+        dedupedCandidateCount: 0,
+        candidatesSentToPriceValidation: 0,
+        validatedSurvivors: 0,
+        validatedSurvivorsByOrigin: {
+          structural: 0,
+          macroLane: 0,
+        },
+        reuseHit: false,
+        reuseSourceBundleId: null,
+        reuseMissReason: null,
+        stoppedEarly: false,
+      },
+    });
+
+    await runFullAnalysis("snap_1", undefined, jest.fn(), "manual", "user");
+
+    expect(mockRunStructuralGapAnalysisDetailed).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeAnalysisRun.mock.calls.at(-1)?.[0]?.evidencePacket?.gapAnalysis?.diagnostics).toEqual(
+      expect.objectContaining({
+        reuseHit: false,
+        reuseMissReason: "gap_fingerprint_mismatch",
+      })
+    );
+  });
+
+  test("stale gap artifacts force a fresh structural gap analysis even on exact fingerprint match", async () => {
+    const staleFingerprint = buildGapAnalysisFingerprint({
+      holdings: [
+        { ticker: "MSFT", currentWeight: 100, isCash: false },
+      ],
+      profile: {
+        trackedAccountObjective: undefined,
+        sectorsToEmphasize: undefined,
+      },
+    });
+    const staleFinalizedAt = new Date(Date.now() - ((GAP_ANALYSIS_REUSE_MAX_AGE_HOURS + 2) * 60 * 60 * 1000));
+    mockPrisma.analysisBundle.findMany.mockResolvedValue([
+      {
+        id: "bundle_gap_stale",
+        finalizedAt: staleFinalizedAt,
+        evidencePacketJson: JSON.stringify(buildStoredGapAnalysisArtifact(staleFingerprint)),
+      },
+    ]);
+    mockScreenCandidatesDetailed.mockResolvedValue({
+      candidates: [],
+      diagnostics: {
+        triggerType: "manual",
+        mode: "full",
+        modeLabel: "normal",
+        modeSelection: "default_normal",
+        fingerprint: "screen_fp",
+        maxMacroLanes: null,
+        targetValidatedCandidateCount: 5,
+        totalProviderPromptCount: 1,
+        structuralPromptCount: 1,
+        macroLanePromptCount: 0,
+        retryCount: 0,
+        totalBackoffSeconds: 0,
+        rateLimitedPromptCount: 0,
+        macroLaneIdsAvailable: ["macro_lane:defense_fiscal_beneficiaries"],
+        macroLaneIdsConsidered: ["macro_lane:defense_fiscal_beneficiaries"],
+        queriedLaneIds: [],
+        skippedLaneIds: [],
+        laneCountQueried: 0,
+        laneCountSkipped: 0,
+        skippedLanesDueToEnoughSurvivors: 0,
+        rawCandidateCount: 0,
+        dedupedCandidateCount: 0,
+        candidatesSentToPriceValidation: 0,
+        validatedSurvivors: 0,
+        validatedSurvivorsByOrigin: {
+          structural: 0,
+          macroLane: 0,
+        },
+        reuseHit: false,
+        reuseSourceBundleId: null,
+        reuseMissReason: null,
+        stoppedEarly: false,
+      },
+    });
+
+    await runFullAnalysis("snap_1", undefined, jest.fn(), "manual", "user");
+
+    expect(mockRunStructuralGapAnalysisDetailed).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeAnalysisRun.mock.calls.at(-1)?.[0]?.evidencePacket?.gapAnalysis?.diagnostics).toEqual(
+      expect.objectContaining({
+        reuseHit: false,
+        reuseMissReason: "stale_finalized_gap_analysis",
       })
     );
   });

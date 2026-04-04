@@ -275,6 +275,39 @@ export interface GapReport {
   profilePreferences: string;
 }
 
+export type StageProviderPressureResultState =
+  | "fresh"
+  | "reused"
+  | "cache_hit"
+  | "frozen_artifact_reuse";
+
+export interface StageProviderPressureDiagnostics {
+  providerCallCount: number;
+  retryCount: number;
+  totalBackoffSeconds: number;
+  maxSingleBackoffSeconds: number;
+  stageLatencyMs: number;
+  resultState: StageProviderPressureResultState;
+  reuseSourceBundleId: string | null;
+  reuseMissReason: string | null;
+}
+
+export interface GapAnalysisDiagnostics extends StageProviderPressureDiagnostics {
+  fingerprint: string;
+  reuseHit: boolean;
+}
+
+export interface GapAnalysisArtifact {
+  fingerprint: string;
+  report: GapReport;
+  diagnostics: GapAnalysisDiagnostics;
+}
+
+export interface GapAnalysisResult {
+  report: GapReport;
+  diagnostics: GapAnalysisDiagnostics;
+}
+
 // ─── Portfolio construction ───────────────────────────────────────────────────
 
 export interface ConcentrationWarning {
