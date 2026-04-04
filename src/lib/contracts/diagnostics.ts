@@ -8,6 +8,7 @@ export type DiagnosticsStepKey =
   | "macro_candidate_lanes"
   | "candidate_screening"
   | "news_sources"
+  | "market_data_helpers"
   | "sentiment"
   | "gpt5_reasoning"
   | "validation_finalization";

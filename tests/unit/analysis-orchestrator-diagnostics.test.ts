@@ -283,6 +283,38 @@ describe("analysis orchestrator diagnostics", () => {
         droppedArticleCount: 2,
         freshnessDecisionReason: "fresh_fetch_required",
       },
+      priceTimelineDiagnostics: {
+        providerCallCount: 2,
+        retryCount: 0,
+        totalBackoffSeconds: 0,
+        maxSingleBackoffSeconds: 0,
+        stageLatencyMs: 1200,
+        resultState: "fresh",
+        reuseSourceBundleId: null,
+        reuseMissReason: "fresh_fetch_required_for_1h_window",
+        helperCallCount: 4,
+        cacheHitCount: 2,
+        cacheMissCount: 2,
+        inputTickerCount: 4,
+        outputTickerCount: 4,
+        freshnessDecisionReason: "mixed_cache_and_fresh_fetch_within_1h_window",
+      },
+      valuationDiagnostics: {
+        providerCallCount: 1,
+        retryCount: 0,
+        totalBackoffSeconds: 0,
+        maxSingleBackoffSeconds: 0,
+        stageLatencyMs: 800,
+        resultState: "fresh",
+        reuseSourceBundleId: null,
+        reuseMissReason: "fresh_fetch_required_for_24h_window",
+        helperCallCount: 4,
+        cacheHitCount: 3,
+        cacheMissCount: 1,
+        inputTickerCount: 4,
+        outputTickerCount: 4,
+        freshnessDecisionReason: "mixed_cache_and_fresh_fetch_within_24h_window",
+      },
       sentimentSignals: new Map([
         ["AVGO", { finbertScore: 0.6, fingptScore: 0 }],
       ]),
@@ -340,6 +372,7 @@ describe("analysis orchestrator diagnostics", () => {
       "macro_candidate_lanes",
       "candidate_screening",
       "news_sources",
+      "market_data_helpers",
       "sentiment",
       "gpt5_reasoning",
       "validation_finalization",
@@ -416,6 +449,20 @@ describe("analysis orchestrator diagnostics", () => {
         normalizedArticleCountRetained: 1,
         droppedArticleCount: 2,
         articleSetFingerprint: "news_set_fp_1",
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "market_data_helpers")?.inputs).toEqual(
+      expect.objectContaining({
+        priceRefreshWindowHours: 1,
+        valuationRefreshWindowHours: 24,
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "market_data_helpers")?.outputs).toEqual(
+      expect.objectContaining({
+        priceProviderCallCount: 2,
+        priceCacheHitCount: 2,
+        valuationProviderCallCount: 1,
+        valuationCacheHitCount: 3,
       })
     );
     expect(artifact.steps.find((step) => step.stepKey === "gpt5_reasoning")?.outputs).toEqual(

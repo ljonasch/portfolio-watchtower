@@ -11,8 +11,13 @@ import {
   PRICE_SNAPSHOT_PROVIDER_VERSION,
   buildPriceSnapshotCacheKey,
   buildRuntimeVersionTag,
+  createRuntimeCacheRead,
   getOrLoadRuntimeCache,
+  readRuntimeCache,
 } from "@/lib/cache";
+import { finalizeMarketDataHelperDiagnostics, createMarketDataHelperDiagnostics, recordMarketDataCacheHit, recordMarketDataCacheMiss, recordMarketDataHelperInvocation } from "./market-data-helper-diagnostics";
+import { recordStageProviderCall } from "./provider-pressure-diagnostics";
+import type { MarketDataHelperDiagnostics } from "./types";
 
 export interface PriceBar {
   time: string;
@@ -49,6 +54,12 @@ export interface PriceTimeline {
   reactions: ArticleReaction[];
   marketClosed: boolean; // W26
   exchange: string;      // F7
+}
+
+export const PRICE_TIMELINE_REFRESH_WINDOW_HOURS = 1;
+
+function buildPriceRefreshBucket(nowMs: number = Date.now()): string {
+  return new Date(nowMs).toISOString().slice(0, 13);
 }
 
 // ── F7: Exchange detection ────────────────────────────────────────────────────
@@ -142,16 +153,46 @@ async function fetchIntradayBars(
   ticker: string,
   exchange: ExchangeInfo & { name: string },
   today: string
-): Promise<{ bars: PriceBar[]; prevClose: number; preMarket: number | null; afterHours: number | null }> {
+): Promise<{
+  bars: PriceBar[];
+  prevClose: number;
+  preMarket: number | null;
+  afterHours: number | null;
+  cacheHit: boolean;
+  freshnessDecisionReason: string;
+}> {
   try {
-    return await getOrLoadRuntimeCache({
+    const cacheKey = buildPriceSnapshotCacheKey({
+      ticker,
+      marketDate: today,
+      providerVersion: PRICE_SNAPSHOT_PROVIDER_VERSION,
+    });
+    const versionTag = buildRuntimeVersionTag([
+      "price_snapshot",
+      PRICE_SNAPSHOT_PROVIDER_VERSION,
+      buildPriceRefreshBucket(),
+    ]);
+    const cached = readRuntimeCache<{
+      bars: PriceBar[];
+      prevClose: number;
+      preMarket: number | null;
+      afterHours: number | null;
+    }>(
+      createRuntimeCacheRead("price_snapshot_cache", cacheKey),
+      versionTag
+    );
+    if (cached !== null) {
+      return {
+        ...cached,
+        cacheHit: true,
+        freshnessDecisionReason: `cache_hit_within_${PRICE_TIMELINE_REFRESH_WINDOW_HOURS}h_window`,
+      };
+    }
+
+    const loaded = await getOrLoadRuntimeCache({
       domain: "price_snapshot_cache",
-      key: buildPriceSnapshotCacheKey({
-        ticker,
-        marketDate: today,
-        providerVersion: PRICE_SNAPSHOT_PROVIDER_VERSION,
-      }),
-      versionTag: buildRuntimeVersionTag(["price_snapshot", PRICE_SNAPSHOT_PROVIDER_VERSION]),
+      key: cacheKey,
+      versionTag,
       loader: async () => {
         const cryptoSymbols = ["BTC", "ETH", "SOL", "ADA", "DOGE", "XRP", "DOT", "AVAX", "LINK", "LTC", "MATIC", "UNI"];
         const yahooTicker = cryptoSymbols.includes(ticker.toUpperCase()) ? `${ticker.toUpperCase()}-USD` : ticker;
@@ -203,10 +244,22 @@ async function fetchIntradayBars(
         return { bars, prevClose, preMarket: preMarketPrice, afterHours: afterHoursPrice };
       },
     });
+    return {
+      ...loaded,
+      cacheHit: false,
+      freshnessDecisionReason: `fresh_fetch_required_for_${PRICE_TIMELINE_REFRESH_WINDOW_HOURS}h_window`,
+    };
   } catch (err: any) {
     // F3: Log the actual error so price fetch failures are visible in server logs
     console.warn(`[price-timeline] ${ticker}: bar fetch failed — ${err?.message ?? String(err)}`);
-    return { bars: [], prevClose: 0, preMarket: null, afterHours: null };
+    return {
+      bars: [],
+      prevClose: 0,
+      preMarket: null,
+      afterHours: null,
+      cacheHit: false,
+      freshnessDecisionReason: "price_fetch_failed",
+    };
   }
 }
 
@@ -298,16 +351,20 @@ function assessReactions(
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-export async function fetchPriceTimelines(
+export async function fetchPriceTimelinesDetailed(
   tickers: string[],
   articleMap: Map<string, { title: string; publishedAt: string }[]>,
   today: string,
   emit: (e: ProgressEvent) => void
-): Promise<Map<string, PriceTimeline>> {
+): Promise<{ timelines: Map<string, PriceTimeline>; diagnostics: MarketDataHelperDiagnostics }> {
   emit({ type: "stage_start", stage: "price_timeline", label: "Intraday Price Timeline", detail: `Fetching 5-min bars for ${tickers.length} tickers + exchange-aware timestamp cross-reference` });
   const t0 = Date.now();
 
   const result = new Map<string, PriceTimeline>();
+  const diagnostics = createMarketDataHelperDiagnostics({
+    inputTickerCount: tickers.length,
+    freshnessDecisionReason: `intraday_${PRICE_TIMELINE_REFRESH_WINDOW_HOURS}h_bounded_refresh`,
+  });
 
   const chunk = (arr: string[], size: number) =>
     Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, (i + 1) * size));
@@ -315,6 +372,7 @@ export async function fetchPriceTimelines(
   for (const batch of chunk(tickers, 8)) {
     await Promise.all(
       batch.map(async (ticker) => {
+        recordMarketDataHelperInvocation(diagnostics);
         const exchange = detectExchange(ticker);
         const sessionStartMin = exchange.sessionStart[0] * 60 + exchange.sessionStart[1];
         const sessionEndMin   = exchange.sessionEnd[0]   * 60 + exchange.sessionEnd[1];
@@ -322,7 +380,16 @@ export async function fetchPriceTimelines(
         // W26: Detect market holiday or weekend
         const marketClosed = exchange.name !== "CRYPTO" && (isMarketHoliday(today, exchange.name) || isWeekend(today));
 
-        const { bars, prevClose, preMarket, afterHours } = await fetchIntradayBars(ticker, exchange, today);
+        const { bars, prevClose, preMarket, afterHours, cacheHit, freshnessDecisionReason } = await fetchIntradayBars(ticker, exchange, today);
+        if (cacheHit) {
+          recordMarketDataCacheHit(diagnostics);
+        } else {
+          recordMarketDataCacheMiss(diagnostics);
+          recordStageProviderCall(diagnostics);
+        }
+        diagnostics.freshnessDecisionReason = cacheHit
+          ? `cache_hits_within_${PRICE_TIMELINE_REFRESH_WINDOW_HOURS}h_window`
+          : freshnessDecisionReason;
         const articles = articleMap.get(ticker.toUpperCase()) ?? [];
         const reactions = assessReactions(bars, prevClose, articles, exchange.timezone, sessionStartMin, sessionEndMin, marketClosed);
 
@@ -373,6 +440,23 @@ export async function fetchPriceTimelines(
     );
   }
 
-  emit({ type: "stage_complete", stage: "price_timeline", durationMs: Date.now() - t0 });
-  return result;
+  diagnostics.freshnessDecisionReason = diagnostics.cacheMissCount > 0
+    ? diagnostics.cacheHitCount > 0
+      ? `mixed_cache_and_fresh_fetch_within_${PRICE_TIMELINE_REFRESH_WINDOW_HOURS}h_window`
+      : `fresh_fetch_required_for_${PRICE_TIMELINE_REFRESH_WINDOW_HOURS}h_window`
+    : `cache_hit_within_${PRICE_TIMELINE_REFRESH_WINDOW_HOURS}h_window`;
+  diagnostics.reuseMissReason = diagnostics.cacheMissCount > 0 ? diagnostics.freshnessDecisionReason : null;
+  const finalDiagnostics = finalizeMarketDataHelperDiagnostics(diagnostics, result.size, Date.now() - t0);
+  emit({ type: "stage_complete", stage: "price_timeline", durationMs: finalDiagnostics.stageLatencyMs });
+  return { timelines: result, diagnostics: finalDiagnostics };
+}
+
+export async function fetchPriceTimelines(
+  tickers: string[],
+  articleMap: Map<string, { title: string; publishedAt: string }[]>,
+  today: string,
+  emit: (e: ProgressEvent) => void
+): Promise<Map<string, PriceTimeline>> {
+  const { timelines } = await fetchPriceTimelinesDetailed(tickers, articleMap, today, emit);
+  return timelines;
 }

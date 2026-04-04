@@ -7,6 +7,23 @@
  */
 
 import type { ProgressEvent } from "./progress-events";
+import {
+  VALUATION_SNAPSHOT_PROVIDER_VERSION,
+  buildRuntimeVersionTag,
+  buildValuationSnapshotCacheKey,
+  createRuntimeCacheRead,
+  getOrLoadRuntimeCache,
+  readRuntimeCache,
+} from "@/lib/cache";
+import {
+  createMarketDataHelperDiagnostics,
+  finalizeMarketDataHelperDiagnostics,
+  recordMarketDataCacheHit,
+  recordMarketDataCacheMiss,
+  recordMarketDataHelperInvocation,
+} from "./market-data-helper-diagnostics";
+import { recordStageProviderCall } from "./provider-pressure-diagnostics";
+import type { MarketDataHelperDiagnostics } from "./types";
 
 export interface ValuationData {
   ticker: string;
@@ -39,6 +56,8 @@ const SECTOR_PE_MEDIANS: Record<string, number> = {
   "Consumer Staples":     18,
   "Real Estate":          35,
 };
+
+export const VALUATION_REFRESH_WINDOW_HOURS = 24;
 
 export async function fetchValuationData(ticker: string): Promise<ValuationData | null> {
   if (ticker === "CASH") return null;
@@ -115,6 +134,51 @@ export async function fetchValuationData(ticker: string): Promise<ValuationData 
   }
 }
 
+async function fetchValuationDataWithCache(
+  ticker: string,
+  marketDate: string
+): Promise<{
+  data: ValuationData | null;
+  cacheHit: boolean;
+  freshnessDecisionReason: string;
+}> {
+  const cacheKey = buildValuationSnapshotCacheKey({
+    ticker,
+    marketDate,
+    providerVersion: VALUATION_SNAPSHOT_PROVIDER_VERSION,
+  });
+  const versionTag = buildRuntimeVersionTag([
+    "valuation_snapshot",
+    VALUATION_SNAPSHOT_PROVIDER_VERSION,
+    marketDate,
+  ]);
+  const cached = readRuntimeCache<{ value: ValuationData | null }>(
+    createRuntimeCacheRead("valuation_snapshot_cache", cacheKey),
+    versionTag
+  );
+
+  if (cached !== null) {
+    return {
+      data: cached.value,
+      cacheHit: true,
+      freshnessDecisionReason: `cache_hit_within_${VALUATION_REFRESH_WINDOW_HOURS}h_window`,
+    };
+  }
+
+  const loaded = await getOrLoadRuntimeCache({
+    domain: "valuation_snapshot_cache",
+    key: cacheKey,
+    versionTag,
+    loader: async () => ({ value: await fetchValuationData(ticker) }),
+  });
+
+  return {
+    data: loaded.value,
+    cacheHit: false,
+    freshnessDecisionReason: `fresh_fetch_required_for_${VALUATION_REFRESH_WINDOW_HOURS}h_window`,
+  };
+}
+
 /** Fallback: extract price + 52w range from chart API (no auth, always works) */
 async function fetchValuationFromChart(ticker: string): Promise<ValuationData | null> {
   try {
@@ -146,12 +210,18 @@ async function fetchValuationFromChart(ticker: string): Promise<ValuationData | 
   }
 }
 
-export async function fetchValuationForAll(
+export async function fetchValuationForAllDetailed(
   tickers: string[],
+  marketDate: string,
   emit: (e: ProgressEvent) => void
-): Promise<Map<string, ValuationData>> {
+): Promise<{ valuations: Map<string, ValuationData>; diagnostics: MarketDataHelperDiagnostics }> {
   const result = new Map<string, ValuationData>();
   const nonCash = tickers.filter(t => t !== "CASH");
+  const t0 = Date.now();
+  const diagnostics = createMarketDataHelperDiagnostics({
+    inputTickerCount: nonCash.length,
+    freshnessDecisionReason: `daily_${VALUATION_REFRESH_WINDOW_HOURS}h_bounded_refresh`,
+  });
 
   // Parallel with concurrency cap of 6
   const chunk = (arr: string[], size: number) =>
@@ -160,14 +230,42 @@ export async function fetchValuationForAll(
   for (const batch of chunk(nonCash, 6)) {
     await Promise.all(
       batch.map(async ticker => {
-        const data = await fetchValuationData(ticker);
+        recordMarketDataHelperInvocation(diagnostics);
+        const { data, cacheHit, freshnessDecisionReason } = await fetchValuationDataWithCache(ticker, marketDate);
+        if (cacheHit) {
+          recordMarketDataCacheHit(diagnostics);
+        } else {
+          recordMarketDataCacheMiss(diagnostics);
+          recordStageProviderCall(diagnostics);
+        }
+        diagnostics.freshnessDecisionReason = cacheHit
+          ? `cache_hits_within_${VALUATION_REFRESH_WINDOW_HOURS}h_window`
+          : freshnessDecisionReason;
         if (data) result.set(ticker.toUpperCase(), data);
       })
     );
   }
 
   emit({ type: "log", message: `Valuation data: ${result.size}/${nonCash.length} tickers fetched`, level: "info" });
-  return result;
+  diagnostics.freshnessDecisionReason = diagnostics.cacheMissCount > 0
+    ? diagnostics.cacheHitCount > 0
+      ? `mixed_cache_and_fresh_fetch_within_${VALUATION_REFRESH_WINDOW_HOURS}h_window`
+      : `fresh_fetch_required_for_${VALUATION_REFRESH_WINDOW_HOURS}h_window`
+    : `cache_hit_within_${VALUATION_REFRESH_WINDOW_HOURS}h_window`;
+  diagnostics.reuseMissReason = diagnostics.cacheMissCount > 0 ? diagnostics.freshnessDecisionReason : null;
+  return {
+    valuations: result,
+    diagnostics: finalizeMarketDataHelperDiagnostics(diagnostics, result.size, Date.now() - t0),
+  };
+}
+
+export async function fetchValuationForAll(
+  tickers: string[],
+  emit: (e: ProgressEvent) => void,
+  marketDate: string = new Date().toISOString().slice(0, 10)
+): Promise<Map<string, ValuationData>> {
+  const { valuations } = await fetchValuationForAllDetailed(tickers, marketDate, emit);
+  return valuations;
 }
 
 /**

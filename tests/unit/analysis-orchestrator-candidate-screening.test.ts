@@ -4,7 +4,7 @@ const mockRunStructuralGapAnalysisDetailed = jest.fn();
 const mockDeriveEnvironmentalGaps = jest.fn();
 const mockScreenCandidatesDetailed = jest.fn();
 const mockFetchAllNewsWithFallbackDetailed = jest.fn();
-const mockFetchPriceTimelines = jest.fn();
+const mockFetchPriceTimelinesDetailed = jest.fn();
 const mockScoreSentimentForAll = jest.fn();
 const mockBuildSentimentOverlay = jest.fn();
 const mockBuildResearchContext = jest.fn();
@@ -16,7 +16,7 @@ const mockDeriveMacroCandidateSearchLanes = jest.fn();
 const mockGeneratePortfolioReport = jest.fn();
 const mockCompareRecommendations = jest.fn();
 const mockEvaluateAlert = jest.fn();
-const mockFetchValuationForAll = jest.fn();
+const mockFetchValuationForAllDetailed = jest.fn();
 const mockFormatValuationSection = jest.fn();
 const mockBuildCorrelationMatrix = jest.fn();
 const mockFormatCorrelationSection = jest.fn();
@@ -84,7 +84,8 @@ jest.mock("@/lib/research/news-fetcher", () => ({
 }));
 
 jest.mock("@/lib/research/price-timeline", () => ({
-  fetchPriceTimelines: mockFetchPriceTimelines,
+  fetchPriceTimelinesDetailed: mockFetchPriceTimelinesDetailed,
+  PRICE_TIMELINE_REFRESH_WINDOW_HOURS: 1,
 }));
 
 jest.mock("@/lib/research/sentiment-scorer", () => ({
@@ -143,8 +144,9 @@ jest.mock("@/lib/alerts", () => ({
 }));
 
 jest.mock("@/lib/research/valuation-fetcher", () => ({
-  fetchValuationForAll: mockFetchValuationForAll,
+  fetchValuationForAllDetailed: mockFetchValuationForAllDetailed,
   formatValuationSection: mockFormatValuationSection,
+  VALUATION_REFRESH_WINDOW_HOURS: 24,
 }));
 
 jest.mock("@/lib/research/correlation-matrix", () => ({
@@ -584,12 +586,30 @@ function installBaseMocks() {
       freshnessDecisionReason: "fresh_fetch_required",
     },
   });
-  mockFetchValuationForAll.mockResolvedValue([]);
+  mockFetchValuationForAllDetailed.mockResolvedValue({
+    valuations: new Map(),
+    diagnostics: {
+      providerCallCount: 0,
+      retryCount: 0,
+      totalBackoffSeconds: 0,
+      maxSingleBackoffSeconds: 0,
+      stageLatencyMs: 0,
+      resultState: "cache_hit",
+      reuseSourceBundleId: null,
+      reuseMissReason: null,
+      helperCallCount: 0,
+      cacheHitCount: 0,
+      cacheMissCount: 0,
+      inputTickerCount: 0,
+      outputTickerCount: 0,
+      freshnessDecisionReason: "cache_hit_within_24h_window",
+    },
+  });
   mockBuildCorrelationMatrix.mockResolvedValue({ clusters: [], matrix: [] });
   mockFormatValuationSection.mockReturnValue("");
   mockFormatCorrelationSection.mockReturnValue("");
-  mockFetchPriceTimelines.mockImplementation(async (tickers: string[]) =>
-    new Map(
+  mockFetchPriceTimelinesDetailed.mockImplementation(async (tickers: string[]) => ({
+    timelines: new Map(
       tickers.map((ticker) => [ticker.toUpperCase(), {
         ticker: ticker.toUpperCase(),
         exchange: "NASDAQ",
@@ -598,8 +618,24 @@ function installBaseMocks() {
         reactions: [],
         bars: [{ close: 100 }],
       }])
-    )
-  );
+    ),
+    diagnostics: {
+      providerCallCount: 0,
+      retryCount: 0,
+      totalBackoffSeconds: 0,
+      maxSingleBackoffSeconds: 0,
+      stageLatencyMs: 0,
+      resultState: "cache_hit",
+      reuseSourceBundleId: null,
+      reuseMissReason: null,
+      helperCallCount: tickers.length,
+      cacheHitCount: tickers.length,
+      cacheMissCount: 0,
+      inputTickerCount: tickers.length,
+      outputTickerCount: tickers.length,
+      freshnessDecisionReason: "cache_hit_within_1h_window",
+    },
+  }));
   mockScoreSentimentForAll.mockResolvedValue(
     new Map([
       ["MSFT", { ticker: "MSFT", direction: "hold", finalScore: 0, confidence: 0, finbertScore: 0, fingptScore: 0 }],

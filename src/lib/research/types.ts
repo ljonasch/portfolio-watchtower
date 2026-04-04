@@ -351,6 +351,15 @@ export interface TickerNewsFetchResult {
   diagnostics: TickerNewsDiagnostics;
 }
 
+export interface MarketDataHelperDiagnostics extends StageProviderPressureDiagnostics {
+  helperCallCount: number;
+  cacheHitCount: number;
+  cacheMissCount: number;
+  inputTickerCount: number;
+  outputTickerCount: number;
+  freshnessDecisionReason: string | null;
+}
+
 // ─── Portfolio construction ───────────────────────────────────────────────────
 
 export interface ConcentrationWarning {

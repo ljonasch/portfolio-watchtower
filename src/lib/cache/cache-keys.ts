@@ -2,6 +2,7 @@ import type { BundleScope } from "@/lib/contracts";
 
 export type CacheDomain =
   | "price_snapshot_cache"
+  | "valuation_snapshot_cache"
   | "news_search_cache"
   | "article_body_cache"
   | "sentiment_extraction_cache"
@@ -48,6 +49,12 @@ export interface NewsSearchCacheKeyInput {
   fetcherVersion: string;
 }
 
+export interface ValuationSnapshotCacheKeyInput {
+  ticker: string;
+  marketDate: string;
+  providerVersion: string;
+}
+
 export interface ArticleBodyCacheKeyInput {
   articleUrlHash: string;
   articleChecksum: string;
@@ -91,6 +98,15 @@ export function buildNewsSearchCacheKey(input: NewsSearchCacheKeyInput): string 
     input.ticker.toUpperCase(),
     input.lookbackWindow,
     input.fetcherVersion,
+  ]);
+}
+
+export function buildValuationSnapshotCacheKey(input: ValuationSnapshotCacheKeyInput): string {
+  return joinKey([
+    "valuation_snapshot_cache",
+    input.ticker.toUpperCase(),
+    input.marketDate,
+    input.providerVersion,
   ]);
 }
 

@@ -23,7 +23,7 @@ import { detectMarketRegime }      from "./market-regime";
 import { deriveEnvironmentalGaps, runStructuralGapAnalysisDetailed } from "./gap-analyzer";
 import { screenCandidatesDetailed } from "./candidate-screener";
 import { fetchAllNewsWithFallbackDetailed } from "./news-fetcher";
-import { fetchPriceTimelines }     from "./price-timeline";
+import { fetchPriceTimelinesDetailed, PRICE_TIMELINE_REFRESH_WINDOW_HOURS } from "./price-timeline";
 import { scoreSentimentForAll }    from "./sentiment-scorer";
 import { buildSentimentOverlay, type SentimentOverlay } from "./signal-aggregator";
 import { buildResearchContext }    from "./context-loader";
@@ -41,7 +41,7 @@ import {
 } from "@/lib/analyzer";
 import { compareRecommendations }  from "@/lib/comparator";
 import { evaluateAlert }           from "@/lib/alerts";
-import { fetchValuationForAll, formatValuationSection } from "./valuation-fetcher";
+import { fetchValuationForAllDetailed, formatValuationSection, VALUATION_REFRESH_WINDOW_HOURS } from "./valuation-fetcher";
 import { buildCorrelationMatrix, formatCorrelationSection } from "./correlation-matrix";
 import { recordRunStats } from "./model-tracker";
 import { finalizeAnalysisRun, type FinalizeAnalysisRunInput } from "@/lib/services/analysis-lifecycle-service";
@@ -68,6 +68,7 @@ import {
   type MacroExposureBridgeResult,
   type MacroNewsEnvironmentResult,
   type MacroThemeConsensusResult,
+  type MarketDataHelperDiagnostics,
   type TickerNewsArtifact,
   type TickerNewsDiagnostics,
 } from "./types";
@@ -1433,6 +1434,68 @@ function buildMarketRegimeDiagnostics(input: {
   };
 }
 
+function buildMarketDataHelperDiagnostics(input: {
+  allTickers?: string[];
+  priceTimelineDiagnostics?: MarketDataHelperDiagnostics | null;
+  valuationDiagnostics?: MarketDataHelperDiagnostics | null;
+}): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
+  const allTickers = Array.isArray(input.allTickers) ? input.allTickers : [];
+  const priceDiagnostics = input.priceTimelineDiagnostics ?? null;
+  const valuationDiagnostics = input.valuationDiagnostics ?? null;
+  const hasInputs = allTickers.length > 0;
+  const hasDiagnostics = Boolean(priceDiagnostics || valuationDiagnostics);
+  const outputExplanation = hasDiagnostics
+    ? `Price timeline and valuation helpers completed with ${priceDiagnostics?.cacheHitCount ?? 0} price cache hit(s), ${valuationDiagnostics?.cacheHitCount ?? 0} valuation cache hit(s), and ${((priceDiagnostics?.providerCallCount ?? 0) + (valuationDiagnostics?.providerCallCount ?? 0))} fresh market-data fetch(es).`
+    : hasInputs
+      ? "Market-data helper telemetry was unavailable for this run."
+      : "Market-data helper inputs were incomplete, so helper telemetry could not be summarized.";
+
+  return {
+    status: hasDiagnostics ? "ok" : "warning",
+    summary: outputExplanation,
+    inputs: {
+      tickersRequested: hasInputs ? allTickers : null,
+      priceRefreshWindowHours: PRICE_TIMELINE_REFRESH_WINDOW_HOURS,
+      valuationRefreshWindowHours: VALUATION_REFRESH_WINDOW_HOURS,
+      correlationHandling: "Correlation remained direct local computation in Batch 4 because it does not clearly share the intraday price-history helper path.",
+    },
+    outputs: {
+      outcomeExplanation: outputExplanation,
+      priceExecutionState: priceDiagnostics?.resultState ?? null,
+      priceProviderCallCount: priceDiagnostics?.providerCallCount ?? 0,
+      priceCacheHitCount: priceDiagnostics?.cacheHitCount ?? 0,
+      priceCacheMissCount: priceDiagnostics?.cacheMissCount ?? 0,
+      priceTimelineCount: priceDiagnostics?.outputTickerCount ?? 0,
+      priceLatencyMs: priceDiagnostics?.stageLatencyMs ?? 0,
+      priceFreshnessDecisionReason: priceDiagnostics?.freshnessDecisionReason ?? null,
+      priceCacheMissReason: priceDiagnostics?.reuseMissReason ?? null,
+      valuationExecutionState: valuationDiagnostics?.resultState ?? null,
+      valuationProviderCallCount: valuationDiagnostics?.providerCallCount ?? 0,
+      valuationCacheHitCount: valuationDiagnostics?.cacheHitCount ?? 0,
+      valuationCacheMissCount: valuationDiagnostics?.cacheMissCount ?? 0,
+      valuationTickerCount: valuationDiagnostics?.outputTickerCount ?? 0,
+      valuationLatencyMs: valuationDiagnostics?.stageLatencyMs ?? 0,
+      valuationFreshnessDecisionReason: valuationDiagnostics?.freshnessDecisionReason ?? null,
+      valuationCacheMissReason: valuationDiagnostics?.reuseMissReason ?? null,
+    },
+    metrics: buildDiagnosticsMetrics([
+      ["price_helper_provider_calls", "Price Helper Provider Calls", priceDiagnostics?.providerCallCount ?? 0],
+      ["price_helper_cache_hits", "Price Helper Cache Hits", priceDiagnostics?.cacheHitCount ?? 0],
+      ["price_helper_cache_misses", "Price Helper Cache Misses", priceDiagnostics?.cacheMissCount ?? 0],
+      ["valuation_helper_provider_calls", "Valuation Helper Provider Calls", valuationDiagnostics?.providerCallCount ?? 0],
+      ["valuation_helper_cache_hits", "Valuation Helper Cache Hits", valuationDiagnostics?.cacheHitCount ?? 0],
+      ["valuation_helper_cache_misses", "Valuation Helper Cache Misses", valuationDiagnostics?.cacheMissCount ?? 0],
+    ]),
+    warnings: hasDiagnostics
+      ? []
+      : buildDiagnosticsWarnings([[
+          "market_data_helper_telemetry_missing",
+          "Price and valuation helper diagnostics were unavailable, so cache/freshness behavior could not be summarized.",
+          "warning",
+        ]]),
+  };
+}
+
 function buildSentimentDiagnostics(input: {
   allTickers?: string[];
   scoredSignals: any[];
@@ -1577,6 +1640,8 @@ export function buildRunDiagnosticsArtifact(input: {
   candidateScreening?: CandidateScreeningDiagnostics | null;
   newsResult?: any;
   tickerNewsDiagnostics?: TickerNewsDiagnostics | null;
+  priceTimelineDiagnostics?: MarketDataHelperDiagnostics | null;
+  valuationDiagnostics?: MarketDataHelperDiagnostics | null;
   sentimentSignals?: Map<string, any>;
   sentimentOverlay?: any[];
   reportData?: any;
@@ -1672,6 +1737,11 @@ export function buildRunDiagnosticsArtifact(input: {
     newsResult: input.newsResult,
     tickerNewsDiagnostics: input.tickerNewsDiagnostics,
     sourceRefs,
+  });
+  const marketDataDiagnostics = buildMarketDataHelperDiagnostics({
+    allTickers,
+    priceTimelineDiagnostics: input.priceTimelineDiagnostics,
+    valuationDiagnostics: input.valuationDiagnostics,
   });
   const sentimentDiagnostics = buildSentimentDiagnostics({
     allTickers,
@@ -1834,6 +1904,21 @@ export function buildRunDiagnosticsArtifact(input: {
       metrics: newsSourceDiagnostics.metrics,
       sources: newsSourceDiagnostics.sources,
       warnings: newsSourceDiagnostics.warnings,
+    },
+    {
+      ...buildStepBase(
+        {
+          stepKey: "market_data_helpers",
+          stepName: "Market-Data Helpers",
+          status: marketDataDiagnostics.status,
+          summary: marketDataDiagnostics.summary,
+        },
+        context
+      ),
+      inputs: marketDataDiagnostics.inputs,
+      outputs: marketDataDiagnostics.outputs,
+      metrics: marketDataDiagnostics.metrics,
+      warnings: marketDataDiagnostics.warnings,
     },
     {
       ...buildStepBase(
@@ -2276,9 +2361,9 @@ export async function runFullAnalysis(
     });
   }
 
-  const [{ newsResult, diagnostics: tickerNewsDiagnostics }, valuations, correlationMatrix] = await Promise.all([
+  const [{ newsResult, diagnostics: tickerNewsDiagnostics }, { valuations, diagnostics: valuationDiagnostics }, correlationMatrix] = await Promise.all([
     newsFetchPromise,
-    fetchValuationForAll(allTickers, emit),
+    fetchValuationForAllDetailed(allTickers, today, emit),
     buildCorrelationMatrix(existingTickers, emit),
   ]);
 
@@ -2307,7 +2392,7 @@ export async function runFullAnalysis(
     }
   }
 
-  const timelines = await fetchPriceTimelines(allTickers, articleMapForPrice, today, emit);
+  const { timelines, diagnostics: priceTimelineDiagnostics } = await fetchPriceTimelinesDetailed(allTickers, articleMapForPrice, today, emit);
 
   // W24: Check if price data is globally unavailable
   const barsPresent = Array.from(timelines.values()).filter(t => t.bars.length > 0).length;
@@ -2519,6 +2604,8 @@ export async function runFullAnalysis(
         candidateScreening: candidateScreeningArtifact.diagnostics,
       newsResult: frozenNewsResult,
       tickerNewsDiagnostics,
+      priceTimelineDiagnostics,
+      valuationDiagnostics,
       validationSummary: {
         hardErrorCount: 1,
         warningCount: 0,
@@ -2700,6 +2787,8 @@ export async function runFullAnalysis(
             candidateScreening: candidateScreeningArtifact.diagnostics,
           newsResult: frozenNewsResult,
           tickerNewsDiagnostics,
+          priceTimelineDiagnostics,
+          valuationDiagnostics,
           validationSummary: {
             hardErrorCount: 1,
             warningCount: 0,
@@ -2862,6 +2951,8 @@ export async function runFullAnalysis(
             candidateScreening: candidateScreeningArtifact.diagnostics,
           newsResult: frozenNewsResult,
           tickerNewsDiagnostics,
+          priceTimelineDiagnostics,
+          valuationDiagnostics,
           validationSummary: {
             hardErrorCount: 1,
             warningCount: 0,
@@ -3083,6 +3174,8 @@ export async function runFullAnalysis(
     candidates,
     newsResult: frozenNewsResult,
     tickerNewsDiagnostics,
+    priceTimelineDiagnostics,
+    valuationDiagnostics,
     sentimentSignals: frozenSentimentSignals,
     sentimentOverlay,
     reportData,

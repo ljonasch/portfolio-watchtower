@@ -152,6 +152,10 @@ function humanReadableFallbackNote(stepKey: DiagnosticsStepContract["stepKey"], 
       inputs: "This step searched recent company, sector, and macro news relevant to the analyzed tickers.",
       outputs: "This step did not persist a detailed news-source summary beyond the stored citation list.",
     },
+    market_data_helpers: {
+      inputs: "This step managed bounded-refresh market-data helpers for price timelines and valuation anchors used elsewhere in the run.",
+      outputs: "This step did not persist additional market-data helper details beyond the stored cache and freshness summary.",
+    },
     sentiment: {
       inputs: "This step evaluated sentiment signals across the analyzed tickers for this run.",
       outputs: "This step did not persist a detailed sentiment summary beyond the stored overlay results.",

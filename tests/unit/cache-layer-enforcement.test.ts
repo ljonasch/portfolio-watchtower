@@ -6,6 +6,7 @@ describe("cache layer enforcement", () => {
   const researchFiles = [
     "src/lib/research/news-fetcher.ts",
     "src/lib/research/price-timeline.ts",
+    "src/lib/research/valuation-fetcher.ts",
     "src/lib/research/sentiment-scorer.ts",
   ];
 
