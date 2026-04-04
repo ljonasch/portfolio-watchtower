@@ -263,6 +263,26 @@ describe("analysis orchestrator diagnostics", () => {
         breaking24h: "Breaking",
         combinedSummary: "Combined summary",
       },
+      tickerNewsDiagnostics: {
+        providerCallCount: 2,
+        retryCount: 1,
+        totalBackoffSeconds: 65,
+        maxSingleBackoffSeconds: 65,
+        stageLatencyMs: 67000,
+        resultState: "fresh",
+        reuseSourceBundleId: null,
+        reuseMissReason: "no_prior_finalized_bundle",
+        requestFingerprint: "news_req_1",
+        materialTickerSet: ["AAPL", "AVGO", "MSFT", "NVDA"],
+        queryMode: "chunked_unified_primary_search_with_yahoo_fallback_v1",
+        selectionContract: "stable_quality_rank_then_url_dedup_v1",
+        articleSetFingerprint: "news_set_fp_1",
+        reuseHit: false,
+        rawArticleCountFetched: 3,
+        normalizedArticleCountRetained: 1,
+        droppedArticleCount: 2,
+        freshnessDecisionReason: "fresh_fetch_required",
+      },
       sentimentSignals: new Map([
         ["AVGO", { finbertScore: 0.6, fingptScore: 0 }],
       ]),
@@ -380,12 +400,22 @@ describe("analysis orchestrator diagnostics", () => {
       expect.objectContaining({
         searchWindow: "Breaking 24h plus broader 30-day company, sector, and macro search",
         newsAvailabilityStatus: "primary_success",
+        executionState: "fresh",
+        requestFingerprint: "news_req_1",
+        queryMode: "chunked_unified_primary_search_with_yahoo_fallback_v1",
+        selectionContract: "stable_quality_rank_then_url_dedup_v1",
       })
     );
     expect(artifact.steps.find((step) => step.stepKey === "news_sources")?.outputs).toEqual(
       expect.objectContaining({
         outcomeExplanation: "Primary live-news search succeeded and produced cited sources for this run.",
         newsSupportStrength: "positive support, medium confidence, 1 distinct source domain(s).",
+        providerCallCount: 2,
+        retryCount: 1,
+        rawArticleCountFetched: 3,
+        normalizedArticleCountRetained: 1,
+        droppedArticleCount: 2,
+        articleSetFingerprint: "news_set_fp_1",
       })
     );
     expect(artifact.steps.find((step) => step.stepKey === "gpt5_reasoning")?.outputs).toEqual(

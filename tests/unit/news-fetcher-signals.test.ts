@@ -1,5 +1,5 @@
 import { clearRuntimeCacheStore } from "@/lib/cache";
-import { buildNewsSignalSet, fetchAllNewsWithFallback } from "@/lib/research/news-fetcher";
+import { buildNewsSignalSet, fetchAllNewsWithFallback, fetchAllNewsWithFallbackDetailed } from "@/lib/research/news-fetcher";
 
 describe("news fetcher structured signals", () => {
   const originalFetch = global.fetch;
@@ -192,5 +192,69 @@ Rates remain stable
     });
 
     expect(first).toEqual(second);
+  });
+
+  test("detailed ticker-news fetch diagnostics retain deterministic deduped sources", async () => {
+    const openai = {
+      chat: {
+        completions: {
+          create: jest.fn().mockResolvedValue({
+            choices: [
+              {
+                message: {
+                  content: `=== BREAKING 24H NEWS ===
+[AAPL] Apple extends AI partnership
+=== MACRO & GEOPOLITICS ===
+Rates remain stable
+=== COMPANY-SPECIFIC ===
+[AAPL] Apple extends AI partnership`,
+                  annotations: [
+                    {
+                      type: "url_citation",
+                      url_citation: {
+                        title: "Reuters Apple",
+                        url: "https://www.reuters.com/apple-ai",
+                      },
+                    },
+                    {
+                      type: "url_citation",
+                      url_citation: {
+                        title: "Reuters Apple duplicate",
+                        url: "https://www.reuters.com/apple-ai",
+                      },
+                    },
+                    {
+                      type: "url_citation",
+                      url_citation: {
+                        title: "Bloomberg Apple",
+                        url: "https://www.bloomberg.com/apple-ai",
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        },
+      },
+    };
+
+    const result = await fetchAllNewsWithFallbackDetailed(openai, ["AAPL"], "2026-04-03");
+
+    expect(result.newsResult.allSources).toEqual([
+      expect.objectContaining({ url: "https://www.bloomberg.com/apple-ai", quality: "high" }),
+      expect.objectContaining({ url: "https://www.reuters.com/apple-ai", quality: "high" }),
+    ]);
+    expect(result.diagnostics).toEqual(
+      expect.objectContaining({
+        providerCallCount: 1,
+        retryCount: 0,
+        resultState: "fresh",
+        rawArticleCountFetched: 3,
+        normalizedArticleCountRetained: 2,
+        droppedArticleCount: 1,
+        articleSetFingerprint: expect.any(String),
+      })
+    );
   });
 });

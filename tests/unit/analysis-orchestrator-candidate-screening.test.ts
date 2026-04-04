@@ -3,7 +3,7 @@ const mockDetectMarketRegime = jest.fn();
 const mockRunStructuralGapAnalysisDetailed = jest.fn();
 const mockDeriveEnvironmentalGaps = jest.fn();
 const mockScreenCandidatesDetailed = jest.fn();
-const mockFetchAllNewsWithFallback = jest.fn();
+const mockFetchAllNewsWithFallbackDetailed = jest.fn();
 const mockFetchPriceTimelines = jest.fn();
 const mockScoreSentimentForAll = jest.fn();
 const mockBuildSentimentOverlay = jest.fn();
@@ -80,7 +80,7 @@ jest.mock("@/lib/research/candidate-screener", () => ({
 }));
 
 jest.mock("@/lib/research/news-fetcher", () => ({
-  fetchAllNewsWithFallback: mockFetchAllNewsWithFallback,
+  fetchAllNewsWithFallbackDetailed: mockFetchAllNewsWithFallbackDetailed,
 }));
 
 jest.mock("@/lib/research/price-timeline", () => ({
@@ -174,6 +174,7 @@ jest.mock("@/lib/research/evidence-packet-builder", () => ({
 import { buildCandidateScreeningFingerprint } from "@/lib/research/candidate-screening-fingerprint";
 import { buildGapAnalysisFingerprint, GAP_ANALYSIS_REUSE_MAX_AGE_HOURS } from "@/lib/research/gap-analysis-fingerprint";
 import { buildMacroReplayContextFingerprint, MACRO_ENVIRONMENT_REUSE_MAX_AGE_HOURS } from "@/lib/research/macro-environment-reuse";
+import { buildTickerNewsReuseDescriptor, TICKER_NEWS_REUSE_MAX_AGE_HOURS } from "@/lib/research/ticker-news-reuse";
 import { runFullAnalysis } from "@/lib/research/analysis-orchestrator";
 import type { CandidateSearchLane } from "@/lib/research/types";
 
@@ -334,6 +335,72 @@ function buildStoredMacroEvidenceArtifact(replayContextFingerprint: string) {
   };
 }
 
+function buildStoredTickerNewsArtifact(input: {
+  requestFingerprint: string;
+  materialTickerSet: string[];
+  queryMode: string;
+  selectionContract: string;
+}) {
+  return {
+    tickerNews: {
+      schemaVersion: "ticker_news_v1",
+      requestFingerprint: input.requestFingerprint,
+      materialTickerSet: input.materialTickerSet,
+      queryMode: input.queryMode,
+      selectionContract: input.selectionContract,
+      articleSetFingerprint: "news_set_fp_1",
+      newsResult: {
+        evidence: [],
+        combinedSummary: "[AAPL] Apple extends AI partnership",
+        breaking24h: "[AAPL] Apple extends AI partnership",
+        allSources: [
+          { title: "Reuters Apple", url: "https://www.reuters.com/apple-ai", quality: "high", domain: "reuters.com" },
+        ],
+        usingFallback: false,
+        availabilityStatus: "primary_success",
+        degradedReason: null,
+        statusSummary: "Primary live-news search succeeded and produced 1 cited source(s) for this run.",
+        issues: [],
+        signals: {
+          availabilityStatus: "primary_success",
+          degradedReason: null,
+          articleCount: 1,
+          trustedSourceCount: 1,
+          sourceDiversityCount: 1,
+          recent24hCount: 1,
+          recent7dCount: 1,
+          directionalSupport: "positive",
+          contradictionLevel: "low",
+          catalystPresence: true,
+          riskEventPresence: false,
+          confidence: "medium",
+          statusSummary: "Primary live-news search succeeded and produced 1 cited source(s) for this run.",
+          tickerSignals: {
+            AAPL: {
+              ticker: "AAPL",
+              availabilityStatus: "primary_success",
+              degradedReason: null,
+              articleCount: 1,
+              trustedSourceCount: 1,
+              sourceDiversityCount: 1,
+              recent24hCount: 1,
+              recent7dCount: 1,
+              directionalSupport: "positive",
+              catalystPresence: true,
+              riskEventPresence: false,
+              contradictionLevel: "low",
+              newsConfidence: "medium",
+              explanatoryNote: "1 ticker-specific news mention(s) were captured with positive directional support and medium news confidence.",
+            },
+          },
+          issues: [],
+        },
+        fetchedAt: "2026-04-02T00:00:00.000Z",
+      },
+    },
+  };
+}
+
 function installBaseMocks() {
   process.env.OPENAI_API_KEY = "test-key";
   mockOpenAiCreate.mockResolvedValue({
@@ -466,34 +533,56 @@ function installBaseMocks() {
   });
   mockDeriveEnvironmentalGaps.mockReturnValue([]);
   mockDeriveMacroCandidateSearchLanes.mockReturnValue([baseLane]);
-  mockFetchAllNewsWithFallback.mockResolvedValue({
-    evidence: [],
-    combinedSummary: "",
-    breaking24h: "",
-    allSources: [],
-    usingFallback: false,
-    availabilityStatus: "primary_success",
-    degradedReason: null,
-    statusSummary: "News ok",
-    issues: [],
-    signals: {
+  mockFetchAllNewsWithFallbackDetailed.mockResolvedValue({
+    newsResult: {
+      evidence: [],
+      combinedSummary: "",
+      breaking24h: "",
+      allSources: [],
+      usingFallback: false,
       availabilityStatus: "primary_success",
       degradedReason: null,
-      articleCount: 0,
-      trustedSourceCount: 0,
-      sourceDiversityCount: 0,
-      recent24hCount: 0,
-      recent7dCount: 0,
-      directionalSupport: "neutral",
-      contradictionLevel: "low",
-      catalystPresence: false,
-      riskEventPresence: false,
-      confidence: "low",
       statusSummary: "News ok",
-      tickerSignals: {},
       issues: [],
+      signals: {
+        availabilityStatus: "primary_success",
+        degradedReason: null,
+        articleCount: 0,
+        trustedSourceCount: 0,
+        sourceDiversityCount: 0,
+        recent24hCount: 0,
+        recent7dCount: 0,
+        directionalSupport: "neutral",
+        contradictionLevel: "low",
+        catalystPresence: false,
+        riskEventPresence: false,
+        confidence: "low",
+        statusSummary: "News ok",
+        tickerSignals: {},
+        issues: [],
+      },
+      fetchedAt: "2026-04-02T00:00:00.000Z",
     },
-    fetchedAt: "2026-04-02T00:00:00.000Z",
+    diagnostics: {
+      providerCallCount: 1,
+      retryCount: 0,
+      totalBackoffSeconds: 0,
+      maxSingleBackoffSeconds: 0,
+      stageLatencyMs: 1000,
+      resultState: "fresh",
+      reuseSourceBundleId: null,
+      reuseMissReason: "no_prior_finalized_bundle",
+      requestFingerprint: "news_req_1",
+      materialTickerSet: ["AAPL", "MSFT"],
+      queryMode: "chunked_unified_primary_search_with_yahoo_fallback_v1",
+      selectionContract: "stable_quality_rank_then_url_dedup_v1",
+      articleSetFingerprint: null,
+      reuseHit: false,
+      rawArticleCountFetched: 0,
+      normalizedArticleCountRetained: 0,
+      droppedArticleCount: 0,
+      freshnessDecisionReason: "fresh_fetch_required",
+    },
   });
   mockFetchValuationForAll.mockResolvedValue([]);
   mockBuildCorrelationMatrix.mockResolvedValue({ clusters: [], matrix: [] });
@@ -781,7 +870,7 @@ describe("analysis orchestrator candidate screening reuse gate", () => {
 
     await runFullAnalysis("snap_1", undefined, jest.fn(), "scheduled", "cron");
 
-    expect(mockPrisma.analysisBundle.findMany).toHaveBeenCalledTimes(2);
+    expect(mockPrisma.analysisBundle.findMany).toHaveBeenCalledTimes(3);
     expect(mockScreenCandidatesDetailed).toHaveBeenCalledTimes(1);
     expect(mockScreenCandidatesDetailed.mock.calls[0]?.[7]).toEqual(
       expect.objectContaining({
@@ -1095,6 +1184,71 @@ describe("analysis orchestrator candidate screening reuse gate", () => {
     expect(mockCollectMacroNewsEnvironmentDetailed.mock.calls[0]?.[3]).toEqual(
       expect.objectContaining({
         reuseMissReason: "stale_finalized_macro_evidence",
+      })
+    );
+  });
+
+  test("latest finalized comparable ticker-news artifact is reused before fresh fetch", async () => {
+    const descriptor = buildTickerNewsReuseDescriptor({ tickers: ["MSFT"] });
+    mockPrisma.analysisBundle.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: "bundle_news_reuse",
+          finalizedAt: new Date(Date.now() - (2 * 60 * 60 * 1000)),
+          evidencePacketJson: JSON.stringify(buildStoredTickerNewsArtifact(descriptor)),
+        },
+      ]);
+
+    await runFullAnalysis("snap_1", undefined, jest.fn(), "manual", "user");
+
+    expect(mockFetchAllNewsWithFallbackDetailed).not.toHaveBeenCalled();
+    const newsStep = mockFinalizeAnalysisRun.mock.calls.at(-1)?.[0]?.evidencePacket?.diagnosticsArtifact?.steps.find((step: any) => step.stepKey === "news_sources");
+    expect(newsStep?.inputs).toEqual(
+      expect.objectContaining({
+        executionState: "frozen_artifact_reuse",
+        requestFingerprint: descriptor.requestFingerprint,
+        queryMode: descriptor.queryMode,
+        selectionContract: descriptor.selectionContract,
+        reuseSourceBundleId: "bundle_news_reuse",
+      })
+    );
+    expect(newsStep?.outputs).toEqual(
+      expect.objectContaining({
+        providerCallCount: 0,
+        normalizedArticleCountRetained: 1,
+        articleSetFingerprint: "news_set_fp_1",
+      })
+    );
+    expect(mockFinalizeAnalysisRun.mock.calls.at(-1)?.[0]?.evidencePacket?.tickerNews).toEqual(
+      expect.objectContaining({
+        requestFingerprint: descriptor.requestFingerprint,
+        articleSetFingerprint: expect.any(String),
+      })
+    );
+  });
+
+  test("stale finalized ticker-news artifact forces a fresh ticker-news fetch", async () => {
+    const descriptor = buildTickerNewsReuseDescriptor({ tickers: ["MSFT"] });
+    mockPrisma.analysisBundle.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: "bundle_news_stale",
+          finalizedAt: new Date(Date.now() - ((TICKER_NEWS_REUSE_MAX_AGE_HOURS + 1) * 60 * 60 * 1000)),
+          evidencePacketJson: JSON.stringify(buildStoredTickerNewsArtifact(descriptor)),
+        },
+      ]);
+
+    await runFullAnalysis("snap_1", undefined, jest.fn(), "manual", "user");
+
+    expect(mockFetchAllNewsWithFallbackDetailed).toHaveBeenCalledTimes(1);
+    expect(mockFetchAllNewsWithFallbackDetailed.mock.calls[0]?.[4]).toEqual(
+      expect.objectContaining({
+        reuseMissReason: "stale_finalized_ticker_news",
+        freshnessDecisionReason: `stale_gt_${TICKER_NEWS_REUSE_MAX_AGE_HOURS}h`,
       })
     );
   });

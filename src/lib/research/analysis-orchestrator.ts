@@ -22,7 +22,7 @@ import { prisma } from "@/lib/prisma";
 import { detectMarketRegime }      from "./market-regime";
 import { deriveEnvironmentalGaps, runStructuralGapAnalysisDetailed } from "./gap-analyzer";
 import { screenCandidatesDetailed } from "./candidate-screener";
-import { fetchAllNewsWithFallback } from "./news-fetcher";
+import { fetchAllNewsWithFallbackDetailed } from "./news-fetcher";
 import { fetchPriceTimelines }     from "./price-timeline";
 import { scoreSentimentForAll }    from "./sentiment-scorer";
 import { buildSentimentOverlay, type SentimentOverlay } from "./signal-aggregator";
@@ -68,6 +68,8 @@ import {
   type MacroExposureBridgeResult,
   type MacroNewsEnvironmentResult,
   type MacroThemeConsensusResult,
+  type TickerNewsArtifact,
+  type TickerNewsDiagnostics,
 } from "./types";
 import {
   buildGapAnalysisFingerprint,
@@ -79,6 +81,13 @@ import {
   extractReusableFrozenMacroEvidence,
   MACRO_ENVIRONMENT_REUSE_MAX_AGE_HOURS,
 } from "./macro-environment-reuse";
+import {
+  buildFrozenTickerNewsArtifact,
+  buildTickerNewsReuseDescriptor,
+  extractTickerNewsArtifactFromEvidencePacket,
+  isTickerNewsArtifactFresh,
+  TICKER_NEWS_REUSE_MAX_AGE_HOURS,
+} from "./ticker-news-reuse";
 import {
   buildCandidateScreeningFingerprint,
   CANDIDATE_SCREENING_MODE_RULES,
@@ -378,6 +387,98 @@ function buildReusedMacroEnvironmentDiagnostics(input: {
     queryFamilyKeysAttempted: [],
     queryFamilyKeysWithArticles,
   };
+}
+
+function buildReusedTickerNewsDiagnostics(input: {
+  artifact: TickerNewsArtifact;
+  sourceBundleId: string;
+}): TickerNewsDiagnostics {
+  const retainedArticleCount = Array.isArray(input.artifact.newsResult.allSources)
+    ? input.artifact.newsResult.allSources.length
+    : 0;
+
+  return {
+    providerCallCount: 0,
+    retryCount: 0,
+    totalBackoffSeconds: 0,
+    maxSingleBackoffSeconds: 0,
+    stageLatencyMs: 0,
+    resultState: "frozen_artifact_reuse",
+    reuseSourceBundleId: input.sourceBundleId,
+    reuseMissReason: null,
+    requestFingerprint: input.artifact.requestFingerprint,
+    materialTickerSet: input.artifact.materialTickerSet,
+    queryMode: input.artifact.queryMode,
+    selectionContract: input.artifact.selectionContract,
+    articleSetFingerprint: input.artifact.articleSetFingerprint ?? null,
+    reuseHit: true,
+    rawArticleCountFetched: retainedArticleCount,
+    normalizedArticleCountRetained: retainedArticleCount,
+    droppedArticleCount: 0,
+    freshnessDecisionReason: `within_${TICKER_NEWS_REUSE_MAX_AGE_HOURS}h_finalized_bundle`,
+  };
+}
+
+async function findReusableTickerNewsBundle(input: {
+  userId: string;
+  bundleScope: string;
+  requestFingerprint: string;
+  queryMode: string;
+  selectionContract: string;
+  materialTickerSet: string[];
+}): Promise<
+  | { match: true; bundleId: string; artifact: TickerNewsArtifact }
+  | { match: false; reason: string; bundleId?: string | null }
+> {
+  const bundles = await prisma.analysisBundle.findMany({
+    where: {
+      userId: input.userId,
+      bundleScope: input.bundleScope,
+    },
+    orderBy: { finalizedAt: "desc" },
+    take: 1,
+    select: {
+      id: true,
+      finalizedAt: true,
+      evidencePacketJson: true,
+    },
+  });
+
+  const latestBundle = bundles[0];
+  if (!latestBundle) {
+    return { match: false, reason: "no_prior_finalized_bundle", bundleId: null };
+  }
+
+  if (!isTickerNewsArtifactFresh(latestBundle.finalizedAt, Date.now(), TICKER_NEWS_REUSE_MAX_AGE_HOURS)) {
+    return { match: false, reason: "stale_finalized_ticker_news", bundleId: latestBundle.id };
+  }
+
+  try {
+    const evidencePacket = JSON.parse(latestBundle.evidencePacketJson);
+    const artifact = extractTickerNewsArtifactFromEvidencePacket(evidencePacket);
+    if (!artifact) {
+      return { match: false, reason: "missing_ticker_news_artifact", bundleId: latestBundle.id };
+    }
+    if (artifact.requestFingerprint !== input.requestFingerprint) {
+      return { match: false, reason: "ticker_news_request_mismatch", bundleId: latestBundle.id };
+    }
+    if (artifact.queryMode !== input.queryMode) {
+      return { match: false, reason: "ticker_news_query_mode_mismatch", bundleId: latestBundle.id };
+    }
+    if (artifact.selectionContract !== input.selectionContract) {
+      return { match: false, reason: "ticker_news_selection_contract_mismatch", bundleId: latestBundle.id };
+    }
+    if (JSON.stringify(artifact.materialTickerSet) !== JSON.stringify(input.materialTickerSet)) {
+      return { match: false, reason: "ticker_news_material_ticker_mismatch", bundleId: latestBundle.id };
+    }
+    return {
+      match: true,
+      bundleId: latestBundle.id,
+      artifact,
+    };
+  } catch {
+    return { match: false, reason: "malformed_ticker_news_artifact", bundleId: latestBundle.id };
+  }
 }
 
 export async function findReusableMacroEnvironmentBundle(input: {
@@ -1053,6 +1154,7 @@ function buildNewsSourceDiagnostics(input: {
   allTickers?: string[];
   usingFallbackNews?: boolean;
   newsResult?: any;
+  tickerNewsDiagnostics?: TickerNewsDiagnostics | null;
   sourceRefs: DiagnosticsSourceRefContract[];
 }): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics" | "sources"> {
   const allTickers = Array.isArray(input.allTickers) ? input.allTickers : [];
@@ -1071,6 +1173,7 @@ function buildNewsSourceDiagnostics(input: {
   const sourceCount = input.sourceRefs.length;
   const hasSearchContext = allTickers.length > 0;
   const collectedSources = sourceCount > 0;
+  const diagnostics = input.tickerNewsDiagnostics ?? null;
 
   const status: DiagnosticsStepContract["status"] =
     availabilityStatus === "primary_transport_failure" || availabilityStatus === "primary_rate_limited" || availabilityStatus === "no_usable_news"
@@ -1100,6 +1203,13 @@ function buildNewsSourceDiagnostics(input: {
       fallbackUsed: input.usingFallbackNews ?? false,
       newsAvailabilityStatus: availabilityStatus,
       degradedReason: input.newsResult?.degradedReason ?? null,
+      executionState: diagnostics?.resultState ?? null,
+      requestFingerprint: diagnostics?.requestFingerprint ?? null,
+      queryMode: diagnostics?.queryMode ?? null,
+      selectionContract: diagnostics?.selectionContract ?? null,
+      reuseSourceBundleId: diagnostics?.reuseSourceBundleId ?? null,
+      reuseMissReason: diagnostics?.reuseMissReason ?? null,
+      freshnessDecisionReason: diagnostics?.freshnessDecisionReason ?? null,
       searchScope: hasSearchContext
         ? "The step searched company, sector, and macro events relevant to the analyzed tickers."
         : "The run did not persist enough ticker scope to describe the news search inputs fully.",
@@ -1113,6 +1223,16 @@ function buildNewsSourceDiagnostics(input: {
       breakingNewsSummary: truncateText(breakingText || null),
       combinedResearchSummary: truncateText(input.newsResult?.combinedSummary ?? null),
       topSourceTitles: input.sourceRefs.slice(0, 5).map((source) => source.title),
+      providerPressureState: diagnostics?.resultState ?? null,
+      providerCallCount: diagnostics?.providerCallCount ?? 0,
+      retryCount: diagnostics?.retryCount ?? 0,
+      totalBackoffSeconds: diagnostics?.totalBackoffSeconds ?? 0,
+      maxSingleBackoffSeconds: diagnostics?.maxSingleBackoffSeconds ?? 0,
+      stageLatencyMs: diagnostics?.stageLatencyMs ?? 0,
+      rawArticleCountFetched: diagnostics?.rawArticleCountFetched ?? null,
+      normalizedArticleCountRetained: diagnostics?.normalizedArticleCountRetained ?? null,
+      droppedArticleCount: diagnostics?.droppedArticleCount ?? null,
+      articleSetFingerprint: diagnostics?.articleSetFingerprint ?? null,
       issueSummary: Array.isArray(input.newsResult?.issues)
         ? input.newsResult.issues.slice(0, 3).map((issue: any) => issue.message)
         : [],
@@ -1130,6 +1250,13 @@ function buildNewsSourceDiagnostics(input: {
       ["tickers_reviewed", "Tickers Reviewed", allTickers.length || null],
       ["news_article_count", "News Article Count", newsSignals?.articleCount ?? null],
       ["source_diversity", "Source Diversity", newsSignals?.sourceDiversityCount ?? null],
+      ["provider_call_count", "Provider Call Count", diagnostics?.providerCallCount ?? null],
+      ["retry_count", "Retry Count", diagnostics?.retryCount ?? null],
+      ["total_backoff_seconds", "Total Backoff Seconds", diagnostics?.totalBackoffSeconds ?? null],
+      ["raw_article_count", "Raw Article Count Fetched", diagnostics?.rawArticleCountFetched ?? null],
+      ["normalized_article_count", "Normalized Article Count Retained", diagnostics?.normalizedArticleCountRetained ?? null],
+      ["dropped_article_count", "Dropped Article Count", diagnostics?.droppedArticleCount ?? null],
+      ["ticker_news_reuse_hit", "Ticker News Reuse Hit", diagnostics?.reuseHit ?? null],
     ]),
     sources: input.sourceRefs,
     warnings: Array.isArray(input.newsResult?.issues) && input.newsResult.issues.length > 0
@@ -1449,6 +1576,7 @@ export function buildRunDiagnosticsArtifact(input: {
   candidates?: any[];
   candidateScreening?: CandidateScreeningDiagnostics | null;
   newsResult?: any;
+  tickerNewsDiagnostics?: TickerNewsDiagnostics | null;
   sentimentSignals?: Map<string, any>;
   sentimentOverlay?: any[];
   reportData?: any;
@@ -1542,6 +1670,7 @@ export function buildRunDiagnosticsArtifact(input: {
     allTickers,
     usingFallbackNews: input.usingFallbackNews,
     newsResult: input.newsResult,
+    tickerNewsDiagnostics: input.tickerNewsDiagnostics,
     sourceRefs,
   });
   const sentimentDiagnostics = buildSentimentDiagnostics({
@@ -2103,6 +2232,15 @@ export async function runFullAnalysis(
   const candidateTickers = candidates.map(c => c.ticker);
   const allTickers = [...new Set([...existingTickers, ...candidateTickers])];
   const candidateTickerSet = new Set(candidateTickers.map(t => t.toUpperCase()));
+  const tickerNewsReuseDescriptor = buildTickerNewsReuseDescriptor({ tickers: allTickers });
+  const reusableTickerNews = await findReusableTickerNewsBundle({
+    userId: snapshot.userId,
+    bundleScope: "PRIMARY_PORTFOLIO",
+    requestFingerprint: tickerNewsReuseDescriptor.requestFingerprint,
+    queryMode: tickerNewsReuseDescriptor.queryMode,
+    selectionContract: tickerNewsReuseDescriptor.selectionContract,
+    materialTickerSet: tickerNewsReuseDescriptor.materialTickerSet,
+  });
 
   emit({ type: "log", message: `Total tickers to analyze: ${allTickers.length} (${existingTickers.length} held + ${candidateTickers.length} candidates)`, level: "info" });
 
@@ -2111,11 +2249,35 @@ export async function runFullAnalysis(
   // ══════════════════════════════════════════════════════════════════════════════
   emit({ type: "stage_start", stage: "stage1", label: "Stage 1 · Research", detail: "News, price timelines, valuation, correlation — all parallel" });
 
-  const [newsResult, valuations, correlationMatrix] = await Promise.all([
-    fetchAllNewsWithFallback(openai, allTickers, today, (step) => {
-      const labels = ["24h breaking news", "macro/geopolitical", "company-specific", "sector/regulatory"];
-      emit({ type: "log", message: `News search ${step + 1}/4 complete: ${labels[step] ?? "search"}`, level: "info" });
-    }),
+  const newsFetchPromise = reusableTickerNews.match
+    ? Promise.resolve({
+        newsResult: reusableTickerNews.artifact.newsResult,
+        diagnostics: buildReusedTickerNewsDiagnostics({
+          artifact: reusableTickerNews.artifact,
+          sourceBundleId: reusableTickerNews.bundleId,
+        }),
+      })
+    : fetchAllNewsWithFallbackDetailed(openai, allTickers, today, (step) => {
+        const labels = ["24h breaking news", "macro/geopolitical", "company-specific", "sector/regulatory"];
+        emit({ type: "log", message: `News search ${step + 1}/4 complete: ${labels[step] ?? "search"}`, level: "info" });
+      }, {
+        reuseDescriptor: tickerNewsReuseDescriptor,
+        reuseMissReason: reusableTickerNews.reason,
+        freshnessDecisionReason: reusableTickerNews.reason === "stale_finalized_ticker_news"
+          ? `stale_gt_${TICKER_NEWS_REUSE_MAX_AGE_HOURS}h`
+          : "fresh_fetch_required",
+      });
+
+  if (reusableTickerNews.match) {
+    emit({
+      type: "log",
+      message: `Ticker news reused ${reusableTickerNews.artifact.newsResult.allSources?.length ?? 0} retained source(s) from finalized bundle ${reusableTickerNews.bundleId}.`,
+      level: "info",
+    });
+  }
+
+  const [{ newsResult, diagnostics: tickerNewsDiagnostics }, valuations, correlationMatrix] = await Promise.all([
+    newsFetchPromise,
     fetchValuationForAll(allTickers, emit),
     buildCorrelationMatrix(existingTickers, emit),
   ]);
@@ -2162,6 +2324,9 @@ export async function runFullAnalysis(
   // F6 + W14: Build per-ticker article map WITH day-change-pct context
   const tickerArticles = new Map<string, { title: string; text: string; publishedAt: string }[]>();
   const tickerDayPct = new Map<string, number>();
+  const stableTickerNewsPublishedAt = typeof newsResult.fetchedAt === "string" && newsResult.fetchedAt.length > 0
+    ? newsResult.fetchedAt
+    : `${today}T14:30:00.000Z`;
 
   for (const ticker of allTickers) {
     const tl = timelines.get(ticker.toUpperCase());
@@ -2176,7 +2341,7 @@ export async function runFullAnalysis(
       tickerArticles.set(ticker, mentionLines.map(l => ({
         title: l.slice(0, 120),
         text: l,
-        publishedAt: new Date().toISOString(),
+        publishedAt: stableTickerNewsPublishedAt,
       })));
     }
   }
@@ -2226,6 +2391,10 @@ export async function runFullAnalysis(
   emit({ type: "stage_start", stage: "stage3", label: "Stage 3 · Primary AI Reasoning", detail: "Single gpt-5.4 call with json_schema — authoritative recommendations" });
 
   const frozenNewsResult = freezeRunEvidenceSet(newsResult);
+  const frozenTickerNewsArtifact = freezeRunEvidenceSet(buildFrozenTickerNewsArtifact({
+    descriptor: tickerNewsReuseDescriptor,
+    newsResult: frozenNewsResult,
+  }));
   const frozenMacroEvidence = freezeRunEvidenceSet(buildFrozenMacroEvidence({
     macroEnvironment,
     macroConsensus,
@@ -2349,6 +2518,7 @@ export async function runFullAnalysis(
         candidateSearchLanes: frozenMacroCandidateSearchLanes,
         candidateScreening: candidateScreeningArtifact.diagnostics,
       newsResult: frozenNewsResult,
+      tickerNewsDiagnostics,
       validationSummary: {
         hardErrorCount: 1,
         warningCount: 0,
@@ -2383,6 +2553,7 @@ export async function runFullAnalysis(
           evidencePacketId: null,
           promptHash: budgetPromptHash,
           stage: "stage3",
+          tickerNews: frozenTickerNewsArtifact,
           macroEvidence: frozenMacroEvidence,
           gapAnalysis: gapAnalysisArtifact,
           candidateScreening: candidateScreeningArtifact,
@@ -2495,6 +2666,7 @@ export async function runFullAnalysis(
           evidencePacketId: null,
           promptHash,
           stage: "stage3",
+          tickerNews: frozenTickerNewsArtifact,
           macroEvidence: frozenMacroEvidence,
           gapAnalysis: gapAnalysisArtifact,
           candidateScreening: candidateScreeningArtifact,
@@ -2526,6 +2698,8 @@ export async function runFullAnalysis(
           environmentalGaps: frozenEnvironmentalGaps,
             candidateSearchLanes: frozenMacroCandidateSearchLanes,
             candidateScreening: candidateScreeningArtifact.diagnostics,
+          newsResult: frozenNewsResult,
+          tickerNewsDiagnostics,
           validationSummary: {
             hardErrorCount: 1,
             warningCount: 0,
@@ -2654,6 +2828,7 @@ export async function runFullAnalysis(
           evidencePacketId,
           promptHash,
           stage: "stage3",
+          tickerNews: frozenTickerNewsArtifact,
           macroEvidence: frozenMacroEvidence,
           gapAnalysis: gapAnalysisArtifact,
           candidateScreening: candidateScreeningArtifact,
@@ -2685,6 +2860,8 @@ export async function runFullAnalysis(
           environmentalGaps: frozenEnvironmentalGaps,
             candidateSearchLanes: frozenMacroCandidateSearchLanes,
             candidateScreening: candidateScreeningArtifact.diagnostics,
+          newsResult: frozenNewsResult,
+          tickerNewsDiagnostics,
           validationSummary: {
             hardErrorCount: 1,
             warningCount: 0,
@@ -2905,6 +3082,7 @@ export async function runFullAnalysis(
     candidateScreening: candidateScreeningArtifact.diagnostics,
     candidates,
     newsResult: frozenNewsResult,
+    tickerNewsDiagnostics,
     sentimentSignals: frozenSentimentSignals,
     sentimentOverlay,
     reportData,
@@ -2973,6 +3151,7 @@ export async function runFullAnalysis(
       usingFallbackNews,
       priceDataMissing,
       regime: frozenFinalRegime,
+      tickerNews: frozenTickerNewsArtifact,
       macroEvidence: frozenMacroEvidence,
       gapAnalysis: gapAnalysisArtifact,
       candidateScreening: candidateScreeningArtifact,

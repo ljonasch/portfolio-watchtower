@@ -323,6 +323,34 @@ export interface MacroEnvironmentCollectionResult {
   diagnostics: MacroEnvironmentDiagnostics;
 }
 
+export interface TickerNewsDiagnostics extends StageProviderPressureDiagnostics {
+  requestFingerprint: string;
+  materialTickerSet: string[];
+  queryMode: string;
+  selectionContract: string;
+  articleSetFingerprint: string | null;
+  reuseHit: boolean;
+  rawArticleCountFetched: number;
+  normalizedArticleCountRetained: number;
+  droppedArticleCount: number;
+  freshnessDecisionReason: string | null;
+}
+
+export interface TickerNewsArtifact {
+  schemaVersion: "ticker_news_v1";
+  requestFingerprint: string;
+  materialTickerSet: string[];
+  queryMode: string;
+  selectionContract: string;
+  articleSetFingerprint: string | null;
+  newsResult: NewsResult;
+}
+
+export interface TickerNewsFetchResult {
+  newsResult: NewsResult;
+  diagnostics: TickerNewsDiagnostics;
+}
+
 // ─── Portfolio construction ───────────────────────────────────────────────────
 
 export interface ConcentrationWarning {

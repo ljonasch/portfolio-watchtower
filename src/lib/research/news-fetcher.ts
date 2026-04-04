@@ -16,9 +16,23 @@ import type {
   NewsResult,
   NewsSignalSet,
   Source,
+  TickerNewsDiagnostics,
+  TickerNewsFetchResult,
   TickerNewsSignal,
 } from "./types";
-import { deduplicateSources, rankSources, summarizeSourceQuality } from "./source-ranker";
+import { rankSources, summarizeSourceQuality } from "./source-ranker";
+import {
+  createStageProviderPressureDiagnostics,
+  finalizeStageProviderPressureDiagnostics,
+  recordStageProviderBackoff,
+  recordStageProviderCall,
+} from "./provider-pressure-diagnostics";
+import {
+  buildTickerNewsArticleSetFingerprint,
+  buildTickerNewsReuseDescriptor,
+  normalizeTickerNewsSources,
+  type TickerNewsReuseDescriptor,
+} from "./ticker-news-reuse";
 import {
   NEWS_SEARCH_FETCHER_VERSION,
   buildNewsSearchCacheKey,
@@ -36,6 +50,12 @@ interface SearchAttemptResult extends RawNewsResult {
   degradedReason: NewsDegradedReason | null;
   issues: NewsFetchIssue[];
   modelUsed: string | null;
+}
+
+interface FetchAllNewsDetailedOptions {
+  reuseDescriptor?: TickerNewsReuseDescriptor;
+  reuseMissReason?: string | null;
+  freshnessDecisionReason?: string | null;
 }
 
 const POSITIVE_NEWS_KEYWORDS = [
@@ -399,6 +419,40 @@ export function buildEmptyNewsResult(params: {
   };
 }
 
+function createTickerNewsDiagnostics(params: {
+  tickers: string[];
+  reuseDescriptor?: TickerNewsReuseDescriptor;
+  reuseMissReason?: string | null;
+  freshnessDecisionReason?: string | null;
+}): TickerNewsDiagnostics {
+  const descriptor = params.reuseDescriptor ?? buildTickerNewsReuseDescriptor({ tickers: params.tickers });
+  return {
+    ...createStageProviderPressureDiagnostics("fresh"),
+    requestFingerprint: descriptor.requestFingerprint,
+    materialTickerSet: descriptor.materialTickerSet,
+    queryMode: descriptor.queryMode,
+    selectionContract: descriptor.selectionContract,
+    articleSetFingerprint: null,
+    reuseHit: false,
+    rawArticleCountFetched: 0,
+    normalizedArticleCountRetained: 0,
+    droppedArticleCount: 0,
+    freshnessDecisionReason: params.freshnessDecisionReason ?? null,
+    reuseMissReason: params.reuseMissReason ?? null,
+  };
+}
+
+function finalizeTickerNewsDiagnostics(
+  diagnostics: TickerNewsDiagnostics,
+  stageLatencyMs: number
+): TickerNewsDiagnostics {
+  const baseDiagnostics = finalizeStageProviderPressureDiagnostics(diagnostics, stageLatencyMs);
+  return {
+    ...diagnostics,
+    ...baseDiagnostics,
+  };
+}
+
 // ─── Yahoo Finance fallback ───────────────────────────────────────────────────
 
 export async function fetchYahooFinanceFallback(
@@ -529,6 +583,7 @@ async function openaiSearchCall(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   openai: any,
   prompt: string,
+  diagnostics: TickerNewsDiagnostics,
   attempt = 1,
   priorIssues: NewsFetchIssue[] = []
 ): Promise<SearchAttemptResult> {
@@ -545,6 +600,7 @@ async function openaiSearchCall(
         payload.temperature = 0;
       }
 
+      recordStageProviderCall(diagnostics);
       const resp = await (openai.chat.completions.create as Function)(payload);
 
       const message = resp.choices[0]?.message;
@@ -588,6 +644,7 @@ async function openaiSearchCall(
       };
     } catch (err: any) {
       if (err?.status === 429 && attempt < 8) {
+        recordStageProviderBackoff(diagnostics, 65);
         const rateLimitIssue = buildNewsFetchIssue({
           kind: "primary_rate_limited",
           model,
@@ -598,7 +655,7 @@ async function openaiSearchCall(
         });
         logStructuredNewsIssue(rateLimitIssue);
         await new Promise(r => setTimeout(r, 65000));
-        return openaiSearchCall(openai, prompt, attempt + 1, [...priorIssues, rateLimitIssue]);
+        return openaiSearchCall(openai, prompt, diagnostics, attempt + 1, [...priorIssues, rateLimitIssue]);
       }
       const isDeprecated = err?.status === 404 || err?.message?.includes("deprecated") || err?.message?.includes("not found");
       if (isDeprecated && model !== SEARCH_MODELS[SEARCH_MODELS.length - 1]) {
@@ -654,20 +711,35 @@ async function openaiSearchCall(
 
 // ─── Single unified news search ───────────────────────────────────────────────
 
-export async function fetchAllNewsWithFallback(
+export async function fetchAllNewsWithFallbackDetailed(
   openai: any,
   tickers: string[],
   today: string,
-  onProgress?: (step: number, customMessage?: string) => void
-): Promise<NewsResult> {
+  onProgress?: (step: number, customMessage?: string) => void,
+  options: FetchAllNewsDetailedOptions = {}
+): Promise<TickerNewsFetchResult> {
+  const startedAt = Date.now();
+  const diagnostics = createTickerNewsDiagnostics({
+    tickers,
+    reuseDescriptor: options.reuseDescriptor,
+    reuseMissReason: options.reuseMissReason,
+    freshnessDecisionReason: options.freshnessDecisionReason,
+  });
   const nonCash = tickers.filter((t) => t !== "CASH");
   if (nonCash.length === 0) {
-    return buildEmptyNewsResult({
+    const newsResult = buildEmptyNewsResult({
       tickers,
       availabilityStatus: "no_usable_news",
       degradedReason: "no_usable_news",
       message: "No non-cash tickers were available for news collection.",
     });
+    diagnostics.resultState = "cache_hit";
+    diagnostics.freshnessDecisionReason = diagnostics.freshnessDecisionReason ?? "no_non_cash_tickers";
+    diagnostics.articleSetFingerprint = buildTickerNewsArticleSetFingerprint(newsResult);
+    return {
+      newsResult,
+      diagnostics: finalizeTickerNewsDiagnostics(diagnostics, Date.now() - startedAt),
+    };
   }
 
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split("T")[0];
@@ -730,7 +802,7 @@ Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) 
         fetcherVersion: NEWS_SEARCH_FETCHER_VERSION,
       }),
       versionTag: buildRuntimeVersionTag(["openai_search", NEWS_SEARCH_FETCHER_VERSION]),
-      loader: () => openaiSearchCall(openai, prompt),
+      loader: () => openaiSearchCall(openai, prompt, diagnostics),
     });
 
     issues.push(...(result.issues ?? []));
@@ -759,7 +831,10 @@ Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) 
     }
   }
 
-  const allSources = deduplicateSources(allSourcesRef);
+  const allSources = normalizeTickerNewsSources(allSourcesRef);
+  diagnostics.rawArticleCountFetched = allSourcesRef.length;
+  diagnostics.normalizedArticleCountRetained = allSources.length;
+  diagnostics.droppedArticleCount = Math.max(0, allSourcesRef.length - allSources.length);
 
   const evidenceItem: EvidenceItem = {
     content: fullCombinedText,
@@ -788,28 +863,32 @@ Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) 
       const combinedIssues = [...issues, fallbackIssue];
       const fallbackAvailability: NewsAvailabilityStatus = "fallback_success";
       const fallbackReason = degradedReason ?? "fallback_used";
+      const fallbackSources = normalizeTickerNewsSources(fallback.sources);
+      diagnostics.rawArticleCountFetched = fallback.sources.length;
+      diagnostics.normalizedArticleCountRetained = fallbackSources.length;
+      diagnostics.droppedArticleCount = Math.max(0, fallback.sources.length - fallbackSources.length);
       const signals = buildNewsSignalSet({
         tickers,
         combinedSummary: fallback.summary,
         breaking24h: "",
-        sources: fallback.sources,
+        sources: fallbackSources,
         availabilityStatus: fallbackAvailability,
         degradedReason: fallbackReason,
         issues: combinedIssues,
         usingFallback: true,
       });
 
-      return {
+      const newsResult: NewsResult = {
         evidence: [
           {
             content: fallback.summary,
-            sources: fallback.sources,
+            sources: fallbackSources,
             evidenceType: "secondary",
             category: "macro",
           },
         ],
         combinedSummary: fallback.summary,
-        allSources: fallback.sources,
+        allSources: fallbackSources,
         usingFallback: true,
         breaking24h: "",
         availabilityStatus: fallbackAvailability,
@@ -818,6 +897,13 @@ Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) 
         issues: combinedIssues,
         signals,
         fetchedAt: new Date().toISOString(),
+      };
+      diagnostics.resultState = diagnostics.providerCallCount === 0 ? "cache_hit" : "fresh";
+      diagnostics.freshnessDecisionReason = diagnostics.freshnessDecisionReason ?? "fresh_fetch_required";
+      diagnostics.articleSetFingerprint = buildTickerNewsArticleSetFingerprint(newsResult);
+      return {
+        newsResult,
+        diagnostics: finalizeTickerNewsDiagnostics(diagnostics, Date.now() - startedAt),
       };
     }
 
@@ -829,12 +915,19 @@ Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) 
       retryPath: "none",
     });
     logStructuredNewsIssue(noUsableNewsIssue);
-    return buildEmptyNewsResult({
+    const newsResult = buildEmptyNewsResult({
       tickers,
       availabilityStatus: "no_usable_news",
       degradedReason: degradedReason ?? "no_usable_news",
       issues: [...issues, noUsableNewsIssue],
     });
+    diagnostics.resultState = diagnostics.providerCallCount === 0 ? "cache_hit" : "fresh";
+    diagnostics.freshnessDecisionReason = diagnostics.freshnessDecisionReason ?? "fresh_fetch_required";
+    diagnostics.articleSetFingerprint = buildTickerNewsArticleSetFingerprint(newsResult);
+    return {
+      newsResult,
+      diagnostics: finalizeTickerNewsDiagnostics(diagnostics, Date.now() - startedAt),
+    };
   }
 
   const signals = buildNewsSignalSet({
@@ -848,7 +941,7 @@ Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) 
     usingFallback: false,
   });
 
-  return {
+  const newsResult: NewsResult = {
     evidence: [evidenceItem],
     combinedSummary: fullCombinedText.trim(),
     allSources,
@@ -861,4 +954,21 @@ Cite unique, real article URLs from reputable outlets (Reuters, Bloomberg, WSJ) 
     signals,
     fetchedAt: new Date().toISOString(),
   };
+  diagnostics.resultState = diagnostics.providerCallCount === 0 ? "cache_hit" : "fresh";
+  diagnostics.freshnessDecisionReason = diagnostics.freshnessDecisionReason ?? "fresh_fetch_required";
+  diagnostics.articleSetFingerprint = buildTickerNewsArticleSetFingerprint(newsResult);
+  return {
+    newsResult,
+    diagnostics: finalizeTickerNewsDiagnostics(diagnostics, Date.now() - startedAt),
+  };
+}
+
+export async function fetchAllNewsWithFallback(
+  openai: any,
+  tickers: string[],
+  today: string,
+  onProgress?: (step: number, customMessage?: string) => void
+): Promise<NewsResult> {
+  const result = await fetchAllNewsWithFallbackDetailed(openai, tickers, today, onProgress);
+  return result.newsResult;
 }
