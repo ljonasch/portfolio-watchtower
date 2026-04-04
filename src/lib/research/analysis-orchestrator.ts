@@ -34,7 +34,11 @@ import {
 } from "./macro-theme-consensus";
 import { applyMacroExposureBridge, MACRO_EXPOSURE_BRIDGE_RULES } from "./macro-exposure-bridge";
 import { deriveMacroCandidateSearchLanes, PHASE1_MACRO_LANE_REGISTRY } from "./macro-candidate-lanes";
-import { generatePortfolioReport } from "@/lib/analyzer";
+import {
+  generatePortfolioReport,
+  Stage3PreflightBudgetExceededError,
+  type Stage3FullPromptPreflightSummary,
+} from "@/lib/analyzer";
 import { compareRecommendations }  from "@/lib/comparator";
 import { evaluateAlert }           from "@/lib/alerts";
 import { fetchValuationForAll, formatValuationSection } from "./valuation-fetcher";
@@ -792,6 +796,7 @@ function buildReasoningDiagnostics(input: {
   totalInputChars?: number | null;
   contextSections: string[];
   contextBudget?: Stage3ContextBudgetSummary | null;
+  fullPromptPreflight?: Stage3FullPromptPreflightSummary | null;
   adjudicatorNotes?: Record<string, unknown>;
   allTickers?: string[];
   reportData?: any;
@@ -799,9 +804,12 @@ function buildReasoningDiagnostics(input: {
 }): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics" | "model"> {
   const recommendationCount = input.recommendationRows.length;
   const hasContext = (input.totalInputChars ?? 0) > 0 || input.contextSections.length > 0 || (input.allTickers?.length ?? 0) > 0;
+  const blockedByPreflight = Boolean(input.fullPromptPreflight && !input.fullPromptPreflight.fitsBudget);
   const status: DiagnosticsStepContract["status"] = recommendationCount > 0
     ? "ok"
-    : input.outcome === "validated"
+    : blockedByPreflight
+      ? "not_run"
+      : input.outcome === "validated"
       ? hasContext
         ? "warning"
         : "not_run"
@@ -809,6 +817,8 @@ function buildReasoningDiagnostics(input: {
 
   const outcomeExplanation = recommendationCount > 0
     ? `${recommendationCount} recommendation row(s) were produced from the final reasoning pass.`
+    : blockedByPreflight
+      ? "The final reasoning step was blocked by the full-prompt preflight budget before model invocation."
     : hasContext
       ? "The final reasoning step ran but did not produce actionable recommendation rows."
       : "The final reasoning step did not have enough persisted context to produce or explain recommendation output.";
@@ -829,6 +839,15 @@ function buildReasoningDiagnostics(input: {
             fitsBudget: input.contextBudget.fitsBudget,
           }
         : null,
+      fullPromptPreflight: input.fullPromptPreflight
+        ? {
+            maxTotalChars: input.fullPromptPreflight.maxTotalChars,
+            fullPromptChars: input.fullPromptPreflight.fullPromptChars,
+            fitsBudget: input.fullPromptPreflight.fitsBudget,
+            requiredSectionKeys: input.fullPromptPreflight.requiredSectionKeys,
+            missingRequiredSections: input.fullPromptPreflight.missingRequiredSections,
+          }
+        : null,
       contextSections: input.contextSections.length > 0 ? input.contextSections : ["No per-section context telemetry was persisted for this run."],
       adjudicatorSupport: Object.keys(input.adjudicatorNotes ?? {}).length > 0
         ? `${Object.keys(input.adjudicatorNotes ?? {}).length} low-confidence ticker(s) received adjudicator notes.`
@@ -842,6 +861,11 @@ function buildReasoningDiagnostics(input: {
         ? input.contextBudget.trimmingApplied
           ? `Stage 3 context was trimmed deterministically from ${input.contextBudget.initialTotalChars} to ${input.contextBudget.finalTotalChars} chars before the primary reasoning call.`
           : `Stage 3 context fit within the ${input.contextBudget.maxTotalChars}-char budget without trimming.`
+        : null,
+      preflightOutcome: input.fullPromptPreflight
+        ? input.fullPromptPreflight.fitsBudget
+          ? `Final Stage 3 prompt fit within the ${input.fullPromptPreflight.maxTotalChars}-char preflight budget.`
+          : `Final Stage 3 prompt preflight blocked model invocation at ${input.fullPromptPreflight.fullPromptChars} chars against the ${input.fullPromptPreflight.maxTotalChars}-char budget.`
         : null,
       recommendations: input.recommendationRows.slice(0, 10).map((recommendation: any) => ({
         ticker: recommendation?.ticker ?? null,
@@ -863,6 +887,8 @@ function buildReasoningDiagnostics(input: {
       ["context_initial_chars", "Context Chars (Initial)", input.contextBudget?.initialTotalChars ?? null],
       ["context_final_chars", "Context Chars (Final)", input.contextBudget?.finalTotalChars ?? input.totalInputChars ?? null],
       ["context_trimmed_sections", "Trimmed Sections", input.contextBudget?.trimmedSections.length ?? 0],
+      ["full_prompt_chars", "Full Prompt Chars", input.fullPromptPreflight?.fullPromptChars ?? null],
+      ["missing_required_sections", "Missing Required Sections", input.fullPromptPreflight?.missingRequiredSections.length ?? 0],
     ]),
     warnings: Object.keys(input.adjudicatorNotes ?? {}).length > 0
       ? buildDiagnosticsWarnings([["adjudicator_invoked", "Low-confidence adjudicator notes were captured for this run.", "info"]])
@@ -1064,6 +1090,7 @@ export function buildRunDiagnosticsArtifact(input: {
   perSectionChars?: Record<string, unknown>;
   totalInputChars?: number | null;
   contextBudget?: Stage3ContextBudgetSummary | null;
+  fullPromptPreflight?: Stage3FullPromptPreflightSummary | null;
   sources?: Array<Record<string, unknown>>;
   existingHoldingsCount?: number | null;
   allTickers?: string[];
@@ -1155,6 +1182,7 @@ export function buildRunDiagnosticsArtifact(input: {
     totalInputChars: input.totalInputChars ?? null,
     contextSections,
     contextBudget: input.contextBudget ?? null,
+    fullPromptPreflight: input.fullPromptPreflight ?? null,
     adjudicatorNotes: input.adjudicatorNotes,
     allTickers,
     reportData: input.reportData,
@@ -2025,11 +2053,16 @@ export async function runFullAnalysis(
   } catch (primaryErr: any) {
     // Q3 trace: finish_reason_length, validation_enforce_block, and generic LLM failures
     // all arrive here as thrown Errors from generatePortfolioReport / withRetry.
+    const promptPreflight = primaryErr instanceof Stage3PreflightBudgetExceededError
+      ? primaryErr.preflight
+      : null;
+    const isPreflightAbort = primaryErr instanceof Stage3PreflightBudgetExceededError;
     const isLengthAbort     = primaryErr?.message?.includes("finish_reason_length");
     const isValidationBlock = primaryErr?.message?.includes("validation_enforce_block");
-    const abstainReason     = isLengthAbort     ? "CONTEXT_TOO_LONG"
-                            : isValidationBlock  ? "VALIDATION_HARD_ERROR"
-                            :                      "LLM_FAILURE";
+    const abstainReason     = isPreflightAbort ? "STAGE3_PREFLIGHT_BUDGET_EXCEEDED"
+                            : isLengthAbort    ? "CONTEXT_TOO_LONG"
+                            : isValidationBlock ? "VALIDATION_HARD_ERROR"
+                            :                     "LLM_FAILURE";
 
     if (evidencePacketId) await updateEvidencePacketOutcome(evidencePacketId, "abstained");
 
@@ -2084,6 +2117,7 @@ export async function runFullAnalysis(
           perSectionChars,
           totalInputChars: additionalContext.length,
           contextBudget: stage3ContextBudget.budget,
+          fullPromptPreflight: promptPreflight,
         }),
       },
       evidenceHash: promptHash,
@@ -2123,10 +2157,12 @@ export async function runFullAnalysis(
       exportPayload: { recommendations: [] },
       qualityMeta: {
         abstainReason,
+        isPreflightAbort,
         isLengthAbort,
         promptHash,
         usingFallbackNews: frozenNewsResult.usingFallback ?? false,
         contextBudget: stage3ContextBudget.budget,
+        fullPromptPreflight: promptPreflight,
       },
     });
     finalizedBundleId = finalization.bundleId;
@@ -2256,6 +2292,7 @@ export async function runFullAnalysis(
 
   // Batch 5: Extract token + model telemetry from reportData._meta (set by withRetry in analyzer.ts)
   const llmMeta = (reportData as any)._meta ?? {};
+  const fullPromptPreflight = llmMeta.stage3PromptPreflight ?? null;
   const modelUsed = llmMeta.modelUsed ?? "gpt-4.1";
   const inputTokens = typeof llmMeta.inputTokens === "number" ? llmMeta.inputTokens : null;
   const outputTokens = typeof llmMeta.outputTokens === "number" ? llmMeta.outputTokens : null;
@@ -2301,6 +2338,7 @@ export async function runFullAnalysis(
     perSectionChars,
     totalInputChars: additionalContext.length,
     contextBudget: stage3ContextBudget.budget,
+    fullPromptPreflight,
     existingHoldingsCount: existingTickers.length,
     allTickers,
     sources: (frozenNewsResult.allSources ?? []).map((source: any) => ({
@@ -2457,6 +2495,7 @@ export async function runFullAnalysis(
       perSectionChars,
       totalInputChars: additionalContext.length,
       contextBudget: stage3ContextBudget.budget,
+      fullPromptPreflight,
       evidencePacketId,
       adjudicatorInvoked,
       adjudicatorTickers: Object.keys(adjudicatorNotes),

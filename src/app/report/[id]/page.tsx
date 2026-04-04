@@ -319,7 +319,7 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
                   </div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Estimated Analysis Cost</div>
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Estimated Analysis Cost (heuristic)</div>
                   <div className="mt-1 text-sm font-semibold text-slate-100">
                     {formatUsdEstimate(costEstimate.estimatedTotalCostUsd)}
                   </div>

@@ -220,6 +220,19 @@ describe("analysis orchestrator diagnostics", () => {
         fitsBudget: true,
         trimmingApplied: true,
         trimmedSections: ["news30d"],
+        preservedSections: ["regime", "candidates"],
+      },
+      fullPromptPreflight: {
+        maxTotalChars: 32000,
+        fullPromptChars: 16800,
+        fitsBudget: true,
+        requiredSectionKeys: [
+          "binding_constraints",
+          "full_holdings",
+          "structured_news_status",
+          "core_regime_summary",
+        ],
+        missingRequiredSections: [],
       },
       existingHoldingsCount: 6,
       allTickers: ["AAPL", "MSFT", "AVGO", "NVDA"],
@@ -289,6 +302,7 @@ describe("analysis orchestrator diagnostics", () => {
         recommendationCount: 2,
         outputSummary: "Add AI infrastructure exposure while trimming overlapping software risk.",
         contextBudgetSummary: "Stage 3 context was trimmed deterministically from 5100 to 4200 chars before the primary reasoning call.",
+        preflightOutcome: "Final Stage 3 prompt fit within the 32000-char preflight budget.",
       })
     );
     expect(artifact.steps.find((step) => step.stepKey === "gpt5_reasoning")?.inputs).toEqual(
@@ -297,6 +311,10 @@ describe("analysis orchestrator diagnostics", () => {
           maxTotalChars: 16000,
           trimmingApplied: true,
           trimmedSections: ["news30d"],
+        }),
+        fullPromptPreflight: expect.objectContaining({
+          fullPromptChars: 16800,
+          missingRequiredSections: [],
         }),
       })
     );
@@ -694,5 +712,54 @@ describe("analysis orchestrator diagnostics", () => {
     expect(summary).toContain("Actionable themes:");
     expect(summary).toContain("Macro candidate lanes:");
     expect(summary).not.toContain("Red Sea attacks force carriers onto longer routes");
+  });
+
+  test("reasoning diagnostics distinguish preflight budget blocks from post-call truncation", () => {
+    const artifact = buildRunDiagnosticsArtifact({
+      bundleId: "pending",
+      runId: "run_preflight",
+      outcome: "abstained",
+      generatedAt: "2026-04-02T00:00:00.000Z",
+      evidencePacketId: "packet_1",
+      evidenceHash: "evidence_hash",
+      promptHash: "prompt_hash",
+      versions: {
+        schemaVersion: "v1",
+        analysisPolicyVersion: "v1",
+        viewModelVersion: "v1",
+      },
+      primaryModel: "gpt-5.4",
+      responseHash: null,
+      reportData: { recommendations: [] },
+      validationSummary: {
+        hardErrorCount: 1,
+        warningCount: 0,
+        reasonCodes: ["STAGE3_PREFLIGHT_BUDGET_EXCEEDED"],
+      },
+      totalInputChars: 15000,
+      contextBudget: {
+        maxTotalChars: 16000,
+        initialTotalChars: 18000,
+        finalTotalChars: 15000,
+        fitsBudget: true,
+        trimmingApplied: true,
+        trimmedSections: ["news30d"],
+        preservedSections: ["regime", "candidates"],
+      },
+      fullPromptPreflight: {
+        maxTotalChars: 32000,
+        fullPromptChars: 36500,
+        fitsBudget: false,
+        requiredSectionKeys: ["binding_constraints", "full_holdings", "structured_news_status", "core_regime_summary"],
+        missingRequiredSections: [],
+      },
+    });
+
+    expect(artifact.steps.find((step) => step.stepKey === "gpt5_reasoning")?.outputs).toEqual(
+      expect.objectContaining({
+        outcomeExplanation: "The final reasoning step was blocked by the full-prompt preflight budget before model invocation.",
+        preflightOutcome: "Final Stage 3 prompt preflight blocked model invocation at 36500 chars against the 32000-char budget.",
+      })
+    );
   });
 });

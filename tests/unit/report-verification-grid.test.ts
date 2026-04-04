@@ -29,7 +29,7 @@ describe("report verification grid", () => {
     const source = fs.readFileSync(REPORT_PAGE, "utf-8");
 
     expect(source).toContain('import { estimateAnalysisCost } from "@/lib/report-cost-estimator"');
-    expect(source).toContain("Estimated Analysis Cost");
+    expect(source).toContain("Estimated Analysis Cost (heuristic)");
     expect(source).toContain("Primary model");
   });
 

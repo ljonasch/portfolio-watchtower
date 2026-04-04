@@ -21,6 +21,7 @@ export type LegacyAbstainReason =
   | "evidence_packet_persist_failed"
   | "circuit_breaker_open"
   | "CONTEXT_TOO_LONG"
+  | "STAGE3_PREFLIGHT_BUDGET_EXCEEDED"
   | "LLM_FAILURE"
   | "VALIDATION_HARD_ERROR";
 

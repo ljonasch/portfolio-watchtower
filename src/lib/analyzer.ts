@@ -43,6 +43,30 @@ import type {
 
 export type RecommendationResult = RecommendationV3;
 
+export const STAGE3_FULL_PROMPT_BUDGET = {
+  maxTotalChars: 32000,
+} as const;
+
+export interface Stage3FullPromptPreflightSummary {
+  maxTotalChars: number;
+  fullPromptChars: number;
+  fitsBudget: boolean;
+  requiredSectionKeys: string[];
+  missingRequiredSections: string[];
+}
+
+export class Stage3PreflightBudgetExceededError extends Error {
+  readonly preflight: Stage3FullPromptPreflightSummary;
+
+  constructor(preflight: Stage3FullPromptPreflightSummary) {
+    super(
+      `stage3_preflight_budget_exceeded: Final Stage 3 prompt measured ${preflight.fullPromptChars} chars, above the ${preflight.maxTotalChars}-char budget.`
+    );
+    this.name = "Stage3PreflightBudgetExceededError";
+    this.preflight = preflight;
+  }
+}
+
 function appendSystemNote(rec: RecommendationV3, note: string): string {
   return rec.systemNote ? `${rec.systemNote} ${note}` : note;
 }
@@ -75,7 +99,7 @@ function demoteConfidence(confidence: RecommendationV3["confidence"]): Recommend
 function buildNewsStatusNote(newsResult: NewsResult): string {
   switch (newsResult.availabilityStatus) {
     case "primary_success":
-      return "";
+      return `\n[NEWS STATUS: ${newsResult.statusSummary} Treat company-news support as available for this run, but keep news as a structured secondary input.]\n`;
     case "fallback_success":
       return `\n[NEWS STATUS: ${newsResult.statusSummary} Treat fallback headlines as lower-confidence supporting context, not as equivalent to healthy primary coverage.]\n`;
     case "primary_transport_failure":
@@ -85,6 +109,31 @@ function buildNewsStatusNote(newsResult: NewsResult): string {
     default:
       return `\n[NEWS STATUS: ${newsResult.statusSummary} Reduce company-news confidence for this run and do not infer missing headlines.]\n`;
   }
+}
+
+export function buildFinalAnalysisPrompt(prompt: string, additionalContext?: string): string {
+  return additionalContext
+    ? `${additionalContext}\n\n${prompt}`
+    : prompt;
+}
+
+export function preflightStage3Prompt(input: {
+  fullPrompt: string;
+  requiredMarkers: Array<{ key: string; marker: string }>;
+  maxTotalChars?: number;
+}): Stage3FullPromptPreflightSummary {
+  const maxTotalChars = input.maxTotalChars ?? STAGE3_FULL_PROMPT_BUDGET.maxTotalChars;
+  const missingRequiredSections = input.requiredMarkers
+    .filter(({ marker }) => !input.fullPrompt.includes(marker))
+    .map(({ key }) => key);
+
+  return {
+    maxTotalChars,
+    fullPromptChars: input.fullPrompt.length,
+    fitsBudget: input.fullPrompt.length <= maxTotalChars && missingRequiredSections.length === 0,
+    requiredSectionKeys: input.requiredMarkers.map(({ key }) => key),
+    missingRequiredSections,
+  };
 }
 
 export function buildPromptNewsContext(newsResult: NewsResult, today: string): {
@@ -634,10 +683,30 @@ export async function generatePortfolioReport(
   onProgress?.(3);
   const prompt = buildAnalysisPrompt(ctx, newsSection, trustedSources, convictions ?? [], newsStatusNote);
 
-  // Prepend orchestrator-provided context (regime, sentiment, price reactions, candidates)
-  const fullPrompt = additionalContext
-    ? `${additionalContext}\n\n${prompt}`
-    : prompt;
+  const requiredMarkers = [
+    { key: "binding_constraints", marker: "=== B. BINDING PORTFOLIO CONSTRAINTS ===" },
+    { key: "full_holdings", marker: "=== C. CURRENT PORTFOLIO" },
+    { key: "structured_news_status", marker: "[NEWS STATUS:" },
+    ...(ctx.priorRecommendations.length > 0
+      ? [{ key: "prior_recommendations", marker: "=== PRIOR RECOMMENDATIONS (Convergence Anchor) ===" }]
+      : []),
+    ...(additionalContext?.includes("=== MARKET REGIME ===")
+      ? [{ key: "core_regime_summary", marker: "=== MARKET REGIME ===" }]
+      : []),
+    ...(additionalContext?.includes("=== CANDIDATE POSITIONS TO EVALUATE ===")
+      ? [{ key: "final_candidate_list", marker: "=== CANDIDATE POSITIONS TO EVALUATE ===" }]
+      : []),
+  ];
+
+  const fullPrompt = buildFinalAnalysisPrompt(prompt, additionalContext);
+  const promptPreflight = preflightStage3Prompt({
+    fullPrompt,
+    requiredMarkers,
+  });
+
+  if (!promptPreflight.fitsBudget) {
+    throw new Stage3PreflightBudgetExceededError(promptPreflight);
+  }
 
   let response: any = null;
   let rawParsed: Partial<PortfolioReportV3> | null = null;
@@ -803,6 +872,7 @@ export async function generatePortfolioReport(
     outputTokens: response?.usage?.completion_tokens ?? null,
     retryCount: llmRetryCount,
     validationWarningCount: validation.warnings.length,
+    stage3PromptPreflight: promptPreflight,
   };
 
   return report;

@@ -49,4 +49,39 @@ describe("stage3 context budget", () => {
     expect(result.budget.fitsBudget).toBe(false);
     expect(result.budget.finalTotalChars).toBeGreaterThan(result.budget.maxTotalChars);
   });
+
+  test("preserves the regime section and at least one usable candidate row after compaction", () => {
+    const result = budgetStage3Context({
+      ...baseSections,
+      candidates: [
+        "=== CANDIDATE POSITIONS TO EVALUATE ===",
+        "These are NOT currently held. To recommend adding any:",
+        "1. Evidence quality HIGH only",
+        "2. Identify which existing position funds it",
+        "3. Explain why better than increasing an existing position",
+        "AVGO (Broadcom, $100.00): via gap_screener, lane: macro_lane:defense_fiscal_beneficiaries, catalyst: AI networking, reason: fills infrastructure gap",
+        "RTX (RTX, $90.00): via macro_lane, lane: macro_lane:defense_fiscal_beneficiaries, catalyst: defense budget expansion, reason: policy beneficiary",
+        "=== END CANDIDATES ===",
+      ].join("\n"),
+    }, {
+      maxTotalChars: 1800,
+      softCaps: {
+        regime: 200,
+        macroEnvironment: 200,
+        breaking24h: 200,
+        news30d: 200,
+        priceReactions: 200,
+        sentiment: 200,
+        valuation: 200,
+        correlation: 200,
+        candidates: 320,
+      },
+    });
+
+    expect(result.sections.regime).toContain("=== MARKET REGIME ===");
+    expect(result.sections.candidates).toContain("=== CANDIDATE POSITIONS TO EVALUATE ===");
+    expect(result.sections.candidates).toContain("=== END CANDIDATES ===");
+    expect(result.sections.candidates).toMatch(/AVGO|RTX/);
+    expect(result.budget.preservedSections).toEqual(expect.arrayContaining(["regime", "candidates"]));
+  });
 });
