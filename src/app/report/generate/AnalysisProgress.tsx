@@ -89,7 +89,15 @@ function SeverityBadge({ severity }: { severity: Gap["severity"] }) {
 
 // ── Main Component ─────────────────────────────────────────────────────────────────
 
-export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: string; customPrompt?: string }) {
+export function AnalysisProgress({
+  snapshotId,
+  customPrompt,
+  candidateScreeningMode = "normal",
+}: {
+  snapshotId: string;
+  customPrompt?: string;
+  candidateScreeningMode?: "normal" | "lite";
+}) {
   const router = useRouter();
   const logRef = useRef<HTMLDivElement>(null);
   const logCounter = useRef(0);
@@ -158,7 +166,7 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
         const res = await fetch("/api/analyze/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ snapshotId, customPrompt }),
+          body: JSON.stringify({ snapshotId, customPrompt, candidateScreeningMode }),
           signal: ctrl.signal,
         });
 
@@ -189,7 +197,7 @@ export function AnalysisProgress({ snapshotId, customPrompt }: { snapshotId: str
     run();
     return () => ctrl.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshotId]);
+  }, [snapshotId, customPrompt, candidateScreeningMode]);
 
   function addLog(message: string, level: LiveLog["level"] = "info") {
     const entry: LiveLog = { id: ++logCounter.current, message, level, ts: Date.now() };

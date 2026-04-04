@@ -1,10 +1,14 @@
 import { prisma } from "@/lib/prisma";
 import { runDailyCheck } from "@/lib/services";
+import type { CandidateScreeningModePreference } from "@/lib/research/types";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 300;
 
 export async function POST(req: Request) {
+  const { candidateScreeningMode } = await req.json().catch(() => ({ candidateScreeningMode: "normal" }));
+  const requestedCandidateScreeningMode: CandidateScreeningModePreference =
+    candidateScreeningMode === "lite" ? "lite" : "normal";
   const user = await prisma.user.findFirst({ include: { profile: true } });
   if (!user || !user.profile) {
     return NextResponse.json({ error: "No user profile found" }, { status: 404 });
@@ -33,6 +37,7 @@ export async function POST(req: Request) {
         const onProgress = (step: number) => send({ step });
         const result = await runDailyCheck({
           triggerType: "manual",
+          candidateScreeningMode: requestedCandidateScreeningMode,
           triggeredBy: `${user.name ?? "User"} (manual debug trigger)`,
           onProgress,
         });

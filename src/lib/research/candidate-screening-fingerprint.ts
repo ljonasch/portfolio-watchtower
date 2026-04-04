@@ -3,6 +3,8 @@ import { createHash } from "crypto";
 import type {
   CandidateScreeningArtifact,
   CandidateScreeningMode,
+  CandidateScreeningModePreference,
+  CandidateScreeningModeSelection,
   CandidateSearchLane,
 } from "./types";
 
@@ -47,10 +49,35 @@ export function expandCandidateScreeningAliases(tickers: string[]): Set<string> 
   return expanded;
 }
 
+export function resolveCandidateScreeningSelection(input: {
+  triggerType: "manual" | "scheduled" | "debug";
+  preferredMode?: CandidateScreeningModePreference | null;
+}): {
+  mode: CandidateScreeningMode;
+  modeLabel: CandidateScreeningModePreference;
+  selection: CandidateScreeningModeSelection;
+} {
+  const explicitManualLite = input.triggerType === "manual" && input.preferredMode === "lite";
+  if (explicitManualLite) {
+    return {
+      mode: "lite",
+      modeLabel: "lite",
+      selection: "explicit_manual_lite",
+    };
+  }
+
+  return {
+    mode: "full",
+    modeLabel: "normal",
+    selection: "default_normal",
+  };
+}
+
 export function resolveCandidateScreeningMode(
-  triggerType: "manual" | "scheduled" | "debug"
+  triggerType: "manual" | "scheduled" | "debug",
+  preferredMode?: CandidateScreeningModePreference | null
 ): CandidateScreeningMode {
-  return triggerType === "scheduled" ? "lite" : "full";
+  return resolveCandidateScreeningSelection({ triggerType, preferredMode }).mode;
 }
 
 export function sortMacroLanesForScreening(lanes: CandidateSearchLane[]): CandidateSearchLane[] {

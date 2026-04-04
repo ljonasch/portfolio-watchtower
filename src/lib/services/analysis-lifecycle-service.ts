@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
 import type { ProgressEvent } from "@/lib/research/progress-events";
+import type { CandidateScreeningModePreference } from "@/lib/research/types";
 import type { DeliveryStatus } from "@/lib/contracts";
 import {
   enrichConcurrentRunMessage,
@@ -12,6 +13,7 @@ import {
 export interface RunStreamAnalysisInput {
   snapshotId: string;
   customPrompt?: string;
+  candidateScreeningMode?: CandidateScreeningModePreference;
   emit: (event: ProgressEvent) => void;
   triggerType?: "manual" | "scheduled" | "debug";
   triggeredBy?: string;
@@ -617,7 +619,8 @@ export async function runStreamAnalysis(input: RunStreamAnalysisInput) {
     input.emit,
     input.triggerType ?? "manual",
     input.triggeredBy,
-    input.existingRunId
+    input.existingRunId,
+    input.candidateScreeningMode
   );
 }
 
@@ -658,10 +661,11 @@ function shouldSendDailyAlertEmail(
 
 export async function runDailyCheck(opts: {
   triggerType?: "scheduled" | "manual" | "debug";
+  candidateScreeningMode?: CandidateScreeningModePreference;
   triggeredBy?: string;
   onProgress?: (step: number) => void;
 } = {}): Promise<{ runId: string; reportId: string; alertLevel: string }> {
-  const { triggerType = "scheduled", triggeredBy = "cron", onProgress } = opts;
+  const { triggerType = "scheduled", candidateScreeningMode, triggeredBy = "cron", onProgress } = opts;
 
   const user = await prisma.user.findFirst({ include: { profile: true } });
   if (!user || !user.profile) throw new Error("No user profile found.");
@@ -727,6 +731,7 @@ export async function runDailyCheck(opts: {
           }
         },
         triggerType: triggerType as any,
+        candidateScreeningMode,
         triggeredBy,
       });
     } catch (err: any) {

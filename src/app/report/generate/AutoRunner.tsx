@@ -7,6 +7,7 @@ import { AnalysisProgress } from "./AnalysisProgress";
 export function AutoRunner({ snapshotId }: { snapshotId: string }) {
   const [started, setStarted] = useState(false);
   const [customPrompt, setCustomPrompt] = useState("");
+  const [useLiteCandidateScreening, setUseLiteCandidateScreening] = useState(false);
 
   if (!started) {
     return (
@@ -27,6 +28,23 @@ export function AutoRunner({ snapshotId }: { snapshotId: string }) {
           </p>
         </div>
 
+        <label className="flex items-start gap-3 rounded-xl border border-slate-700/80 bg-slate-900/40 px-4 py-3 text-left">
+          <input
+            type="checkbox"
+            checked={useLiteCandidateScreening}
+            onChange={(e) => setUseLiteCandidateScreening(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-950 text-blue-500 focus:ring-blue-500/50"
+          />
+          <span className="space-y-1">
+            <span className="block text-sm font-semibold text-slate-200">
+              Use Lite candidate screening
+            </span>
+            <span className="block text-xs leading-relaxed text-slate-500">
+              Normal candidate screening is the default. Lite reuses more prior screening context and narrows macro-lane breadth for this manual run only.
+            </span>
+          </span>
+        </label>
+
         <button
           onClick={() => setStarted(true)}
           className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold rounded-xl py-3.5 shadow-[0_0_20px_rgba(59,130,246,0.2)] hover:shadow-[0_0_25px_rgba(59,130,246,0.3)] transition-all flex items-center justify-center gap-2"
@@ -42,6 +60,7 @@ export function AutoRunner({ snapshotId }: { snapshotId: string }) {
     <AnalysisProgress
       snapshotId={snapshotId}
       customPrompt={customPrompt.trim() || undefined}
+      candidateScreeningMode={useLiteCandidateScreening ? "lite" : "normal"}
     />
   );
 }

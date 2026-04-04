@@ -1,6 +1,7 @@
 import {
   buildCandidateScreeningFingerprint,
   resolveCandidateScreeningMode,
+  resolveCandidateScreeningSelection,
   selectMacroLanesForScreening,
 } from "@/lib/research/candidate-screening-fingerprint";
 import type { CandidateSearchLane } from "@/lib/research/types";
@@ -90,9 +91,23 @@ describe("candidate screening fingerprint", () => {
     expect(changedLane).not.toBe(base);
   });
 
-  test("scheduled runs resolve to lite mode and lite lane selection is conservatively capped", () => {
-    expect(resolveCandidateScreeningMode("scheduled")).toBe("lite");
+  test("scheduled and manual runs default to normal/full unless manual lite is explicitly requested", () => {
+    expect(resolveCandidateScreeningMode("scheduled")).toBe("full");
     expect(resolveCandidateScreeningMode("manual")).toBe("full");
+    expect(resolveCandidateScreeningMode("debug")).toBe("full");
+    expect(resolveCandidateScreeningMode("manual", "lite")).toBe("lite");
+    expect(resolveCandidateScreeningMode("scheduled", "lite")).toBe("full");
+
+    expect(resolveCandidateScreeningSelection({ triggerType: "manual", preferredMode: "lite" })).toEqual({
+      mode: "lite",
+      modeLabel: "lite",
+      selection: "explicit_manual_lite",
+    });
+    expect(resolveCandidateScreeningSelection({ triggerType: "scheduled", preferredMode: "lite" })).toEqual({
+      mode: "full",
+      modeLabel: "normal",
+      selection: "default_normal",
+    });
 
     const selection = selectMacroLanesForScreening([laneB, laneA], "lite");
     expect(selection.selected.map((lane) => lane.laneId)).toEqual([

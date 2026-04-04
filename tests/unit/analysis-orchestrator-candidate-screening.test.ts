@@ -207,7 +207,10 @@ function buildStoredCandidateScreeningArtifact(fingerprint: string) {
         },
       ],
       diagnostics: {
+        triggerType: "manual",
         mode: "lite",
+        modeLabel: "lite",
+        modeSelection: "explicit_manual_lite",
         fingerprint,
         maxMacroLanes: 2,
         targetValidatedCandidateCount: 3,
@@ -475,7 +478,7 @@ describe("analysis orchestrator candidate screening reuse gate", () => {
     installBaseMocks();
   });
 
-  test("matching prior bundle evidence fingerprint reuses screened candidates and skips fresh screening", async () => {
+  test("matching prior bundle evidence fingerprint reuses screened candidates and skips fresh screening for an explicit manual lite run", async () => {
     const fingerprint = buildCandidateScreeningFingerprint({
       mode: "lite",
       structuralSearchBrief: "Find high-quality additions.",
@@ -492,7 +495,7 @@ describe("analysis orchestrator candidate screening reuse gate", () => {
     ]);
 
     const emit = jest.fn();
-    const result = await runFullAnalysis("snap_1", undefined, emit, "scheduled", "cron");
+    const result = await runFullAnalysis("snap_1", undefined, emit, "manual", "user", undefined, "lite");
 
     expect(mockScreenCandidatesDetailed).not.toHaveBeenCalled();
     expect(mockFinalizeAnalysisRun).toHaveBeenCalled();
@@ -511,7 +514,7 @@ describe("analysis orchestrator candidate screening reuse gate", () => {
     expect(result.reportId).toBe("report_new");
   });
 
-  test("changed fingerprint falls through to fresh screening in lite mode", async () => {
+  test("changed fingerprint falls through to fresh screening in an explicit manual lite run", async () => {
     mockPrisma.analysisBundle.findMany.mockResolvedValue([
       {
         id: "bundle_old",
@@ -530,7 +533,10 @@ describe("analysis orchestrator candidate screening reuse gate", () => {
         },
       ],
       diagnostics: {
+        triggerType: "manual",
         mode: "lite",
+        modeLabel: "lite",
+        modeSelection: "explicit_manual_lite",
         fingerprint: "ignored_here",
         maxMacroLanes: 2,
         targetValidatedCandidateCount: 3,
@@ -563,14 +569,81 @@ describe("analysis orchestrator candidate screening reuse gate", () => {
     });
 
     const emit = jest.fn();
-    await runFullAnalysis("snap_1", undefined, emit, "scheduled", "cron");
+    await runFullAnalysis("snap_1", undefined, emit, "manual", "user", undefined, "lite");
 
     expect(mockScreenCandidatesDetailed).toHaveBeenCalledTimes(1);
+    expect(mockScreenCandidatesDetailed.mock.calls[0]?.[7]).toEqual(
+      expect.objectContaining({
+        mode: "lite",
+        triggerType: "manual",
+        modeLabel: "lite",
+        modeSelection: "explicit_manual_lite",
+      })
+    );
     expect(mockFinalizeAnalysisRun.mock.calls.at(-1)?.[0]?.evidencePacket?.candidateScreening?.diagnostics).toEqual(
       expect.objectContaining({
         reuseHit: false,
         reuseMissReason: "no_matching_bundle_fingerprint",
         totalProviderPromptCount: 1,
+      })
+    );
+  });
+
+  test("scheduled runs default to full screening even when no manual override is provided", async () => {
+    mockPrisma.analysisBundle.findMany.mockResolvedValue([
+      {
+        id: "bundle_reuse",
+        evidencePacketJson: JSON.stringify(buildStoredCandidateScreeningArtifact("irrelevant_fp")),
+      },
+    ]);
+    mockScreenCandidatesDetailed.mockResolvedValue({
+      candidates: [],
+      diagnostics: {
+        triggerType: "scheduled",
+        mode: "full",
+        modeLabel: "normal",
+        modeSelection: "default_normal",
+        fingerprint: "ignored_here",
+        maxMacroLanes: null,
+        targetValidatedCandidateCount: 5,
+        totalProviderPromptCount: 1,
+        structuralPromptCount: 1,
+        macroLanePromptCount: 0,
+        retryCount: 0,
+        totalBackoffSeconds: 0,
+        rateLimitedPromptCount: 0,
+        macroLaneIdsAvailable: ["macro_lane:defense_fiscal_beneficiaries"],
+        macroLaneIdsConsidered: ["macro_lane:defense_fiscal_beneficiaries"],
+        queriedLaneIds: [],
+        skippedLaneIds: [],
+        laneCountQueried: 0,
+        laneCountSkipped: 0,
+        skippedLanesDueToEnoughSurvivors: 0,
+        rawCandidateCount: 0,
+        dedupedCandidateCount: 0,
+        candidatesSentToPriceValidation: 0,
+        validatedSurvivors: 0,
+        validatedSurvivorsByOrigin: {
+          structural: 0,
+          macroLane: 0,
+        },
+        reuseHit: false,
+        reuseSourceBundleId: null,
+        reuseMissReason: null,
+        stoppedEarly: false,
+      },
+    });
+
+    await runFullAnalysis("snap_1", undefined, jest.fn(), "scheduled", "cron");
+
+    expect(mockPrisma.analysisBundle.findMany).not.toHaveBeenCalled();
+    expect(mockScreenCandidatesDetailed).toHaveBeenCalledTimes(1);
+    expect(mockScreenCandidatesDetailed.mock.calls[0]?.[7]).toEqual(
+      expect.objectContaining({
+        mode: "full",
+        triggerType: "scheduled",
+        modeLabel: "normal",
+        modeSelection: "default_normal",
       })
     );
   });

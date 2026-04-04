@@ -6,15 +6,21 @@
 
 import { runStreamAnalysis } from "@/lib/services";
 import type { ProgressEvent } from "@/lib/research/progress-events";
-import { AnalysisAbstainedError } from "@/lib/research/types";
+import { AnalysisAbstainedError, type CandidateScreeningModePreference } from "@/lib/research/types";
 
 export const maxDuration = 300; // 5-minute Vercel timeout
 
 export async function POST(req: Request): Promise<Response> {
-  const { snapshotId, customPrompt } = await req.json().catch(() => ({ snapshotId: "", customPrompt: "" }));
+  const {
+    snapshotId,
+    customPrompt,
+    candidateScreeningMode,
+  } = await req.json().catch(() => ({ snapshotId: "", customPrompt: "", candidateScreeningMode: "normal" }));
   if (!snapshotId) {
     return new Response(JSON.stringify({ error: "Missing snapshotId" }), { status: 400 });
   }
+  const requestedCandidateScreeningMode: CandidateScreeningModePreference =
+    candidateScreeningMode === "lite" ? "lite" : "normal";
 
   const encoder = new TextEncoder();
 
@@ -27,7 +33,12 @@ export async function POST(req: Request): Promise<Response> {
       };
 
       try {
-        await runStreamAnalysis({ snapshotId, customPrompt, emit: enqueue });
+        await runStreamAnalysis({
+          snapshotId,
+          customPrompt,
+          candidateScreeningMode: requestedCandidateScreeningMode,
+          emit: enqueue,
+        });
       } catch (err: any) {
         if (err instanceof AnalysisAbstainedError) {
           enqueue({

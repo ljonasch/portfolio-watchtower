@@ -405,9 +405,14 @@ export interface ScreenedCandidate {
 }
 
 export type CandidateScreeningMode = "lite" | "full";
+export type CandidateScreeningModePreference = "normal" | "lite";
+export type CandidateScreeningModeSelection = "default_normal" | "explicit_manual_lite";
 
 export interface CandidateScreeningDiagnostics {
+  triggerType: "manual" | "scheduled" | "debug";
   mode: CandidateScreeningMode;
+  modeLabel: CandidateScreeningModePreference;
+  modeSelection: CandidateScreeningModeSelection;
   fingerprint: string;
   maxMacroLanes: number | null;
   targetValidatedCandidateCount: number;

@@ -197,6 +197,7 @@ describe("analysis-lifecycle-service", () => {
     await runStreamAnalysis({
       snapshotId: "snapshot_1",
       customPrompt: "focus on risk",
+      candidateScreeningMode: "lite",
       emit,
       triggerType: "manual",
       triggeredBy: "user",
@@ -208,7 +209,8 @@ describe("analysis-lifecycle-service", () => {
       emit,
       "manual",
       "user",
-      undefined
+      undefined,
+      "lite"
     );
   });
 

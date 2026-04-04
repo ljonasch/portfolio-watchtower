@@ -14,6 +14,8 @@ import {
 import type {
   CandidateScreeningDiagnostics,
   CandidateScreeningMode,
+  CandidateScreeningModePreference,
+  CandidateScreeningModeSelection,
   CandidateScreeningResult,
   CandidateSearchLane,
   ScreenedCandidate,
@@ -44,6 +46,9 @@ interface ScreeningPromptConfig {
 
 export interface ScreenCandidatesOptions {
   mode?: CandidateScreeningMode;
+  triggerType?: "manual" | "scheduled" | "debug";
+  modeLabel?: CandidateScreeningModePreference;
+  modeSelection?: CandidateScreeningModeSelection;
   fingerprint?: string;
 }
 
@@ -186,14 +191,20 @@ Return ONLY a JSON array:
 }
 
 function buildEmptyDiagnostics(input: {
+  triggerType: "manual" | "scheduled" | "debug";
   mode: CandidateScreeningMode;
+  modeLabel: CandidateScreeningModePreference;
+  modeSelection: CandidateScreeningModeSelection;
   fingerprint: string;
   macroLaneIdsAvailable: string[];
   macroLaneIdsConsidered: string[];
 }): CandidateScreeningDiagnostics {
   const modeRules = CANDIDATE_SCREENING_MODE_RULES[input.mode];
   return {
+    triggerType: input.triggerType,
     mode: input.mode,
+    modeLabel: input.modeLabel,
+    modeSelection: input.modeSelection,
     fingerprint: input.fingerprint,
     maxMacroLanes: modeRules.maxMacroLanes,
     targetValidatedCandidateCount: modeRules.targetValidatedCandidateCount,
@@ -332,6 +343,9 @@ export async function screenCandidatesDetailed(
   const t0 = Date.now();
 
   const mode = options.mode ?? "full";
+  const triggerType = options.triggerType ?? "manual";
+  const modeLabel = options.modeLabel ?? (mode === "lite" ? "lite" : "normal");
+  const modeSelection = options.modeSelection ?? (mode === "lite" ? "explicit_manual_lite" : "default_normal");
   const excluded = existingTickers.join(", ");
   const riskTolerance = profile.trackedAccountRiskTolerance ?? "medium";
   const permittedAssets = profile.permittedAssetClasses ?? "Stocks, ETFs";
@@ -353,7 +367,10 @@ export async function screenCandidatesDetailed(
       riskTolerance,
     });
   const diagnostics = buildEmptyDiagnostics({
+    triggerType,
     mode,
+    modeLabel,
+    modeSelection,
     fingerprint,
     macroLaneIdsAvailable: allSortedMacroLanes.map((lane) => lane.laneId),
     macroLaneIdsConsidered: laneSelection.selected.map((lane) => lane.laneId),

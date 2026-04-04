@@ -59,6 +59,7 @@ import {
   type CandidateScreeningArtifact,
   type CandidateScreeningDiagnostics,
   type CandidateScreeningMode,
+  type CandidateScreeningModePreference,
   type CandidateSearchLane,
   type EnvironmentalGap,
   type MacroExposureBridgeResult,
@@ -69,7 +70,7 @@ import {
   buildCandidateScreeningFingerprint,
   CANDIDATE_SCREENING_MODE_RULES,
   extractCandidateScreeningArtifactFromEvidencePacket,
-  resolveCandidateScreeningMode,
+  resolveCandidateScreeningSelection,
   selectMacroLanesForScreening,
   sortMacroLanesForScreening,
 } from "./candidate-screening-fingerprint";
@@ -392,7 +393,10 @@ function buildGapScanDiagnostics(input: {
 }
 
 function buildReusedCandidateScreeningArtifact(input: {
+  triggerType: "manual" | "scheduled" | "debug";
   mode: CandidateScreeningMode;
+  modeLabel: CandidateScreeningModePreference;
+  modeSelection: "default_normal" | "explicit_manual_lite";
   fingerprint: string;
   candidates: any[];
   sourceBundleId: string;
@@ -406,7 +410,10 @@ function buildReusedCandidateScreeningArtifact(input: {
     mode: input.mode,
     candidates: survivors,
     diagnostics: {
+      triggerType: input.triggerType,
       mode: input.mode,
+      modeLabel: input.modeLabel,
+      modeSelection: input.modeSelection,
       fingerprint: input.fingerprint,
       maxMacroLanes: modeRules.maxMacroLanes,
       targetValidatedCandidateCount: modeRules.targetValidatedCandidateCount,
@@ -522,6 +529,9 @@ function buildCandidateScreeningDiagnostics(input: {
         : "Gap fit and externally screened candidate reasoning.",
       macroLaneCount: Array.isArray(input.gapReport?.candidateSearchLanes) ? input.gapReport.candidateSearchLanes.length : 0,
       screeningMode: screening?.mode ?? null,
+      screeningModeLabel: screening?.modeLabel ?? null,
+      screeningModeSelection: screening?.modeSelection ?? null,
+      triggerType: screening?.triggerType ?? null,
       screeningFingerprint: screening?.fingerprint ?? null,
       reuseState: screening?.reuseHit ? "reused_from_bundle" : "fresh_screening",
       reuseSourceBundleId: screening?.reuseSourceBundleId ?? null,
@@ -1542,7 +1552,8 @@ export async function runFullAnalysis(
   emit: (e: ProgressEvent) => void,
   triggerType: "manual" | "scheduled" | "debug" = "manual",
   triggeredBy?: string,
-  existingRunId?: string
+  existingRunId?: string,
+  candidateScreeningModePreference?: CandidateScreeningModePreference
 ): Promise<{ runId: string; reportId: string; alertLevel: string; alertReason: string | null; changes: any[]; report: any }> {
   const t0 = Date.now();
   const apiKey = process.env.OPENAI_API_KEY;
@@ -1657,7 +1668,11 @@ export async function runFullAnalysis(
     environmentalGaps,
     candidateSearchLanes: macroCandidateSearchLanes,
   });
-  const screeningMode = resolveCandidateScreeningMode(triggerType);
+  const screeningSelection = resolveCandidateScreeningSelection({
+    triggerType,
+    preferredMode: candidateScreeningModePreference,
+  });
+  const screeningMode = screeningSelection.mode;
   const screeningFingerprint = buildCandidateScreeningFingerprint({
     mode: screeningMode,
     structuralSearchBrief: gapReport.searchBrief,
@@ -1685,6 +1700,9 @@ export async function runFullAnalysis(
 
     candidateScreeningArtifact = buildReusedCandidateScreeningArtifact({
       mode: screeningMode,
+      triggerType,
+      modeLabel: screeningSelection.modeLabel,
+      modeSelection: screeningSelection.selection,
       fingerprint: screeningFingerprint,
       candidates: reusableCandidateScreening.artifact.candidates,
       sourceBundleId: reusableCandidateScreening.bundleId,
@@ -1719,6 +1737,9 @@ export async function runFullAnalysis(
       emit,
       {
         mode: screeningMode,
+        triggerType,
+        modeLabel: screeningSelection.modeLabel,
+        modeSelection: screeningSelection.selection,
         fingerprint: screeningFingerprint,
       }
     );
