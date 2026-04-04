@@ -258,6 +258,7 @@ export interface CandidateSearchLane {
 
 export interface FrozenMacroEvidencePacket {
   schemaVersion: "macro_evidence_v1";
+  replayContextFingerprint?: string;
   macroEnvironment: MacroNewsEnvironmentResult;
   actionableThemeIds: string[];
   bridgeHitIds: string[];
@@ -306,6 +307,20 @@ export interface GapAnalysisArtifact {
 export interface GapAnalysisResult {
   report: GapReport;
   diagnostics: GapAnalysisDiagnostics;
+}
+
+export interface MacroEnvironmentDiagnostics extends StageProviderPressureDiagnostics {
+  replayContextFingerprint: string;
+  reuseHit: boolean;
+  queryFamilyCountAttempted: number;
+  queryFamilyCountWithArticles: number;
+  queryFamilyKeysAttempted: MacroQueryFamilyKey[];
+  queryFamilyKeysWithArticles: MacroQueryFamilyKey[];
+}
+
+export interface MacroEnvironmentCollectionResult {
+  macroEnvironment: MacroNewsEnvironmentResult;
+  diagnostics: MacroEnvironmentDiagnostics;
 }
 
 // ─── Portfolio construction ───────────────────────────────────────────────────

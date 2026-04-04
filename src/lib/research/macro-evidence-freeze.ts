@@ -27,6 +27,7 @@ export function buildFrozenMacroEvidence(input: {
   macroBridge: MacroExposureBridgeResult;
   environmentalGaps: EnvironmentalGap[];
   candidateSearchLanes: CandidateSearchLane[];
+  replayContextFingerprint?: string;
 }): FrozenMacroEvidencePacket {
   const macroEnvironment: MacroNewsEnvironmentResult = {
     ...input.macroEnvironment,
@@ -35,6 +36,7 @@ export function buildFrozenMacroEvidence(input: {
 
   return {
     schemaVersion: "macro_evidence_v1",
+    replayContextFingerprint: input.replayContextFingerprint ?? undefined,
     macroEnvironment,
     actionableThemeIds: sortUnique(
       input.macroConsensus.themes.filter((theme) => theme.actionable).map((theme) => theme.themeId)

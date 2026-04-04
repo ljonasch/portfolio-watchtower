@@ -103,6 +103,30 @@ describe("analysis orchestrator diagnostics", () => {
           },
         ],
       },
+      macroEnvironmentDiagnostics: {
+        replayContextFingerprint: "macro_ctx_1",
+        providerCallCount: 7,
+        retryCount: 1,
+        totalBackoffSeconds: 65,
+        maxSingleBackoffSeconds: 65,
+        stageLatencyMs: 65200,
+        resultState: "fresh",
+        reuseHit: false,
+        reuseSourceBundleId: null,
+        reuseMissReason: "no_prior_finalized_bundle",
+        queryFamilyCountAttempted: 7,
+        queryFamilyCountWithArticles: 1,
+        queryFamilyKeysAttempted: [
+          "rates_inflation_central_banks",
+          "recession_labor_growth",
+          "energy_commodities",
+          "geopolitics_shipping_supply_chain",
+          "regulation_export_controls_ai_policy",
+          "credit_liquidity_banking_stress",
+          "defense_fiscal_industrial_policy",
+        ],
+        queryFamilyKeysWithArticles: ["defense_fiscal_industrial_policy"],
+      },
       macroConsensus: {
         availabilityStatus: "primary_success",
         degradedReason: null,
@@ -407,6 +431,22 @@ describe("analysis orchestrator diagnostics", () => {
         executionState: "fresh_gap_analysis",
         reuseFingerprint: "gap_fp_1",
         reuseMissReason: "gap_fingerprint_mismatch",
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "macro_news_collection")?.inputs).toEqual(
+      expect.objectContaining({
+        executionState: "fresh_macro_collection",
+        replayContextFingerprint: "macro_ctx_1",
+        reuseMissReason: "no_prior_finalized_bundle",
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "macro_news_collection")?.outputs).toEqual(
+      expect.objectContaining({
+        providerCallCount: 7,
+        retryCount: 1,
+        totalBackoffSeconds: 65,
+        queryFamilyCountAttempted: 7,
+        queryFamilyCountWithArticles: 1,
       })
     );
     expect(artifact.steps.find((step) => step.stepKey === "macro_theme_consensus")?.outputs).toEqual(

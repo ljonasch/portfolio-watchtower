@@ -9,6 +9,7 @@ const mockScoreSentimentForAll = jest.fn();
 const mockBuildSentimentOverlay = jest.fn();
 const mockBuildResearchContext = jest.fn();
 const mockCollectMacroNewsEnvironment = jest.fn();
+const mockCollectMacroNewsEnvironmentDetailed = jest.fn();
 const mockDeriveMacroThemeConsensus = jest.fn();
 const mockApplyMacroExposureBridge = jest.fn();
 const mockDeriveMacroCandidateSearchLanes = jest.fn();
@@ -100,6 +101,7 @@ jest.mock("@/lib/research/context-loader", () => ({
 
 jest.mock("@/lib/research/macro-news-environment", () => ({
   collectMacroNewsEnvironment: mockCollectMacroNewsEnvironment,
+  collectMacroNewsEnvironmentDetailed: mockCollectMacroNewsEnvironmentDetailed,
 }));
 
 jest.mock("@/lib/research/macro-theme-consensus", () => ({
@@ -171,6 +173,7 @@ jest.mock("@/lib/research/evidence-packet-builder", () => ({
 
 import { buildCandidateScreeningFingerprint } from "@/lib/research/candidate-screening-fingerprint";
 import { buildGapAnalysisFingerprint, GAP_ANALYSIS_REUSE_MAX_AGE_HOURS } from "@/lib/research/gap-analysis-fingerprint";
+import { buildMacroReplayContextFingerprint, MACRO_ENVIRONMENT_REUSE_MAX_AGE_HOURS } from "@/lib/research/macro-environment-reuse";
 import { runFullAnalysis } from "@/lib/research/analysis-orchestrator";
 import type { CandidateSearchLane } from "@/lib/research/types";
 
@@ -287,6 +290,50 @@ function buildStoredGapAnalysisArtifact(fingerprint: string) {
   };
 }
 
+function buildStoredMacroEvidenceArtifact(replayContextFingerprint: string) {
+  return {
+    macroEvidence: {
+      schemaVersion: "macro_evidence_v1",
+      replayContextFingerprint,
+      macroEnvironment: {
+        availabilityStatus: "primary_success",
+        degradedReason: null,
+        statusSummary: "Macro ok",
+        articleCount: 1,
+        trustedArticleCount: 1,
+        distinctPublisherCount: 1,
+        sourceDiversity: { distinctPublishers: 1, trustedPublishers: 1, trustedRatio: 1 },
+        issues: [],
+        articles: [
+          {
+            articleId: "macro_article:1",
+            canonicalUrl: "https://www.reuters.com/macro1",
+            title: "Macro theme holding steady",
+            publisher: "reuters.com",
+            publishedAt: null,
+            publishedAtBucket: "last_7d",
+            trusted: true,
+            queryFamily: "rates_inflation_central_banks",
+            retrievalReason: "global macro environment",
+            topicHints: ["rates"],
+            dedupKey: "macro1",
+            stableSortKey: "0:0000:https://www.reuters.com/macro1",
+            evidenceHash: "macro1",
+          },
+        ],
+      },
+      actionableThemeIds: [],
+      bridgeHitIds: [],
+      macroBridge: {
+        statusSummary: "0 hits",
+        hits: [],
+      },
+      environmentalGapIds: [],
+      candidateLaneIds: [],
+    },
+  };
+}
+
 function installBaseMocks() {
   process.env.OPENAI_API_KEY = "test-key";
   mockOpenAiCreate.mockResolvedValue({
@@ -362,6 +409,43 @@ function installBaseMocks() {
     sourceDiversity: { distinctPublishers: 0, trustedPublishers: 0, trustedRatio: 0 },
     issues: [],
     articles: [],
+  });
+  mockCollectMacroNewsEnvironmentDetailed.mockResolvedValue({
+    macroEnvironment: {
+      availabilityStatus: "primary_success",
+      degradedReason: null,
+      statusSummary: "Macro ok",
+      articleCount: 0,
+      trustedArticleCount: 0,
+      distinctPublisherCount: 0,
+      sourceDiversity: { distinctPublishers: 0, trustedPublishers: 0, trustedRatio: 0 },
+      issues: [],
+      articles: [],
+    },
+    diagnostics: {
+      replayContextFingerprint: "macro_ctx_fp",
+      providerCallCount: 7,
+      retryCount: 0,
+      totalBackoffSeconds: 0,
+      maxSingleBackoffSeconds: 0,
+      stageLatencyMs: 100,
+      resultState: "fresh",
+      reuseHit: false,
+      reuseSourceBundleId: null,
+      reuseMissReason: null,
+      queryFamilyCountAttempted: 7,
+      queryFamilyCountWithArticles: 0,
+      queryFamilyKeysAttempted: [
+        "rates_inflation_central_banks",
+        "recession_labor_growth",
+        "energy_commodities",
+        "geopolitics_shipping_supply_chain",
+        "regulation_export_controls_ai_policy",
+        "credit_liquidity_banking_stress",
+        "defense_fiscal_industrial_policy",
+      ],
+      queryFamilyKeysWithArticles: [],
+    },
   });
   mockDeriveMacroThemeConsensus.mockReturnValue({
     availabilityStatus: "primary_success",
@@ -461,6 +545,7 @@ function installBaseMocks() {
   });
   mockBuildFrozenMacroEvidence.mockImplementation((input: any) => ({
     schemaVersion: "macro_evidence_v1",
+    replayContextFingerprint: input.replayContextFingerprint ?? undefined,
     macroEnvironment: input.macroEnvironment,
     actionableThemeIds: [],
     bridgeHitIds: [],
@@ -696,7 +781,7 @@ describe("analysis orchestrator candidate screening reuse gate", () => {
 
     await runFullAnalysis("snap_1", undefined, jest.fn(), "scheduled", "cron");
 
-    expect(mockPrisma.analysisBundle.findMany).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.analysisBundle.findMany).toHaveBeenCalledTimes(2);
     expect(mockScreenCandidatesDetailed).toHaveBeenCalledTimes(1);
     expect(mockScreenCandidatesDetailed.mock.calls[0]?.[7]).toEqual(
       expect.objectContaining({
@@ -896,6 +981,120 @@ describe("analysis orchestrator candidate screening reuse gate", () => {
       expect.objectContaining({
         reuseHit: false,
         reuseMissReason: "stale_finalized_gap_analysis",
+      })
+    );
+  });
+
+  test("matching latest finalized frozen macro evidence reuses macro collection and skips fresh provider calls", async () => {
+    const macroReplayContextFingerprint = buildMacroReplayContextFingerprint({
+      holdings: [
+        { ticker: "MSFT", computedWeight: 100, isCash: false },
+      ],
+      profile: {
+        trackedAccountObjective: undefined,
+        sectorsToEmphasize: undefined,
+      },
+      structuralGapReport: {
+        gaps: [],
+        structuralGaps: [],
+        environmentalGaps: [],
+        candidateSearchLanes: [],
+        searchBrief: "Find high-quality additions.",
+        profilePreferences: "Quality growth",
+      },
+      marketRegime: {
+        riskMode: "risk_on",
+        rateTrend: "stable",
+      },
+    });
+    mockPrisma.analysisBundle.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: "bundle_macro_reuse",
+          finalizedAt: new Date(Date.now() - (6 * 60 * 60 * 1000)),
+          evidencePacketJson: JSON.stringify(buildStoredMacroEvidenceArtifact(macroReplayContextFingerprint)),
+        },
+      ]);
+
+    await runFullAnalysis("snap_1", undefined, jest.fn(), "manual", "user");
+
+    expect(mockCollectMacroNewsEnvironmentDetailed).not.toHaveBeenCalled();
+    expect(mockReplayMacroOutputsFromFrozenEvidence).toHaveBeenCalledTimes(2);
+    expect(mockFinalizeAnalysisRun.mock.calls.at(-1)?.[0]?.evidencePacket?.diagnosticsArtifact?.steps.find((step: any) => step.stepKey === "macro_news_collection")?.outputs).toEqual(
+      expect.objectContaining({
+        providerPressureState: "frozen_artifact_reuse",
+        providerCallCount: 0,
+        queryFamilyCountAttempted: 0,
+      })
+    );
+    expect(mockFinalizeAnalysisRun.mock.calls.at(-1)?.[0]?.evidencePacket?.macroEvidence).toEqual(
+      expect.objectContaining({
+        replayContextFingerprint: macroReplayContextFingerprint,
+      })
+    );
+  });
+
+  test("changed macro replay context falls through to fresh macro collection", async () => {
+    mockPrisma.analysisBundle.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: "bundle_macro_old",
+          finalizedAt: new Date(Date.now() - (6 * 60 * 60 * 1000)),
+          evidencePacketJson: JSON.stringify(buildStoredMacroEvidenceArtifact("different_macro_ctx")),
+        },
+      ]);
+
+    await runFullAnalysis("snap_1", undefined, jest.fn(), "manual", "user");
+
+    expect(mockCollectMacroNewsEnvironmentDetailed).toHaveBeenCalledTimes(1);
+    expect(mockCollectMacroNewsEnvironmentDetailed.mock.calls[0]?.[3]).toEqual(
+      expect.objectContaining({
+        reuseMissReason: "macro_replay_context_mismatch",
+      })
+    );
+  });
+
+  test("stale finalized macro evidence forces a fresh macro collection even on exact replay-context match", async () => {
+    const macroReplayContextFingerprint = buildMacroReplayContextFingerprint({
+      holdings: [
+        { ticker: "MSFT", computedWeight: 100, isCash: false },
+      ],
+      profile: {
+        trackedAccountObjective: undefined,
+        sectorsToEmphasize: undefined,
+      },
+      structuralGapReport: {
+        gaps: [],
+        structuralGaps: [],
+        environmentalGaps: [],
+        candidateSearchLanes: [],
+        searchBrief: "Find high-quality additions.",
+        profilePreferences: "Quality growth",
+      },
+      marketRegime: {
+        riskMode: "risk_on",
+        rateTrend: "stable",
+      },
+    });
+    const staleFinalizedAt = new Date(Date.now() - ((MACRO_ENVIRONMENT_REUSE_MAX_AGE_HOURS + 2) * 60 * 60 * 1000));
+    mockPrisma.analysisBundle.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: "bundle_macro_stale",
+          finalizedAt: staleFinalizedAt,
+          evidencePacketJson: JSON.stringify(buildStoredMacroEvidenceArtifact(macroReplayContextFingerprint)),
+        },
+      ]);
+
+    await runFullAnalysis("snap_1", undefined, jest.fn(), "manual", "user");
+
+    expect(mockCollectMacroNewsEnvironmentDetailed).toHaveBeenCalledTimes(1);
+    expect(mockCollectMacroNewsEnvironmentDetailed.mock.calls[0]?.[3]).toEqual(
+      expect.objectContaining({
+        reuseMissReason: "stale_finalized_macro_evidence",
       })
     );
   });

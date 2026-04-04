@@ -6,8 +6,16 @@ import {
   getOrLoadRuntimeCache,
 } from "@/lib/cache";
 import type { ProgressEvent } from "./progress-events";
+import {
+  createStageProviderPressureDiagnostics,
+  finalizeStageProviderPressureDiagnostics,
+  recordStageProviderBackoff,
+  recordStageProviderCall,
+} from "./provider-pressure-diagnostics";
 import { rankSources } from "./source-ranker";
 import type {
+  MacroEnvironmentCollectionResult,
+  MacroEnvironmentDiagnostics,
   MacroNewsArticle,
   MacroNewsEnvironmentResult,
   MacroQueryFamilyKey,
@@ -282,6 +290,7 @@ async function runMacroSearchFamily(
   openai: any,
   family: MacroQueryFamily,
   today: string,
+  diagnostics: MacroEnvironmentDiagnostics,
   attempt = 1,
   priorIssues: NewsFetchIssue[] = []
 ): Promise<MacroSearchAttemptResult> {
@@ -289,6 +298,7 @@ async function runMacroSearchFamily(
   const prompt = `Today is ${today}. Use only the last ${MACRO_LOOKBACK_DAYS} days of coverage, with extra attention to the last ${MACRO_ACTIVE_EMPHASIS_HOURS} hours.\n\n${family.query}\n\nReturn concise plain text with cited URLs.`;
 
   try {
+    recordStageProviderCall(diagnostics);
     const resp = await openai.chat.completions.create({
       model,
       max_completion_tokens: 700,
@@ -330,6 +340,7 @@ async function runMacroSearchFamily(
     };
   } catch (error: any) {
     if (error?.status === 429 && attempt < 4) {
+      recordStageProviderBackoff(diagnostics, 65);
       const issue = buildIssue({
         kind: "primary_rate_limited",
         message: `Macro query family ${family.key} hit rate limiting on attempt ${attempt}. Retrying after backoff.`,
@@ -340,7 +351,7 @@ async function runMacroSearchFamily(
       });
       logIssue(issue);
       await new Promise((resolve) => setTimeout(resolve, 65000));
-      return runMacroSearchFamily(openai, family, today, attempt + 1, [...priorIssues, issue]);
+      return runMacroSearchFamily(openai, family, today, diagnostics, attempt + 1, [...priorIssues, issue]);
     }
 
     const kind: NewsFetchIssue["kind"] = error?.status === 429 ? "primary_rate_limited" : "primary_transport_failure";
@@ -385,6 +396,19 @@ export async function collectMacroNewsEnvironment(
   today: string,
   emit: (event: ProgressEvent) => void
 ): Promise<MacroNewsEnvironmentResult> {
+  const result = await collectMacroNewsEnvironmentDetailed(openai, today, emit);
+  return result.macroEnvironment;
+}
+
+export async function collectMacroNewsEnvironmentDetailed(
+  openai: any,
+  today: string,
+  emit: (event: ProgressEvent) => void,
+  options?: {
+    replayContextFingerprint?: string;
+    reuseMissReason?: string | null;
+  }
+): Promise<MacroEnvironmentCollectionResult> {
   emit({
     type: "stage_start",
     stage: "macro_news",
@@ -392,9 +416,21 @@ export async function collectMacroNewsEnvironment(
     detail: "Collecting fixed global macro query families for the last 7 days of market environment evidence",
   });
   const startedAt = Date.now();
+  const providerDiagnosticsBase = createStageProviderPressureDiagnostics("fresh");
+  const providerDiagnostics: MacroEnvironmentDiagnostics = {
+    ...providerDiagnosticsBase,
+    replayContextFingerprint: options?.replayContextFingerprint ?? "",
+    reuseHit: false,
+    reuseMissReason: options?.reuseMissReason ?? null,
+    queryFamilyCountAttempted: 0,
+    queryFamilyCountWithArticles: 0,
+    queryFamilyKeysAttempted: [],
+    queryFamilyKeysWithArticles: [],
+  };
 
   const collectedArticles: MacroNewsArticle[] = [];
   const issues: NewsFetchIssue[] = [];
+  const queryFamilyKeysWithArticles = new Set<MacroQueryFamilyKey>();
 
   for (const family of MACRO_QUERY_FAMILIES) {
     emit({
@@ -402,6 +438,7 @@ export async function collectMacroNewsEnvironment(
       message: `Macro query family: ${family.label}`,
       level: "info",
     });
+    providerDiagnostics.queryFamilyKeysAttempted.push(family.key);
 
     const result = await getOrLoadRuntimeCache<MacroSearchAttemptResult>({
       domain: "news_search_cache",
@@ -411,11 +448,14 @@ export async function collectMacroNewsEnvironment(
         fetcherVersion: `${NEWS_SEARCH_FETCHER_VERSION}::macro_env_v1`,
       }),
       versionTag: buildRuntimeVersionTag(["macro_env", "v1"]),
-      loader: () => runMacroSearchFamily(openai, family, today),
+      loader: () => runMacroSearchFamily(openai, family, today, providerDiagnostics),
     });
 
     collectedArticles.push(...result.articles);
     issues.push(...result.issues);
+    if (result.articles.length > 0) {
+      queryFamilyKeysWithArticles.add(family.key);
+    }
   }
 
   const articles = normalizeMacroArticles(collectedArticles);
@@ -430,19 +470,33 @@ export async function collectMacroNewsEnvironment(
     durationMs: Date.now() - startedAt,
   });
 
+  const finalizedProviderDiagnostics = finalizeStageProviderPressureDiagnostics(
+    providerDiagnostics,
+    Date.now() - startedAt
+  ) as MacroEnvironmentDiagnostics;
+  finalizedProviderDiagnostics.resultState = finalizedProviderDiagnostics.providerCallCount === 0
+    ? "cache_hit"
+    : "fresh";
+  finalizedProviderDiagnostics.queryFamilyCountAttempted = providerDiagnostics.queryFamilyKeysAttempted.length;
+  finalizedProviderDiagnostics.queryFamilyKeysWithArticles = [...queryFamilyKeysWithArticles].sort();
+  finalizedProviderDiagnostics.queryFamilyCountWithArticles = finalizedProviderDiagnostics.queryFamilyKeysWithArticles.length;
+
   return {
-    availabilityStatus: status.availabilityStatus,
-    degradedReason: status.degradedReason,
-    statusSummary: status.statusSummary,
-    articleCount: articles.length,
-    trustedArticleCount: trustedArticles.length,
-    distinctPublisherCount,
-    sourceDiversity: {
-      distinctPublishers: distinctPublisherCount,
-      trustedPublishers: trustedPublisherCount,
-      trustedRatio: articles.length > 0 ? Number((trustedArticles.length / articles.length).toFixed(2)) : 0,
+    macroEnvironment: {
+      availabilityStatus: status.availabilityStatus,
+      degradedReason: status.degradedReason,
+      statusSummary: status.statusSummary,
+      articleCount: articles.length,
+      trustedArticleCount: trustedArticles.length,
+      distinctPublisherCount,
+      sourceDiversity: {
+        distinctPublishers: distinctPublisherCount,
+        trustedPublishers: trustedPublisherCount,
+        trustedRatio: articles.length > 0 ? Number((trustedArticles.length / articles.length).toFixed(2)) : 0,
+      },
+      issues,
+      articles,
     },
-    issues,
-    articles,
+    diagnostics: finalizedProviderDiagnostics,
   };
 }

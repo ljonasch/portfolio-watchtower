@@ -27,7 +27,7 @@ import { fetchPriceTimelines }     from "./price-timeline";
 import { scoreSentimentForAll }    from "./sentiment-scorer";
 import { buildSentimentOverlay, type SentimentOverlay } from "./signal-aggregator";
 import { buildResearchContext }    from "./context-loader";
-import { collectMacroNewsEnvironment } from "./macro-news-environment";
+import { collectMacroNewsEnvironmentDetailed } from "./macro-news-environment";
 import {
   deriveMacroThemeConsensus,
   MACRO_THEME_CONSENSUS_THRESHOLDS,
@@ -64,6 +64,7 @@ import {
   type CandidateScreeningModePreference,
   type CandidateSearchLane,
   type EnvironmentalGap,
+  type MacroEnvironmentDiagnostics,
   type MacroExposureBridgeResult,
   type MacroNewsEnvironmentResult,
   type MacroThemeConsensusResult,
@@ -73,6 +74,11 @@ import {
   extractGapAnalysisArtifactFromEvidencePacket,
   GAP_ANALYSIS_REUSE_MAX_AGE_HOURS,
 } from "./gap-analysis-fingerprint";
+import {
+  buildMacroReplayContextFingerprint,
+  extractReusableFrozenMacroEvidence,
+  MACRO_ENVIRONMENT_REUSE_MAX_AGE_HOURS,
+} from "./macro-environment-reuse";
 import {
   buildCandidateScreeningFingerprint,
   CANDIDATE_SCREENING_MODE_RULES,
@@ -338,6 +344,96 @@ export async function findReusableGapAnalysisBundle(input: {
     };
   } catch {
     return { match: false, reason: "malformed_gap_analysis_artifact", bundleId: latestBundle.id };
+  }
+}
+
+function listMacroQueryFamiliesFromEnvironment(environment: MacroNewsEnvironmentResult): MacroEnvironmentDiagnostics["queryFamilyKeysWithArticles"] {
+  return [...new Set(
+    (environment.articles ?? [])
+      .map((article) => article?.queryFamily)
+      .filter((value): value is MacroEnvironmentDiagnostics["queryFamilyKeysWithArticles"][number] => typeof value === "string" && value.length > 0)
+  )].sort();
+}
+
+function buildReusedMacroEnvironmentDiagnostics(input: {
+  macroEnvironment: MacroNewsEnvironmentResult;
+  replayContextFingerprint: string;
+  sourceBundleId: string;
+}): MacroEnvironmentDiagnostics {
+  const queryFamilyKeysWithArticles = listMacroQueryFamiliesFromEnvironment(input.macroEnvironment);
+
+  return {
+    providerCallCount: 0,
+    retryCount: 0,
+    totalBackoffSeconds: 0,
+    maxSingleBackoffSeconds: 0,
+    stageLatencyMs: 0,
+    resultState: "frozen_artifact_reuse",
+    reuseHit: true,
+    reuseSourceBundleId: input.sourceBundleId,
+    reuseMissReason: null,
+    replayContextFingerprint: input.replayContextFingerprint,
+    queryFamilyCountAttempted: 0,
+    queryFamilyCountWithArticles: queryFamilyKeysWithArticles.length,
+    queryFamilyKeysAttempted: [],
+    queryFamilyKeysWithArticles,
+  };
+}
+
+export async function findReusableMacroEnvironmentBundle(input: {
+  userId: string;
+  bundleScope: string;
+  replayContextFingerprint: string;
+}): Promise<
+  | { match: true; bundleId: string; frozenMacroEvidence: NonNullable<ReturnType<typeof extractReusableFrozenMacroEvidence>> }
+  | { match: false; reason: string; bundleId?: string | null }
+> {
+  const bundles = await prisma.analysisBundle.findMany({
+    where: {
+      userId: input.userId,
+      bundleScope: input.bundleScope,
+    },
+    orderBy: { finalizedAt: "desc" },
+    take: 1,
+    select: {
+      id: true,
+      finalizedAt: true,
+      evidencePacketJson: true,
+    },
+  });
+
+  const latestBundle = bundles[0];
+  if (!latestBundle) {
+    return { match: false, reason: "no_prior_finalized_bundle", bundleId: null };
+  }
+
+  const finalizedAt = latestBundle.finalizedAt instanceof Date
+    ? latestBundle.finalizedAt
+    : new Date(latestBundle.finalizedAt);
+  const artifactAgeHours = (Date.now() - finalizedAt.getTime()) / (1000 * 60 * 60);
+  if (!Number.isFinite(artifactAgeHours) || artifactAgeHours > MACRO_ENVIRONMENT_REUSE_MAX_AGE_HOURS) {
+    return { match: false, reason: "stale_finalized_macro_evidence", bundleId: latestBundle.id };
+  }
+
+  try {
+    const evidencePacket = JSON.parse(latestBundle.evidencePacketJson);
+    const frozenMacroEvidence = extractReusableFrozenMacroEvidence(evidencePacket);
+    if (!frozenMacroEvidence) {
+      return { match: false, reason: "missing_frozen_macro_evidence", bundleId: latestBundle.id };
+    }
+    if (typeof frozenMacroEvidence.replayContextFingerprint !== "string" || frozenMacroEvidence.replayContextFingerprint.length === 0) {
+      return { match: false, reason: "missing_macro_replay_context_fingerprint", bundleId: latestBundle.id };
+    }
+    if (frozenMacroEvidence.replayContextFingerprint !== input.replayContextFingerprint) {
+      return { match: false, reason: "macro_replay_context_mismatch", bundleId: latestBundle.id };
+    }
+    return {
+      match: true,
+      bundleId: latestBundle.id,
+      frozenMacroEvidence,
+    };
+  } catch {
+    return { match: false, reason: "malformed_frozen_macro_evidence", bundleId: latestBundle.id };
   }
 }
 
@@ -696,8 +792,10 @@ function buildCandidateScreeningDiagnostics(input: {
 
 function buildMacroNewsCollectionDiagnostics(input: {
   macroEnvironment?: MacroNewsEnvironmentResult | null;
+  macroEnvironmentDiagnostics?: MacroEnvironmentDiagnostics | null;
 }): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics" | "sources"> {
   const environment = input.macroEnvironment;
+  const diagnostics = input.macroEnvironmentDiagnostics ?? null;
   const issues = Array.isArray(environment?.issues) ? environment.issues : [];
   const articles = Array.isArray(environment?.articles) ? environment.articles : [];
   const hasArticles = articles.length > 0;
@@ -725,12 +823,26 @@ function buildMacroNewsCollectionDiagnostics(input: {
       freshnessWindow: "Last 7 days with last 72 hours emphasized.",
       sortRule: "Trusted first, newest first, canonical URL ascending.",
       degradedReason: environment?.degradedReason ?? null,
+      executionState: diagnostics?.reuseHit ? "reused_from_finalized_bundle" : diagnostics?.resultState === "cache_hit" ? "runtime_cache_hit" : "fresh_macro_collection",
+      replayContextFingerprint: diagnostics?.replayContextFingerprint ?? null,
+      reuseSourceBundleId: diagnostics?.reuseSourceBundleId ?? null,
+      reuseMissReason: diagnostics?.reuseMissReason ?? null,
     },
     outputs: {
       outcomeExplanation: environment?.statusSummary ?? "Macro-news collection produced no persisted summary.",
       articleCount: environment?.articleCount ?? 0,
       trustedArticleCount: environment?.trustedArticleCount ?? 0,
       distinctPublisherCount: environment?.distinctPublisherCount ?? 0,
+      providerPressureState: diagnostics?.resultState ?? null,
+      providerCallCount: diagnostics?.providerCallCount ?? 0,
+      retryCount: diagnostics?.retryCount ?? 0,
+      totalBackoffSeconds: diagnostics?.totalBackoffSeconds ?? 0,
+      maxSingleBackoffSeconds: diagnostics?.maxSingleBackoffSeconds ?? 0,
+      stageLatencyMs: diagnostics?.stageLatencyMs ?? 0,
+      queryFamilyCountAttempted: diagnostics?.queryFamilyCountAttempted ?? 0,
+      queryFamilyCountWithArticles: diagnostics?.queryFamilyCountWithArticles ?? 0,
+      queryFamilyKeysAttempted: diagnostics?.queryFamilyKeysAttempted ?? [],
+      queryFamilyKeysWithArticles: diagnostics?.queryFamilyKeysWithArticles ?? [],
       issueSummary: issues.slice(0, 5).map((issue) => issue.message),
       topArticleIds: articles.slice(0, 5).map((article) => article.articleId),
       emptyResultReason: hasArticles ? null : "No usable macro-news environment articles were persisted for this run.",
@@ -739,6 +851,14 @@ function buildMacroNewsCollectionDiagnostics(input: {
       ["macro_article_count", "Macro Articles", environment?.articleCount ?? 0],
       ["trusted_macro_articles", "Trusted Macro Articles", environment?.trustedArticleCount ?? 0],
       ["macro_distinct_publishers", "Distinct Publishers", environment?.distinctPublisherCount ?? 0],
+      ["macro_provider_calls", "Macro Provider Calls", diagnostics?.providerCallCount ?? 0],
+      ["macro_retry_count", "Macro Retry Count", diagnostics?.retryCount ?? 0],
+      ["macro_backoff_seconds", "Macro Backoff Seconds", diagnostics?.totalBackoffSeconds ?? 0],
+      ["macro_max_backoff_seconds", "Macro Max Backoff Seconds", diagnostics?.maxSingleBackoffSeconds ?? 0],
+      ["macro_stage_latency_ms", "Macro Stage Latency (ms)", diagnostics?.stageLatencyMs ?? 0],
+      ["macro_query_families_attempted", "Macro Query Families Attempted", diagnostics?.queryFamilyCountAttempted ?? 0],
+      ["macro_query_families_with_articles", "Macro Query Families With Articles", diagnostics?.queryFamilyCountWithArticles ?? 0],
+      ["macro_reuse_hit", "Macro Reuse Hit", diagnostics?.reuseHit ?? false],
     ]),
     sources: articles.slice(0, 10).map((article) => ({
       title: article.title,
@@ -1318,9 +1438,10 @@ export function buildRunDiagnosticsArtifact(input: {
     responseHash: string | null;
     usingFallbackNews?: boolean;
     regime?: any;
-    gapReport?: any;
-    gapAnalysis?: GapAnalysisDiagnostics | null;
-    macroEnvironment?: MacroNewsEnvironmentResult | null;
+  gapReport?: any;
+  gapAnalysis?: GapAnalysisDiagnostics | null;
+  macroEnvironment?: MacroNewsEnvironmentResult | null;
+  macroEnvironmentDiagnostics?: MacroEnvironmentDiagnostics | null;
   macroConsensus?: MacroThemeConsensusResult | null;
   macroBridge?: MacroExposureBridgeResult | null;
   environmentalGaps?: EnvironmentalGap[] | null;
@@ -1396,6 +1517,7 @@ export function buildRunDiagnosticsArtifact(input: {
   });
   const macroNewsDiagnostics = buildMacroNewsCollectionDiagnostics({
     macroEnvironment: input.macroEnvironment,
+    macroEnvironmentDiagnostics: input.macroEnvironmentDiagnostics,
   });
   const macroConsensusDiagnostics = buildMacroThemeConsensusDiagnostics({
     macroConsensus: input.macroConsensus,
@@ -1810,21 +1932,81 @@ export async function runFullAnalysis(
     };
   }
   const structuralGapReport = gapAnalysisArtifact.report;
-  const macroEnvironment = await collectMacroNewsEnvironment(openai, today, emit);
-  const macroConsensus = deriveMacroThemeConsensus(macroEnvironment);
-  const macroBridge = applyMacroExposureBridge({
-    consensus: macroConsensus,
-    environment: macroEnvironment,
-  });
-  const environmentalGaps = deriveEnvironmentalGaps({
+  const macroReplayContextFingerprint = buildMacroReplayContextFingerprint({
     holdings: ctx.holdings,
-    structuralGapReport,
     profile: user.profile,
+    structuralGapReport,
     marketRegime: regime,
-    macroConsensus,
-    macroBridge,
   });
-  const macroCandidateSearchLanes = deriveMacroCandidateSearchLanes(environmentalGaps);
+  const reusableMacroEnvironment = await findReusableMacroEnvironmentBundle({
+    userId: snapshot.userId,
+    bundleScope: "PRIMARY_PORTFOLIO",
+    replayContextFingerprint: macroReplayContextFingerprint,
+  });
+  let macroEnvironment: MacroNewsEnvironmentResult;
+  let macroConsensus: MacroThemeConsensusResult;
+  let macroBridge: MacroExposureBridgeResult;
+  let environmentalGaps: EnvironmentalGap[];
+  let macroCandidateSearchLanes: CandidateSearchLane[];
+  let macroEnvironmentDiagnostics: MacroEnvironmentDiagnostics;
+
+  if (reusableMacroEnvironment.match) {
+    emit({
+      type: "stage_start",
+      stage: "macro_news",
+      label: "Macro News Environment",
+      detail: `Reusing finalized frozen macro evidence from bundle ${reusableMacroEnvironment.bundleId}`,
+    });
+    const replayedMacro = replayMacroOutputsFromFrozenEvidence({
+      frozenMacroEvidence: reusableMacroEnvironment.frozenMacroEvidence,
+      holdings: ctx.holdings,
+      structuralGapReport,
+      profile: user.profile,
+      marketRegime: regime,
+    });
+    macroEnvironment = replayedMacro.macroEnvironment;
+    macroConsensus = replayedMacro.macroConsensus;
+    macroBridge = replayedMacro.macroBridge;
+    environmentalGaps = replayedMacro.environmentalGaps;
+    macroCandidateSearchLanes = replayedMacro.candidateSearchLanes;
+    macroEnvironmentDiagnostics = buildReusedMacroEnvironmentDiagnostics({
+      macroEnvironment,
+      replayContextFingerprint: macroReplayContextFingerprint,
+      sourceBundleId: reusableMacroEnvironment.bundleId,
+    });
+    emit({
+      type: "log",
+      message: `Macro environment reused ${macroEnvironment.articleCount} article(s) from finalized bundle ${reusableMacroEnvironment.bundleId}.`,
+      level: "info",
+    });
+    emit({ type: "stage_complete", stage: "macro_news", durationMs: 0 });
+  } else {
+    const freshMacroCollection = await collectMacroNewsEnvironmentDetailed(
+      openai,
+      today,
+      emit,
+      {
+        replayContextFingerprint: macroReplayContextFingerprint,
+        reuseMissReason: reusableMacroEnvironment.reason,
+      }
+    );
+    macroEnvironment = freshMacroCollection.macroEnvironment;
+    macroEnvironmentDiagnostics = freshMacroCollection.diagnostics;
+    macroConsensus = deriveMacroThemeConsensus(macroEnvironment);
+    macroBridge = applyMacroExposureBridge({
+      consensus: macroConsensus,
+      environment: macroEnvironment,
+    });
+    environmentalGaps = deriveEnvironmentalGaps({
+      holdings: ctx.holdings,
+      structuralGapReport,
+      profile: user.profile,
+      marketRegime: regime,
+      macroConsensus,
+      macroBridge,
+    });
+    macroCandidateSearchLanes = deriveMacroCandidateSearchLanes(environmentalGaps);
+  }
   const gapReport = freezeRunEvidenceSet({
     ...structuralGapReport,
     environmentalGaps,
@@ -2050,6 +2232,7 @@ export async function runFullAnalysis(
     macroBridge,
     environmentalGaps,
     candidateSearchLanes: macroCandidateSearchLanes,
+    replayContextFingerprint: macroReplayContextFingerprint,
   }));
   const replayedMacro = replayMacroOutputsFromFrozenEvidence({
     frozenMacroEvidence,
@@ -2159,6 +2342,7 @@ export async function runFullAnalysis(
         gapReport,
         gapAnalysis: gapAnalysisArtifact.diagnostics,
         macroEnvironment: frozenMacroEnvironment,
+        macroEnvironmentDiagnostics,
       macroConsensus: frozenMacroConsensus,
       macroBridge: frozenMacroBridge,
       environmentalGaps: frozenEnvironmentalGaps,
@@ -2336,6 +2520,7 @@ export async function runFullAnalysis(
             gapReport,
             gapAnalysis: gapAnalysisArtifact.diagnostics,
             macroEnvironment: frozenMacroEnvironment,
+            macroEnvironmentDiagnostics,
           macroConsensus: frozenMacroConsensus,
           macroBridge: frozenMacroBridge,
           environmentalGaps: frozenEnvironmentalGaps,
@@ -2494,6 +2679,7 @@ export async function runFullAnalysis(
             gapReport,
             gapAnalysis: gapAnalysisArtifact.diagnostics,
             macroEnvironment: frozenMacroEnvironment,
+            macroEnvironmentDiagnostics,
           macroConsensus: frozenMacroConsensus,
           macroBridge: frozenMacroBridge,
           environmentalGaps: frozenEnvironmentalGaps,
@@ -2711,6 +2897,7 @@ export async function runFullAnalysis(
     gapReport,
     gapAnalysis: gapAnalysisArtifact.diagnostics,
     macroEnvironment: frozenMacroEnvironment,
+    macroEnvironmentDiagnostics,
     macroConsensus: frozenMacroConsensus,
     macroBridge: frozenMacroBridge,
     environmentalGaps: frozenEnvironmentalGaps,

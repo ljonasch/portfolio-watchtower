@@ -5,7 +5,7 @@ jest.mock("@/lib/cache", () => ({
   getOrLoadRuntimeCache: async ({ loader }: { loader: () => Promise<unknown> }) => loader(),
 }));
 
-import { collectMacroNewsEnvironment, MACRO_QUERY_FAMILIES } from "@/lib/research/macro-news-environment";
+import { collectMacroNewsEnvironment, collectMacroNewsEnvironmentDetailed, MACRO_QUERY_FAMILIES } from "@/lib/research/macro-news-environment";
 
 function buildOpenAi(annotationSets: Array<Array<{ title: string; url: string }>>) {
   let callIndex = 0;
@@ -100,5 +100,40 @@ describe("macro news environment", () => {
       "reuters.com",
       "macro-blog.example.com",
     ]);
+  });
+
+  test("records provider-pressure diagnostics across the fixed macro query families", async () => {
+    const result = await collectMacroNewsEnvironmentDetailed(
+      buildOpenAi([
+        [{ title: "Rates remain elevated", url: "https://www.reuters.com/rates" }],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+      ]),
+      "2026-04-03",
+      jest.fn(),
+      {
+        replayContextFingerprint: "macro_ctx_1",
+        reuseMissReason: "no_prior_finalized_bundle",
+      }
+    );
+
+    expect(result.diagnostics).toEqual(
+      expect.objectContaining({
+        replayContextFingerprint: "macro_ctx_1",
+        reuseHit: false,
+        reuseMissReason: "no_prior_finalized_bundle",
+        providerCallCount: MACRO_QUERY_FAMILIES.length,
+        retryCount: 0,
+        totalBackoffSeconds: 0,
+        queryFamilyCountAttempted: MACRO_QUERY_FAMILIES.length,
+        queryFamilyCountWithArticles: 1,
+        queryFamilyKeysAttempted: MACRO_QUERY_FAMILIES.map((family) => family.key),
+        queryFamilyKeysWithArticles: ["rates_inflation_central_banks"],
+      })
+    );
   });
 });
