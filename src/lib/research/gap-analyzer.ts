@@ -125,7 +125,7 @@ export async function runStructuralGapAnalysisDetailed(
     }
   }
 
-  const landscapePrompt = `Today is ${today}. Search for:
+  const landscapePrompt = `Search for:
 1. Which S&P 500 sectors have outperformed YTD and in the last 30 days? (cite % figures)
 2. Where is institutional money actively rotating TO right now?
 3. Which themes - AI, defense, energy transition, reshoring, healthcare innovation - are driving the most institutional flows?
@@ -133,7 +133,7 @@ export async function runStructuralGapAnalysisDetailed(
 
 Be specific. Cite data: flows in $B, sector ETF performance %, analyst consensus shifts. Return plain text analysis.`;
 
-  const exposurePrompt = `Today is ${today}. Analyze this portfolio: ${holdingsSummary}
+  const exposurePrompt = `Analyze this portfolio: ${holdingsSummary}
 
 1. What correlated risk is this portfolio overexposed to?
 2. What single narrative or macro event would damage most positions simultaneously?

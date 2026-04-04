@@ -1,4 +1,4 @@
-import { deriveEnvironmentalGaps } from "@/lib/research/gap-analyzer";
+import { deriveEnvironmentalGaps, runStructuralGapAnalysisDetailed } from "@/lib/research/gap-analyzer";
 import type { GapReport, HoldingInput, MacroExposureBridgeResult, MacroThemeConsensusResult } from "@/lib/research/types";
 
 describe("environmental gap derivation", () => {
@@ -101,5 +101,40 @@ describe("environmental gap derivation", () => {
         candidateSearchTags: ["defense_fiscal_beneficiaries"],
       })
     );
+  });
+
+  test("structural gap prompts omit date framing and stay keyed to stable portfolio inputs", async () => {
+    const create = jest
+      .fn()
+      .mockResolvedValue({
+        choices: [{ message: { content: "" } }],
+      });
+    const openai = {
+      chat: {
+        completions: {
+          create,
+        },
+      },
+    };
+
+    await runStructuralGapAnalysisDetailed(
+      openai,
+      [{ ticker: "MSFT", currentWeight: 100, isCash: false }],
+      { trackedAccountObjective: "Growth", sectorsToEmphasize: "AI" },
+      "2026-04-03",
+      jest.fn()
+    );
+
+    expect(create).toHaveBeenCalledTimes(2);
+    const promptContents = create.mock.calls.map((call) => call[0].messages[0].content);
+    expect(promptContents).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Analyze this portfolio: MSFT (100.0%)"),
+      ])
+    );
+    for (const prompt of promptContents) {
+      expect(prompt).not.toContain("Today is");
+      expect(prompt).not.toContain("2026-04-03");
+    }
   });
 });
