@@ -976,14 +976,19 @@ function buildReasoningDiagnostics(input: {
           }
         : null,
       fullPromptPreflight: input.fullPromptPreflight
-        ? {
-            maxTotalChars: input.fullPromptPreflight.maxTotalChars,
-            fullPromptChars: input.fullPromptPreflight.fullPromptChars,
-            fitsBudget: input.fullPromptPreflight.fitsBudget,
-            requiredSectionKeys: input.fullPromptPreflight.requiredSectionKeys,
-            missingRequiredSections: input.fullPromptPreflight.missingRequiredSections,
-          }
-        : null,
+          ? {
+              maxTotalChars: input.fullPromptPreflight.maxTotalChars,
+              initialFullPromptChars: input.fullPromptPreflight.initialFullPromptChars ?? null,
+              fullPromptChars: input.fullPromptPreflight.fullPromptChars,
+              fitsBudget: input.fullPromptPreflight.fitsBudget,
+              requiredSectionKeys: input.fullPromptPreflight.requiredSectionKeys,
+              missingRequiredSections: input.fullPromptPreflight.missingRequiredSections,
+              reductionApplied: input.fullPromptPreflight.reductionApplied ?? false,
+              usedReducedPromptShape: input.fullPromptPreflight.usedReducedPromptShape ?? false,
+              lastResortFailure: input.fullPromptPreflight.lastResortFailure ?? false,
+              recoveryAttempts: input.fullPromptPreflight.recoveryAttempts ?? [],
+            }
+          : null,
       contextSections: input.contextSections.length > 0 ? input.contextSections : ["No per-section context telemetry was persisted for this run."],
       adjudicatorSupport: Object.keys(input.adjudicatorNotes ?? {}).length > 0
         ? `${Object.keys(input.adjudicatorNotes ?? {}).length} low-confidence ticker(s) received adjudicator notes.`
@@ -998,14 +1003,18 @@ function buildReasoningDiagnostics(input: {
           ? `Stage 3 context was trimmed deterministically from ${input.contextBudget.initialTotalChars} to ${input.contextBudget.finalTotalChars} chars before the primary reasoning call.`
           : `Stage 3 context fit within the ${input.contextBudget.maxTotalChars}-char budget without trimming.`
         : null,
-      preflightOutcome: input.fullPromptPreflight
-        ? input.fullPromptPreflight.fitsBudget
-          ? `Final Stage 3 prompt fit within the ${input.fullPromptPreflight.maxTotalChars}-char preflight budget.`
-          : `Final Stage 3 prompt preflight blocked model invocation at ${input.fullPromptPreflight.fullPromptChars} chars against the ${input.fullPromptPreflight.maxTotalChars}-char budget.`
-        : null,
-      recommendations: input.recommendationRows.slice(0, 10).map((recommendation: any) => ({
-        ticker: recommendation?.ticker ?? null,
-        companyName: recommendation?.companyName ?? null,
+        preflightOutcome: input.fullPromptPreflight
+          ? input.fullPromptPreflight.fitsBudget
+            ? input.fullPromptPreflight.reductionApplied
+              ? `Final Stage 3 prompt fit within the ${input.fullPromptPreflight.maxTotalChars}-char preflight budget after ${input.fullPromptPreflight.recoveryAttempts?.length ?? 0} deterministic reduction step(s).`
+              : `Final Stage 3 prompt fit within the ${input.fullPromptPreflight.maxTotalChars}-char preflight budget.`
+            : `Final Stage 3 prompt preflight blocked model invocation at ${input.fullPromptPreflight.fullPromptChars} chars against the ${input.fullPromptPreflight.maxTotalChars}-char budget after exhausting ${input.fullPromptPreflight.recoveryAttempts?.length ?? 0} deterministic reduction step(s).`
+          : null,
+        reducedPromptShape: input.fullPromptPreflight?.usedReducedPromptShape ?? false,
+        recoveryStepKeys: input.fullPromptPreflight?.recoveryAttempts?.map((attempt) => attempt.stepKey) ?? [],
+        recommendations: input.recommendationRows.slice(0, 10).map((recommendation: any) => ({
+          ticker: recommendation?.ticker ?? null,
+          companyName: recommendation?.companyName ?? null,
         action: recommendation?.action ?? null,
         thesisSummary: recommendation?.thesisSummary ?? recommendation?.detailedReasoning ?? null,
       })),
@@ -1022,10 +1031,12 @@ function buildReasoningDiagnostics(input: {
       ["watchlist_ideas", "Watchlist Ideas", input.watchlistIdeas.length],
       ["context_initial_chars", "Context Chars (Initial)", input.contextBudget?.initialTotalChars ?? null],
       ["context_final_chars", "Context Chars (Final)", input.contextBudget?.finalTotalChars ?? input.totalInputChars ?? null],
-      ["context_trimmed_sections", "Trimmed Sections", input.contextBudget?.trimmedSections.length ?? 0],
-      ["full_prompt_chars", "Full Prompt Chars", input.fullPromptPreflight?.fullPromptChars ?? null],
-      ["missing_required_sections", "Missing Required Sections", input.fullPromptPreflight?.missingRequiredSections.length ?? 0],
-    ]),
+        ["context_trimmed_sections", "Trimmed Sections", input.contextBudget?.trimmedSections.length ?? 0],
+        ["full_prompt_chars_initial", "Full Prompt Chars (Initial)", input.fullPromptPreflight?.initialFullPromptChars ?? null],
+        ["full_prompt_chars", "Full Prompt Chars", input.fullPromptPreflight?.fullPromptChars ?? null],
+        ["full_prompt_reduction_steps", "Prompt Reduction Steps", input.fullPromptPreflight?.recoveryAttempts?.length ?? 0],
+        ["missing_required_sections", "Missing Required Sections", input.fullPromptPreflight?.missingRequiredSections.length ?? 0],
+      ]),
     warnings: Object.keys(input.adjudicatorNotes ?? {}).length > 0
       ? buildDiagnosticsWarnings([["adjudicator_invoked", "Low-confidence adjudicator notes were captured for this run.", "info"]])
       : recommendationCount === 0 && hasContext

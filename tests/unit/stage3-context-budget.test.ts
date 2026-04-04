@@ -1,5 +1,7 @@
 import {
+  buildStage3AdditionalContext,
   budgetStage3Context,
+  reduceStage3AdditionalContextForPromptOverflow,
   STAGE3_CONTEXT_BUDGET,
 } from "@/lib/research/stage3-context-budget";
 
@@ -83,5 +85,75 @@ describe("stage3 context budget", () => {
     expect(result.sections.candidates).toContain("=== END CANDIDATES ===");
     expect(result.sections.candidates).toMatch(/AVGO|RTX/);
     expect(result.budget.preservedSections).toEqual(expect.arrayContaining(["regime", "candidates"]));
+  });
+
+  test("overflow recovery preserves a small top candidate set until the true last-resort step", () => {
+    const additionalContext = buildStage3AdditionalContext({
+      regime: "=== MARKET REGIME ===\nStable regime.\n=== END REGIME ===",
+      macroEnvironment: "=== MACRO ENVIRONMENT (NORMALIZED) ===\n" + "Macro summary. ".repeat(200),
+      breaking24h: "=== ⚡ BREAKING NEWS (last 24 hours — 2026-04-03) ===\n" + "Breaking detail. ".repeat(140),
+      news30d: "=== RESEARCH (30-day) ===\n" + "Long-form research. ".repeat(350),
+      priceReactions: "=== INTRADAY PRICE REACTIONS ===\n" + "Reaction detail. ".repeat(120),
+      sentiment: "=== SENTIMENT SIGNALS (informational only — do NOT treat as a directional vote; use as a weak prior only) ===\n" + "Signal. ".repeat(140),
+      valuation: "=== VALUATION ANCHORS ===\n" + "Valuation detail. ".repeat(180) + "\n=== END VALUATION ANCHORS ===",
+      correlation: "=== CORRELATION MATRIX (90-day) ===\n" + "Cluster detail. ".repeat(180) + "\n=== END CORRELATION MATRIX ===",
+      candidates: [
+        "=== CANDIDATE POSITIONS TO EVALUATE ===",
+        "These are NOT currently held. To recommend adding any:",
+        "1. Evidence quality HIGH only",
+        "2. Identify which existing position funds it",
+        "3. Explain why better than increasing an existing position",
+        "AVGO (Broadcom, $100.00): via gap_screener, lane: macro_lane:ai_infrastructure, catalyst: AI networking demand, reason: fills infrastructure gap",
+        "RTX (RTX, $90.00): via macro_lane, lane: macro_lane:defense_fiscal_beneficiaries, catalyst: defense budget expansion, reason: policy beneficiary",
+        "ETN (Eaton, $95.00): via macro_lane, lane: macro_lane:grid_upgrade, catalyst: grid capex, reason: electrification beneficiary",
+        "=== END CANDIDATES ===",
+      ].join("\n"),
+    });
+
+    const compactNewsAndMacro = reduceStage3AdditionalContextForPromptOverflow(additionalContext, "compact_news_and_macro");
+    expect(compactNewsAndMacro.sections.candidates).toContain("AVGO");
+    expect(compactNewsAndMacro.sections.candidates).toContain("RTX");
+    expect(compactNewsAndMacro.sections.candidates).toContain("=== END CANDIDATES ===");
+
+    const lastResort = reduceStage3AdditionalContextForPromptOverflow(additionalContext, "last_resort_compact_candidates");
+    expect(lastResort.sections.candidates).toContain("=== CANDIDATE POSITIONS TO EVALUATE ===");
+    expect(lastResort.sections.candidates).toContain("=== END CANDIDATES ===");
+    expect(lastResort.sections.candidates).toMatch(/AVGO|RTX|ETN/);
+  });
+
+  test("overflow recovery uses a deterministic multi-step reduction ladder", () => {
+    const additionalContext = buildStage3AdditionalContext({
+      regime: "=== MARKET REGIME ===\nStable regime.\n=== END REGIME ===",
+      macroEnvironment: "=== MACRO ENVIRONMENT (NORMALIZED) ===\n" + "Macro summary. ".repeat(240),
+      breaking24h: "=== ⚡ BREAKING NEWS (last 24 hours — 2026-04-03) ===\n" + "Breaking detail. ".repeat(180),
+      news30d: "=== RESEARCH (30-day) ===\n" + "Long-form research. ".repeat(500),
+      priceReactions: "=== INTRADAY PRICE REACTIONS ===\n" + "Reaction detail. ".repeat(200),
+      sentiment: "=== SENTIMENT SIGNALS (informational only — do NOT treat as a directional vote; use as a weak prior only) ===\n" + "Signal. ".repeat(180),
+      valuation: "=== VALUATION ANCHORS ===\n" + "Valuation detail. ".repeat(220) + "\n=== END VALUATION ANCHORS ===",
+      correlation: "=== CORRELATION MATRIX (90-day) ===\n" + "Cluster detail. ".repeat(220) + "\n=== END CORRELATION MATRIX ===",
+      candidates: [
+        "=== CANDIDATE POSITIONS TO EVALUATE ===",
+        "These are NOT currently held. To recommend adding any:",
+        "1. Evidence quality HIGH only",
+        "2. Identify which existing position funds it",
+        "3. Explain why better than increasing an existing position",
+        "AVGO (Broadcom, $100.00): via gap_screener, lane: macro_lane:ai_infrastructure, catalyst: AI networking demand, reason: fills infrastructure gap",
+        "RTX (RTX, $90.00): via macro_lane, lane: macro_lane:defense_fiscal_beneficiaries, catalyst: defense budget expansion, reason: policy beneficiary",
+        "ETN (Eaton, $95.00): via macro_lane, lane: macro_lane:grid_upgrade, catalyst: grid capex, reason: electrification beneficiary",
+        "=== END CANDIDATES ===",
+      ].join("\n"),
+    });
+
+    const stepOne = reduceStage3AdditionalContextForPromptOverflow(additionalContext, "rebudget_lower_priority_sections");
+    const stepTwo = reduceStage3AdditionalContextForPromptOverflow(stepOne.additionalContext, "drop_optional_research_tails");
+    const stepThree = reduceStage3AdditionalContextForPromptOverflow(stepTwo.additionalContext, "compact_news_and_macro");
+
+    expect(stepOne.stepKey).toBe("rebudget_lower_priority_sections");
+    expect(stepTwo.stepKey).toBe("drop_optional_research_tails");
+    expect(stepThree.stepKey).toBe("compact_news_and_macro");
+    expect(stepTwo.additionalContext.length).toBeLessThan(stepOne.additionalContext.length);
+    expect(stepThree.additionalContext.length).toBeLessThan(stepTwo.additionalContext.length);
+    expect(stepThree.sections.candidates).toContain("AVGO");
+    expect(stepThree.sections.candidates).toContain("RTX");
   });
 });

@@ -807,13 +807,54 @@ describe("analysis orchestrator diagnostics", () => {
         fitsBudget: false,
         requiredSectionKeys: ["binding_constraints", "full_holdings", "structured_news_status", "core_regime_summary"],
         missingRequiredSections: [],
+        initialFullPromptChars: 40200,
+        reductionApplied: true,
+        usedReducedPromptShape: true,
+        lastResortFailure: true,
+        recoveryAttempts: [
+          {
+            stepKey: "rebudget_lower_priority_sections",
+            additionalContextChars: 9200,
+            fullPromptChars: 35800,
+            fitsBudget: false,
+            changed: true,
+          },
+          {
+            stepKey: "drop_optional_research_tails",
+            additionalContextChars: 7400,
+            fullPromptChars: 34600,
+            fitsBudget: false,
+            changed: true,
+          },
+          {
+            stepKey: "compact_news_and_macro",
+            additionalContextChars: 6200,
+            fullPromptChars: 33800,
+            fitsBudget: false,
+            changed: true,
+          },
+          {
+            stepKey: "last_resort_compact_candidates",
+            additionalContextChars: 5900,
+            fullPromptChars: 36500,
+            fitsBudget: false,
+            changed: true,
+          },
+        ],
       },
     });
 
     expect(artifact.steps.find((step) => step.stepKey === "gpt5_reasoning")?.outputs).toEqual(
       expect.objectContaining({
         outcomeExplanation: "The final reasoning step was blocked by the full-prompt preflight budget before model invocation.",
-        preflightOutcome: "Final Stage 3 prompt preflight blocked model invocation at 36500 chars against the 32000-char budget.",
+        preflightOutcome: "Final Stage 3 prompt preflight blocked model invocation at 36500 chars against the 32000-char budget after exhausting 4 deterministic reduction step(s).",
+        reducedPromptShape: true,
+        recoveryStepKeys: [
+          "rebudget_lower_priority_sections",
+          "drop_optional_research_tails",
+          "compact_news_and_macro",
+          "last_resort_compact_candidates",
+        ],
       })
     );
   });

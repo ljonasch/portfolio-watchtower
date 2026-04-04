@@ -7,6 +7,10 @@
 import OpenAI from "openai";
 import { withRetry } from "./research/retry";
 import { prisma } from "./prisma";
+import {
+  STAGE3_PROMPT_OVERFLOW_RECOVERY_STEPS,
+  reduceStage3AdditionalContextForPromptOverflow,
+} from "./research/stage3-context-budget";
 
 // Re-export types for consumers (backwards-compatible)
 export type { Source } from "./research/types";
@@ -53,6 +57,17 @@ export interface Stage3FullPromptPreflightSummary {
   fitsBudget: boolean;
   requiredSectionKeys: string[];
   missingRequiredSections: string[];
+  initialFullPromptChars?: number;
+  reductionApplied?: boolean;
+  usedReducedPromptShape?: boolean;
+  lastResortFailure?: boolean;
+  recoveryAttempts?: Array<{
+    stepKey: string;
+    additionalContextChars: number;
+    fullPromptChars: number;
+    fitsBudget: boolean;
+    changed: boolean;
+  }>;
 }
 
 export class Stage3PreflightBudgetExceededError extends Error {
@@ -133,6 +148,101 @@ export function preflightStage3Prompt(input: {
     fitsBudget: input.fullPrompt.length <= maxTotalChars && missingRequiredSections.length === 0,
     requiredSectionKeys: input.requiredMarkers.map(({ key }) => key),
     missingRequiredSections,
+  };
+}
+
+function resolveStage3PromptPreflight(input: {
+  prompt: string;
+  additionalContext?: string;
+  requiredMarkers: Array<{ key: string; marker: string }>;
+  maxTotalChars?: number;
+}): {
+  fullPrompt: string;
+  additionalContext?: string;
+  preflight: Stage3FullPromptPreflightSummary;
+} {
+  const fullPrompt = buildFinalAnalysisPrompt(input.prompt, input.additionalContext);
+  const initialPreflight = preflightStage3Prompt({
+    fullPrompt,
+    requiredMarkers: input.requiredMarkers,
+    maxTotalChars: input.maxTotalChars,
+  });
+
+  if (initialPreflight.fitsBudget) {
+    return { fullPrompt, additionalContext: input.additionalContext, preflight: initialPreflight };
+  }
+
+  const basePreflight: Stage3FullPromptPreflightSummary = {
+    ...initialPreflight,
+    initialFullPromptChars: initialPreflight.fullPromptChars,
+    reductionApplied: false,
+    usedReducedPromptShape: false,
+    lastResortFailure: true,
+    recoveryAttempts: [],
+  };
+
+  if (initialPreflight.missingRequiredSections.length > 0 || !input.additionalContext?.trim()) {
+    return { fullPrompt, additionalContext: input.additionalContext, preflight: basePreflight };
+  }
+
+  let workingAdditionalContext = input.additionalContext;
+  const recoveryAttempts: NonNullable<Stage3FullPromptPreflightSummary["recoveryAttempts"]> = [];
+
+  for (const stepKey of STAGE3_PROMPT_OVERFLOW_RECOVERY_STEPS) {
+    const reducedContext = reduceStage3AdditionalContextForPromptOverflow(workingAdditionalContext, stepKey);
+    if (reducedContext.changed) {
+      workingAdditionalContext = reducedContext.additionalContext;
+    }
+
+    const recoveredPrompt = buildFinalAnalysisPrompt(input.prompt, workingAdditionalContext);
+    const recoveredPreflight = preflightStage3Prompt({
+      fullPrompt: recoveredPrompt,
+      requiredMarkers: input.requiredMarkers,
+      maxTotalChars: input.maxTotalChars,
+    });
+
+    recoveryAttempts.push({
+      stepKey,
+      additionalContextChars: workingAdditionalContext.length,
+      fullPromptChars: recoveredPreflight.fullPromptChars,
+      fitsBudget: recoveredPreflight.fitsBudget,
+      changed: reducedContext.changed,
+    });
+
+    if (recoveredPreflight.fitsBudget) {
+      return {
+        fullPrompt: recoveredPrompt,
+        additionalContext: workingAdditionalContext,
+        preflight: {
+          ...recoveredPreflight,
+          initialFullPromptChars: initialPreflight.fullPromptChars,
+          reductionApplied: recoveryAttempts.some((attempt) => attempt.changed),
+          usedReducedPromptShape: recoveryAttempts.some((attempt) => attempt.changed),
+          lastResortFailure: false,
+          recoveryAttempts,
+        },
+      };
+    }
+  }
+
+  const finalPrompt = buildFinalAnalysisPrompt(input.prompt, workingAdditionalContext);
+  const finalPreflight = preflightStage3Prompt({
+    fullPrompt: finalPrompt,
+    requiredMarkers: input.requiredMarkers,
+    maxTotalChars: input.maxTotalChars,
+  });
+
+  return {
+    fullPrompt: finalPrompt,
+    additionalContext: workingAdditionalContext,
+    preflight: {
+      ...finalPreflight,
+      initialFullPromptChars: initialPreflight.fullPromptChars,
+      reductionApplied: recoveryAttempts.some((attempt) => attempt.changed),
+      usedReducedPromptShape: recoveryAttempts.some((attempt) => attempt.changed),
+      lastResortFailure: true,
+      recoveryAttempts,
+    },
   };
 }
 
@@ -698,11 +808,14 @@ export async function generatePortfolioReport(
       : []),
   ];
 
-  const fullPrompt = buildFinalAnalysisPrompt(prompt, additionalContext);
-  const promptPreflight = preflightStage3Prompt({
-    fullPrompt,
+  const resolvedPrompt = resolveStage3PromptPreflight({
+    prompt,
+    additionalContext,
     requiredMarkers,
   });
+  const fullPrompt = resolvedPrompt.fullPrompt;
+  const promptPreflight = resolvedPrompt.preflight;
+  additionalContext = resolvedPrompt.additionalContext;
 
   if (!promptPreflight.fitsBudget) {
     throw new Stage3PreflightBudgetExceededError(promptPreflight);
