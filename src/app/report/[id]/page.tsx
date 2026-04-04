@@ -11,6 +11,7 @@ import { SortableRecommendationsTable } from "@/components/SortableRecommendatio
 import { ConvictionThread } from "@/components/ConvictionThread";
 import type { ConvictionThreadData } from "@/components/ConvictionThread";
 import type { MarketContext } from "@/lib/analyzer";
+import { estimateAnalysisCost } from "@/lib/report-cost-estimator";
 import { projectRecommendation } from "@/lib/view-models";
 import type { SourceViewModel } from "@/lib/view-models/types";
 import type { DiagnosticsStepContract } from "@/lib/contracts";
@@ -94,6 +95,10 @@ function formatDiagnosticValue(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return JSON.stringify(value, null, 2);
+}
+
+function formatUsdEstimate(value: number): string {
+  return `$${value.toFixed(value < 0.1 ? 3 : 2)}`;
 }
 
 function StepStatusPill({ status }: { status: DiagnosticsStepContract["status"] }) {
@@ -258,6 +263,18 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
       .filter((rec) => rec.shareDelta !== 0 || rec.actionBadgeVariant !== "hold");
     const changedRecommendations = normalizedRecommendations;
     const totalValue = snapshot?.holdings.reduce((sum, h) => sum + (h.currentValue || 0), 0) ?? 0;
+    const llmUsage = (() => {
+      try {
+        return bundle.llmUsageJson ? JSON.parse(bundle.llmUsageJson) as Record<string, unknown> : null;
+      } catch {
+        return null;
+      }
+    })();
+    const costEstimate = estimateAnalysisCost({
+      primaryModel: bundle.primaryModel ?? null,
+      llmUsage,
+      diagnostics,
+    });
 
     return (
       <div className="space-y-10 max-w-6xl mx-auto">
@@ -295,10 +312,19 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
                   <div className="text-[10px] uppercase tracking-wider text-slate-500">Evidence Packet</div>
                   <div className="mt-1 break-all text-sm font-semibold text-slate-100">{diagnostics.artifactMeta.evidencePacketId ?? "Not available"}</div>
                 </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+              <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
                   <div className="text-[10px] uppercase tracking-wider text-slate-500">Generated</div>
                   <div className="mt-1 text-sm font-semibold text-slate-100">
                     {new Date(diagnostics.artifactMeta.generatedAt).toLocaleString()}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Estimated Analysis Cost</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-100">
+                    {formatUsdEstimate(costEstimate.estimatedTotalCostUsd)}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    Primary model {formatUsdEstimate(costEstimate.primaryModelCostUsd)} · research heuristic {formatUsdEstimate(costEstimate.estimatedResearchCostUsd)}
                   </div>
                 </div>
               </div>

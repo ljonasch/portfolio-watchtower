@@ -25,6 +25,14 @@ describe("report verification grid", () => {
     expect(source).toContain("key={warning.warningId");
   });
 
+  test("bundle-backed report page shows the estimated analysis cost summary", () => {
+    const source = fs.readFileSync(REPORT_PAGE, "utf-8");
+
+    expect(source).toContain('import { estimateAnalysisCost } from "@/lib/report-cost-estimator"');
+    expect(source).toContain("Estimated Analysis Cost");
+    expect(source).toContain("Primary model");
+  });
+
   test("bundle-backed report page restores normal holdings and changes sections", () => {
     const source = fs.readFileSync(REPORT_PAGE, "utf-8");
 

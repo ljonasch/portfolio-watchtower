@@ -213,6 +213,14 @@ describe("analysis orchestrator diagnostics", () => {
       adjudicatorNotes: { AVGO: { confidence: "medium" } },
       perSectionChars: { news: 1200 },
       totalInputChars: 4200,
+      contextBudget: {
+        maxTotalChars: 16000,
+        initialTotalChars: 5100,
+        finalTotalChars: 4200,
+        fitsBudget: true,
+        trimmingApplied: true,
+        trimmedSections: ["news30d"],
+      },
       existingHoldingsCount: 6,
       allTickers: ["AAPL", "MSFT", "AVGO", "NVDA"],
       sources: [{ title: "News item", url: "https://example.com", source: "example", publishedAt: null }],
@@ -280,6 +288,16 @@ describe("analysis orchestrator diagnostics", () => {
       expect.objectContaining({
         recommendationCount: 2,
         outputSummary: "Add AI infrastructure exposure while trimming overlapping software risk.",
+        contextBudgetSummary: "Stage 3 context was trimmed deterministically from 5100 to 4200 chars before the primary reasoning call.",
+      })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "gpt5_reasoning")?.inputs).toEqual(
+      expect.objectContaining({
+        contextBudget: expect.objectContaining({
+          maxTotalChars: 16000,
+          trimmingApplied: true,
+          trimmedSections: ["news30d"],
+        }),
       })
     );
     expect(artifact.steps.find((step) => step.stepKey === "market_regime")?.inputs).toEqual(

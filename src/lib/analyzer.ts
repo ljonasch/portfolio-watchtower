@@ -431,6 +431,14 @@ CRITICAL MATH (enforced):
 4. New position: currentShares=0, currentWeight=0, action="Buy", shareDelta=targetShares
 5. MATH ADJUSTMENTS: If you are making a tiny fractional share adjustment (<2% target weight shift) strictly to balance the 100% portfolio math, KEEP the action as "Hold". DO NOT label it "Trim" or "Buy". Only use "Trim" or "Buy" for deliberate, research-driven strategic changes!
 
+OUTPUT BREVITY RULES:
+- Keep summary to one short paragraph.
+- Keep reasoning concise and high-signal.
+- thesisSummary must stay at 1-2 dense sentences.
+- detailedReasoning must stay concise within SHORT-TERM / MID-TERM / LONG-TERM headings; do not write long essays or repeated narrative.
+- whyChanged should explain the decision delta directly without restating the full thesis.
+- Include only the most decision-relevant facts and citations needed to justify the recommendation.
+
 SOURCE RULES:
 - ONLY cite URLs from the verified list above, Yahoo Finance quote pages, or major publication homepages
 - Never fabricate article URLs

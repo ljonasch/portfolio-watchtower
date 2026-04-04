@@ -42,9 +42,9 @@ import { buildCorrelationMatrix, formatCorrelationSection } from "./correlation-
 import { recordRunStats } from "./model-tracker";
 import { finalizeAnalysisRun, type FinalizeAnalysisRunInput } from "@/lib/services/analysis-lifecycle-service";
 import { buildFrozenMacroEvidence, replayMacroOutputsFromFrozenEvidence } from "./macro-evidence-freeze";
+import { budgetStage3Context, STAGE3_CONTEXT_BUDGET, type Stage3ContextBudgetSummary } from "./stage3-context-budget";
 import {
   buildPromptHash,
-  buildPerSectionChars,
   writeEvidencePacket,
   updateEvidencePacketOutcome,
 } from "./evidence-packet-builder";
@@ -791,6 +791,7 @@ function buildReasoningDiagnostics(input: {
   watchlistIdeas: any[];
   totalInputChars?: number | null;
   contextSections: string[];
+  contextBudget?: Stage3ContextBudgetSummary | null;
   adjudicatorNotes?: Record<string, unknown>;
   allTickers?: string[];
   reportData?: any;
@@ -818,6 +819,16 @@ function buildReasoningDiagnostics(input: {
     inputs: {
       recommendationUniverse: input.allTickers?.length ?? null,
       totalInputChars: input.totalInputChars ?? null,
+      contextBudget: input.contextBudget
+        ? {
+            maxTotalChars: input.contextBudget.maxTotalChars,
+            initialTotalChars: input.contextBudget.initialTotalChars,
+            finalTotalChars: input.contextBudget.finalTotalChars,
+            trimmingApplied: input.contextBudget.trimmingApplied,
+            trimmedSections: input.contextBudget.trimmedSections,
+            fitsBudget: input.contextBudget.fitsBudget,
+          }
+        : null,
       contextSections: input.contextSections.length > 0 ? input.contextSections : ["No per-section context telemetry was persisted for this run."],
       adjudicatorSupport: Object.keys(input.adjudicatorNotes ?? {}).length > 0
         ? `${Object.keys(input.adjudicatorNotes ?? {}).length} low-confidence ticker(s) received adjudicator notes.`
@@ -827,6 +838,11 @@ function buildReasoningDiagnostics(input: {
       outcomeExplanation,
       recommendationCount,
       watchlistIdeasCount: input.watchlistIdeas.length,
+      contextBudgetSummary: input.contextBudget
+        ? input.contextBudget.trimmingApplied
+          ? `Stage 3 context was trimmed deterministically from ${input.contextBudget.initialTotalChars} to ${input.contextBudget.finalTotalChars} chars before the primary reasoning call.`
+          : `Stage 3 context fit within the ${input.contextBudget.maxTotalChars}-char budget without trimming.`
+        : null,
       recommendations: input.recommendationRows.slice(0, 10).map((recommendation: any) => ({
         ticker: recommendation?.ticker ?? null,
         companyName: recommendation?.companyName ?? null,
@@ -844,6 +860,9 @@ function buildReasoningDiagnostics(input: {
     metrics: buildDiagnosticsMetrics([
       ["recommendation_count", "Recommendations", recommendationCount],
       ["watchlist_ideas", "Watchlist Ideas", input.watchlistIdeas.length],
+      ["context_initial_chars", "Context Chars (Initial)", input.contextBudget?.initialTotalChars ?? null],
+      ["context_final_chars", "Context Chars (Final)", input.contextBudget?.finalTotalChars ?? input.totalInputChars ?? null],
+      ["context_trimmed_sections", "Trimmed Sections", input.contextBudget?.trimmedSections.length ?? 0],
     ]),
     warnings: Object.keys(input.adjudicatorNotes ?? {}).length > 0
       ? buildDiagnosticsWarnings([["adjudicator_invoked", "Low-confidence adjudicator notes were captured for this run.", "info"]])
@@ -1044,6 +1063,7 @@ export function buildRunDiagnosticsArtifact(input: {
   adjudicatorNotes?: Record<string, unknown>;
   perSectionChars?: Record<string, unknown>;
   totalInputChars?: number | null;
+  contextBudget?: Stage3ContextBudgetSummary | null;
   sources?: Array<Record<string, unknown>>;
   existingHoldingsCount?: number | null;
   allTickers?: string[];
@@ -1134,6 +1154,7 @@ export function buildRunDiagnosticsArtifact(input: {
     watchlistIdeas,
     totalInputChars: input.totalInputChars ?? null,
     contextSections,
+    contextBudget: input.contextBudget ?? null,
     adjudicatorNotes: input.adjudicatorNotes,
     allTickers,
     reportData: input.reportData,
@@ -1685,30 +1706,153 @@ export async function runFullAnalysis(
   const valuationSection = formatValuationSection(frozenValuations);
   const correlationSection = formatCorrelationSection(frozenCorrelationMatrix);
 
-  const additionalContext = [
-    regimeSection,
-    macroSummarySection,
-    breaking24hSection,
-    newsSection ? `=== RESEARCH (30-day) ===\n${newsSection}` : "",
-    priceReactionSection ? `=== INTRADAY PRICE REACTIONS ===\n${priceReactionSection}` : "",
-    sentimentSection ? `=== SENTIMENT SIGNALS (informational only — do NOT treat as a directional vote; use as a weak prior only) ===\n${sentimentSection}` : "",
-    valuationSection,
-    correlationSection,
-    candidateSection,
-  ].filter(Boolean).join("\n\n");
-
-  // Batch 5: Build promptHash + write frozen EvidencePacket BEFORE LLM call
-  const perSectionChars = buildPerSectionChars({
+  const stage3ContextBudget = budgetStage3Context({
     regime: regimeSection,
     macroEnvironment: macroSummarySection,
     breaking24h: breaking24hSection,
-    news30d: newsSection,
-    priceReactions: priceReactionSection,
-    sentiment: sentimentSection,
+    news30d: newsSection ? `=== RESEARCH (30-day) ===\n${newsSection}` : "",
+    priceReactions: priceReactionSection ? `=== INTRADAY PRICE REACTIONS ===\n${priceReactionSection}` : "",
+    sentiment: sentimentSection ? `=== SENTIMENT SIGNALS (informational only — do NOT treat as a directional vote; use as a weak prior only) ===\n${sentimentSection}` : "",
     valuation: valuationSection,
     correlation: correlationSection,
     candidates: candidateSection,
   });
+  const additionalContext = stage3ContextBudget.additionalContext;
+  const perSectionChars = stage3ContextBudget.perSectionChars;
+
+  if (stage3ContextBudget.budget.trimmingApplied) {
+    emit({
+      type: "log",
+      message: `Stage 3 context budget trimmed ${stage3ContextBudget.budget.trimmedSections.length} section(s): ${stage3ContextBudget.budget.trimmedSections.join(", ")} (${stage3ContextBudget.budget.initialTotalChars} -> ${stage3ContextBudget.budget.finalTotalChars} chars).`,
+      level: "warn",
+    });
+  }
+
+  if (!stage3ContextBudget.budget.fitsBudget) {
+    const finalizedAt = new Date();
+    const budgetPromptHash = buildPromptHash(additionalContext);
+    const budgetMessage = `Stage 3 context remained ${stage3ContextBudget.budget.finalTotalChars} chars after deterministic trimming, above the ${stage3ContextBudget.budget.maxTotalChars}-char budget.`;
+    const diagnosticsArtifact = buildRunDiagnosticsArtifact({
+      bundleId: "pending",
+      runId,
+      outcome: "abstained",
+      generatedAt: finalizedAt.toISOString(),
+      evidencePacketId: null,
+      evidenceHash: promptHash,
+      promptHash,
+      versions: {
+        schemaVersion: TERMINAL_CONTRACT_VERSIONS.schemaVersion,
+        analysisPolicyVersion: TERMINAL_CONTRACT_VERSIONS.analysisPolicyVersion,
+        viewModelVersion: TERMINAL_CONTRACT_VERSIONS.viewModelVersion,
+        promptVersion: promptHash,
+      },
+      primaryModel: "gpt-5.4",
+      responseHash: null,
+      usingFallbackNews: frozenNewsResult.usingFallback ?? false,
+      regime: frozenFinalRegime,
+      gapReport,
+      macroEnvironment: frozenMacroEnvironment,
+      macroConsensus: frozenMacroConsensus,
+      macroBridge: frozenMacroBridge,
+      environmentalGaps: frozenEnvironmentalGaps,
+      candidateSearchLanes: frozenMacroCandidateSearchLanes,
+      newsResult: frozenNewsResult,
+      validationSummary: {
+        hardErrorCount: 1,
+        warningCount: 0,
+        reasonCodes: ["CONTEXT_TOO_LONG"],
+      },
+      perSectionChars,
+      totalInputChars: additionalContext.length,
+      contextBudget: stage3ContextBudget.budget,
+      existingHoldingsCount: existingTickers.length,
+      allTickers,
+      sources: (frozenNewsResult.allSources ?? []).map((source: any) => ({
+        title: source.title ?? source.source ?? "Untitled",
+        url: source.url ?? null,
+        publishedAt: source.publishedAt ?? null,
+        source: source.source ?? null,
+      })),
+    });
+
+    const finalization = await finalizeAnalysisRun({
+      runId,
+      userId: snapshot.userId,
+      snapshotId: snapshot.id,
+      outcome: "abstained",
+      completedAt: finalizedAt,
+      reportSummary: "Analysis incomplete. No recommendations were saved.",
+      reportReasoning: budgetMessage,
+      recommendations: [],
+      errorMessage: budgetMessage,
+      profileSnapshot: user.profile as Record<string, unknown>,
+      convictionsSnapshot: [],
+      evidencePacket: {
+        evidencePacketId: null,
+        promptHash: budgetPromptHash,
+        stage: "stage3",
+        macroEvidence: frozenMacroEvidence,
+        contextBudget: stage3ContextBudget.budget,
+        diagnosticsArtifact,
+      },
+      evidenceHash: budgetPromptHash,
+      evidenceFreshness: {
+        usingFallbackNews: frozenNewsResult.usingFallback ?? false,
+      },
+      sourceList: [],
+      versions: TERMINAL_CONTRACT_VERSIONS,
+      llm: {
+        primaryModel: "gpt-5.4",
+        structuredScore: {},
+        usage: {},
+      },
+      deterministic: {
+        factorLedger: {},
+        recommendationDecision: { outcome: "abstained" },
+        positionSizing: {},
+      },
+      validationSummary: {
+        hardErrorCount: 1,
+        warningCount: 0,
+        reasonCodes: ["CONTEXT_TOO_LONG"],
+        debugDetailsRef: null,
+      },
+      abstainReasonCodes: ["CONTEXT_TOO_LONG"],
+      reportViewModel: buildReportViewModel({
+        bundleId: "pending",
+        outcome: "abstained",
+        finalizedAt: finalizedAt.toISOString(),
+        summaryMessage: "Analysis incomplete. No recommendations were saved.",
+        reasoning: budgetMessage,
+        reasonCodes: ["CONTEXT_TOO_LONG"],
+        recommendations: [],
+        deliveryStatus: "not_eligible",
+      }),
+      emailPayload: null,
+      exportPayload: { recommendations: [] },
+      qualityMeta: {
+        abstainReason: "CONTEXT_TOO_LONG",
+        promptHash,
+        usingFallbackNews: frozenNewsResult.usingFallback ?? false,
+        contextBudget: stage3ContextBudget.budget,
+      },
+    });
+    finalizedBundleId = finalization.bundleId;
+
+    const abstainResult: AbstainResult = {
+      type: "abstain",
+      reason: "CONTEXT_TOO_LONG",
+      stage: "stage3",
+      retryCount: 0,
+      runId,
+      timestamp: new Date().toISOString(),
+    };
+
+    emit({ type: "log", message: `Analysis abstained before the primary model call: ${budgetMessage}`, level: "warn" });
+    throw new AnalysisAbstainedError(abstainResult, budgetMessage);
+  }
+
+  // Batch 5: Build promptHash + write frozen EvidencePacket BEFORE LLM call
   promptHash = buildPromptHash(additionalContext);
   emit({ type: "log", message: `Evidence packet assembled: ${additionalContext.length} chars, hash=${promptHash}`, level: "info" });
 
@@ -1720,15 +1864,15 @@ export async function runFullAnalysis(
         userId: snapshot.userId,
         runId,
         regime: frozenFinalRegime,
-        newsText: newsSection,
-        breaking24h: frozenBreakingText,
+        newsText: stage3ContextBudget.sections.news30d,
+        breaking24h: stage3ContextBudget.sections.breaking24h,
         // F2: pass structured signal map + articleTitles (replaces prior prose string)
         sentimentSignals: frozenSentimentSignals,
         articleTitles: new Map(Array.from(frozenTickerArticles.entries()).map(([t, arts]) => [t, arts.map(a => a.title)])),
-        priceReactionText: priceReactionSection,
-        valuationText: valuationSection,
-        correlationText: correlationSection,
-        candidateText: candidateSection,
+        priceReactionText: stage3ContextBudget.sections.priceReactions,
+        valuationText: stage3ContextBudget.sections.valuation,
+        correlationText: stage3ContextBudget.sections.correlation,
+        candidateText: stage3ContextBudget.sections.candidates,
         macroEvidence: frozenMacroEvidence,
         customPrompt,
         holdingCount: snapshot.holdings.filter(h => !h.isCash).length,
@@ -1758,6 +1902,7 @@ export async function runFullAnalysis(
         promptHash,
         stage: "stage3",
         macroEvidence: frozenMacroEvidence,
+        contextBudget: stage3ContextBudget.budget,
         diagnosticsArtifact: buildRunDiagnosticsArtifact({
           bundleId: "pending",
           runId,
@@ -1787,6 +1932,9 @@ export async function runFullAnalysis(
             warningCount: 0,
             reasonCodes: ["evidence_packet_persist_failed"],
           },
+          perSectionChars,
+          totalInputChars: additionalContext.length,
+          contextBudget: stage3ContextBudget.budget,
         }),
       },
       evidenceHash: promptHash,
@@ -1828,6 +1976,7 @@ export async function runFullAnalysis(
         abstainReason: "evidence_packet_persist_failed",
         promptHash,
         usingFallbackNews: frozenNewsResult.usingFallback ?? false,
+        contextBudget: stage3ContextBudget.budget,
       },
     });
     finalizedBundleId = finalization.bundleId;
@@ -1902,6 +2051,7 @@ export async function runFullAnalysis(
         promptHash,
         stage: "stage3",
         macroEvidence: frozenMacroEvidence,
+        contextBudget: stage3ContextBudget.budget,
         diagnosticsArtifact: buildRunDiagnosticsArtifact({
           bundleId: "pending",
           runId,
@@ -1931,6 +2081,9 @@ export async function runFullAnalysis(
             warningCount: 0,
             reasonCodes: [abstainReason],
           },
+          perSectionChars,
+          totalInputChars: additionalContext.length,
+          contextBudget: stage3ContextBudget.budget,
         }),
       },
       evidenceHash: promptHash,
@@ -1973,6 +2126,7 @@ export async function runFullAnalysis(
         isLengthAbort,
         promptHash,
         usingFallbackNews: frozenNewsResult.usingFallback ?? false,
+        contextBudget: stage3ContextBudget.budget,
       },
     });
     finalizedBundleId = finalization.bundleId;
@@ -2146,6 +2300,7 @@ export async function runFullAnalysis(
     adjudicatorNotes,
     perSectionChars,
     totalInputChars: additionalContext.length,
+    contextBudget: stage3ContextBudget.budget,
     existingHoldingsCount: existingTickers.length,
     allTickers,
     sources: (frozenNewsResult.allSources ?? []).map((source: any) => ({
@@ -2197,6 +2352,7 @@ export async function runFullAnalysis(
       promptHash,
       additionalContextLength: additionalContext.length,
       perSectionChars,
+      contextBudget: stage3ContextBudget.budget,
       usingFallbackNews,
       priceDataMissing,
       regime: frozenFinalRegime,
@@ -2300,6 +2456,7 @@ export async function runFullAnalysis(
       validationWarningCount,
       perSectionChars,
       totalInputChars: additionalContext.length,
+      contextBudget: stage3ContextBudget.budget,
       evidencePacketId,
       adjudicatorInvoked,
       adjudicatorTickers: Object.keys(adjudicatorNotes),
