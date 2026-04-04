@@ -40,6 +40,118 @@ Current uncommitted workspace noise when this handoff was written:
 
 These are runtime-noise artifacts and should generally **not** be committed unless the user explicitly asks for DB/log changes.
 
+## Program architecture overall
+
+Portfolio Watchtower is a **bundle-backed portfolio analysis system**. The current architecture is best understood as five layers:
+
+### 1. Input and trigger layer
+
+- Portfolio state enters through persisted snapshots and holdings.
+- Runs are started manually or by the daily scheduler.
+- Important entrypoints:
+  - [src/app/api/analyze/stream/route.ts](C:/Users/Lucas Jonasch/Documents/portfolio-watchtower/src/app/api/analyze/stream/route.ts)
+  - [src/lib/services/analysis-lifecycle-service.ts](C:/Users/Lucas Jonasch/Documents/portfolio-watchtower/src/lib/services/analysis-lifecycle-service.ts)
+  - [src/lib/scheduler.ts](C:/Users/Lucas Jonasch/Documents/portfolio-watchtower/src/lib/scheduler.ts)
+
+### 2. Research and evidence layer
+
+- The main coordinator is [src/lib/research/analysis-orchestrator.ts](C:/Users/Lucas Jonasch/Documents/portfolio-watchtower/src/lib/research/analysis-orchestrator.ts).
+- It assembles:
+  - regime
+  - gap analysis
+  - macro environment
+  - environmental gaps
+  - candidate search lanes
+  - candidate screening
+  - ticker news
+  - price timelines
+  - valuation
+  - correlation
+  - sentiment inputs
+- This is the layer where most provider pressure and freshness logic currently lives.
+
+### 3. Analyzer / recommendation layer
+
+- The primary final-analysis logic lives in [src/lib/analyzer.ts](C:/Users/Lucas Jonasch/Documents/portfolio-watchtower/src/lib/analyzer.ts).
+- It builds the final Stage 3 prompt, runs the main LLM call, validates output, applies deterministic rules, and produces the final recommendation payload.
+
+### 4. Persistence / canonical artifact layer
+
+- `AnalysisRun` tracks execution status.
+- `AnalysisBundle` is the canonical modern artifact.
+- `PortfolioReport` and `HoldingRecommendation` still exist for compatibility.
+- Evidence is intentionally frozen before the final model call so downstream reporting can be bundle-backed and replayable.
+
+### 5. Read-model / delivery layer
+
+- Current reports, archives, exports, and email delivery read increasingly from bundle-backed artifacts.
+- Relevant services live under [src/lib/read-models](C:/Users/Lucas Jonasch/Documents/portfolio-watchtower/src/lib/read-models) and [src/lib/services](C:/Users/Lucas Jonasch/Documents/portfolio-watchtower/src/lib/services).
+
+### Architectural principles that have been preserved
+
+- Keep changes **narrow and local**
+- Prefer **exact-match reuse from finalized immutable bundle evidence**
+- Use **bounded freshness windows** to prevent sticky reuse
+- Preserve deterministic replay where the architecture already supports it
+- Avoid broad cache-platform redesign
+- Avoid recommendation-logic redesign when solving runtime/cost problems
+
+### Most important current file to understand first
+
+If a new agent only reads one file first, it should be:
+
+- [src/lib/research/analysis-orchestrator.ts](C:/Users/Lucas Jonasch/Documents/portfolio-watchtower/src/lib/research/analysis-orchestrator.ts)
+
+That file is the clearest map of how the system behaves end-to-end today.
+
+## Changes made recently
+
+The repo has gone through a sequence of **narrow hardening batches**, not a redesign.
+
+### Change theme 1: determinism + reuse
+
+Added exact-match reuse and freshness guards for:
+
+- candidate screening
+- structural gap analysis
+- macro environment collection
+- ticker-news article sets
+
+### Change theme 2: Stage 3 reliability
+
+Added:
+
+- structured context budgeting
+- final prompt preflight
+- deterministic overflow recovery
+- clear abstain path when the final Stage 3 prompt still cannot fit
+
+### Change theme 3: provider-pressure visibility
+
+Added a small shared provider-pressure diagnostics foundation and extended it into:
+
+- gap analysis
+- macro environment
+- ticker news
+- some market-data helper diagnostics
+
+### Change theme 4: market-data helper freshness
+
+Added:
+
+- intraday-ish price helper refresh behavior
+- daily-ish valuation refresh behavior
+- thin helper-local diagnostics
+
+### What has intentionally not been redesigned
+
+- recommendation philosophy
+- candidate scoring philosophy
+- Stage 3 decision logic
+- macro theme / bridge philosophy
+- broader cache platform
+- a repo-wide search platform redesign
+
 ## Recent implementation history
 
 Recent landed commits:
