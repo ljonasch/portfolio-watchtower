@@ -404,6 +404,52 @@ export interface ScreenedCandidate {
   environmentalGapIds?: string[];
 }
 
+export type CandidateScreeningMode = "lite" | "full";
+
+export interface CandidateScreeningDiagnostics {
+  mode: CandidateScreeningMode;
+  fingerprint: string;
+  maxMacroLanes: number | null;
+  targetValidatedCandidateCount: number;
+  totalProviderPromptCount: number;
+  structuralPromptCount: number;
+  macroLanePromptCount: number;
+  retryCount: number;
+  totalBackoffSeconds: number;
+  rateLimitedPromptCount: number;
+  macroLaneIdsAvailable: string[];
+  macroLaneIdsConsidered: string[];
+  queriedLaneIds: string[];
+  skippedLaneIds: string[];
+  laneCountQueried: number;
+  laneCountSkipped: number;
+  skippedLanesDueToEnoughSurvivors: number;
+  rawCandidateCount: number;
+  dedupedCandidateCount: number;
+  candidatesSentToPriceValidation: number;
+  validatedSurvivors: number;
+  validatedSurvivorsByOrigin: {
+    structural: number;
+    macroLane: number;
+  };
+  reuseHit: boolean;
+  reuseSourceBundleId: string | null;
+  reuseMissReason: string | null;
+  stoppedEarly: boolean;
+}
+
+export interface CandidateScreeningArtifact {
+  fingerprint: string;
+  mode: CandidateScreeningMode;
+  candidates: ScreenedCandidate[];
+  diagnostics: CandidateScreeningDiagnostics;
+}
+
+export interface CandidateScreeningResult {
+  candidates: ScreenedCandidate[];
+  diagnostics: CandidateScreeningDiagnostics;
+}
+
 // ─── New shared types added in Batch 2 ───────────────────────────────────────
 
 // Candidate universe — deterministic output of candidate_universe_filter

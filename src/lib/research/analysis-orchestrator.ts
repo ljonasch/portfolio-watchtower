@@ -21,7 +21,7 @@ import { freezeRuntimeEvidence } from "@/lib/cache";
 import { prisma } from "@/lib/prisma";
 import { detectMarketRegime }      from "./market-regime";
 import { deriveEnvironmentalGaps, runStructuralGapAnalysis } from "./gap-analyzer";
-import { screenCandidates }        from "./candidate-screener";
+import { screenCandidatesDetailed } from "./candidate-screener";
 import { fetchAllNewsWithFallback } from "./news-fetcher";
 import { fetchPriceTimelines }     from "./price-timeline";
 import { scoreSentimentForAll }    from "./sentiment-scorer";
@@ -56,12 +56,23 @@ import type { ProgressEvent }      from "./progress-events";
 import {
   AnalysisAbstainedError,
   type AbstainResult,
+  type CandidateScreeningArtifact,
+  type CandidateScreeningDiagnostics,
+  type CandidateScreeningMode,
   type CandidateSearchLane,
   type EnvironmentalGap,
   type MacroExposureBridgeResult,
   type MacroNewsEnvironmentResult,
   type MacroThemeConsensusResult,
 } from "./types";
+import {
+  buildCandidateScreeningFingerprint,
+  CANDIDATE_SCREENING_MODE_RULES,
+  extractCandidateScreeningArtifactFromEvidencePacket,
+  resolveCandidateScreeningMode,
+  selectMacroLanesForScreening,
+  sortMacroLanesForScreening,
+} from "./candidate-screening-fingerprint";
 import type {
   DiagnosticsMetricContract,
   DiagnosticsSourceRefContract,
@@ -380,11 +391,96 @@ function buildGapScanDiagnostics(input: {
   };
 }
 
+function buildReusedCandidateScreeningArtifact(input: {
+  mode: CandidateScreeningMode;
+  fingerprint: string;
+  candidates: any[];
+  sourceBundleId: string;
+  macroCandidateSearchLanes: CandidateSearchLane[];
+}): CandidateScreeningArtifact {
+  const laneSelection = selectMacroLanesForScreening(input.macroCandidateSearchLanes, input.mode);
+  const modeRules = CANDIDATE_SCREENING_MODE_RULES[input.mode];
+  const survivors = Array.isArray(input.candidates) ? input.candidates : [];
+  return {
+    fingerprint: input.fingerprint,
+    mode: input.mode,
+    candidates: survivors,
+    diagnostics: {
+      mode: input.mode,
+      fingerprint: input.fingerprint,
+      maxMacroLanes: modeRules.maxMacroLanes,
+      targetValidatedCandidateCount: modeRules.targetValidatedCandidateCount,
+      totalProviderPromptCount: 0,
+      structuralPromptCount: 0,
+      macroLanePromptCount: 0,
+      retryCount: 0,
+      totalBackoffSeconds: 0,
+      rateLimitedPromptCount: 0,
+      macroLaneIdsAvailable: sortMacroLanesForScreening(input.macroCandidateSearchLanes).map((lane) => lane.laneId),
+      macroLaneIdsConsidered: laneSelection.selected.map((lane) => lane.laneId),
+      queriedLaneIds: [],
+      skippedLaneIds: [],
+      laneCountQueried: 0,
+      laneCountSkipped: 0,
+      skippedLanesDueToEnoughSurvivors: 0,
+      rawCandidateCount: survivors.length,
+      dedupedCandidateCount: survivors.length,
+      candidatesSentToPriceValidation: survivors.length,
+      validatedSurvivors: survivors.length,
+      validatedSurvivorsByOrigin: {
+        structural: survivors.filter((candidate: any) => candidate?.candidateOrigin !== "macro_lane").length,
+        macroLane: survivors.filter((candidate: any) => candidate?.candidateOrigin === "macro_lane").length,
+      },
+      reuseHit: true,
+      reuseSourceBundleId: input.sourceBundleId,
+      reuseMissReason: null,
+      stoppedEarly: false,
+    },
+  };
+}
+
+export async function findReusableCandidateScreeningBundle(input: {
+  userId: string;
+  bundleScope: string;
+  fingerprint: string;
+}): Promise<{ bundleId: string; artifact: CandidateScreeningArtifact } | null> {
+  const bundles = await prisma.analysisBundle.findMany({
+    where: {
+      userId: input.userId,
+      bundleScope: input.bundleScope,
+    },
+    orderBy: { finalizedAt: "desc" },
+    take: 20,
+    select: {
+      id: true,
+      evidencePacketJson: true,
+    },
+  });
+
+  for (const bundle of bundles) {
+    try {
+      const evidencePacket = JSON.parse(bundle.evidencePacketJson);
+      const artifact = extractCandidateScreeningArtifactFromEvidencePacket(evidencePacket);
+      if (artifact?.fingerprint === input.fingerprint) {
+        return {
+          bundleId: bundle.id,
+          artifact,
+        };
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 function buildCandidateScreeningDiagnostics(input: {
   candidates?: any[];
   existingHoldingsCount?: number | null;
   allTickers?: string[];
   gapReport?: any;
+  screening?: CandidateScreeningDiagnostics | null;
 }): Pick<DiagnosticsStepContract, "status" | "summary" | "inputs" | "outputs" | "warnings" | "metrics"> {
   const candidateRows = Array.isArray(input.candidates) ? input.candidates : [];
   const holdingsCount = input.existingHoldingsCount ?? null;
@@ -394,6 +490,7 @@ function buildCandidateScreeningDiagnostics(input: {
   const foundCandidates = candidateRows.length > 0;
   const macroOriginCount = candidateRows.filter((candidate) => candidate?.candidateOrigin === "macro_lane").length;
   const structuralOriginCount = candidateRows.filter((candidate) => candidate?.candidateOrigin !== "macro_lane").length;
+  const screening = input.screening ?? null;
 
   const status: DiagnosticsStepContract["status"] = foundCandidates
     ? "ok"
@@ -401,11 +498,13 @@ function buildCandidateScreeningDiagnostics(input: {
       ? "ok"
       : "warning";
 
-  const outcomeExplanation = foundCandidates
-    ? `${candidateRows.length} candidate(s) passed screening and were advanced into the analyzed ticker set.`
-    : hasScreeningContext
-      ? "Candidate screening ran and no external candidates passed the screen for this run."
-      : "Candidate screening degraded because the run did not persist enough screening context to explain the empty result confidently.";
+  const outcomeExplanation = screening?.reuseHit
+    ? `${candidateRows.length} candidate(s) were reused from finalized bundle ${screening.reuseSourceBundleId} because the screening fingerprint matched exactly.`
+    : foundCandidates
+      ? `${candidateRows.length} candidate(s) passed screening and were advanced into the analyzed ticker set.`
+      : hasScreeningContext
+        ? "Candidate screening ran and no external candidates passed the screen for this run."
+        : "Candidate screening degraded because the run did not persist enough screening context to explain the empty result confidently.";
 
   return {
     status,
@@ -422,6 +521,15 @@ function buildCandidateScreeningDiagnostics(input: {
         ? "Gap fit, recent catalyst strength, analyst support, and live-price validation."
         : "Gap fit and externally screened candidate reasoning.",
       macroLaneCount: Array.isArray(input.gapReport?.candidateSearchLanes) ? input.gapReport.candidateSearchLanes.length : 0,
+      screeningMode: screening?.mode ?? null,
+      screeningFingerprint: screening?.fingerprint ?? null,
+      reuseState: screening?.reuseHit ? "reused_from_bundle" : "fresh_screening",
+      reuseSourceBundleId: screening?.reuseSourceBundleId ?? null,
+      reuseMissReason: screening?.reuseMissReason ?? null,
+      macroLaneIdsAvailable: screening?.macroLaneIdsAvailable ?? [],
+      macroLaneIdsConsidered: screening?.macroLaneIdsConsidered ?? [],
+      queriedLaneIds: screening?.queriedLaneIds ?? [],
+      skippedLaneIds: screening?.skippedLaneIds ?? [],
     },
     outputs: {
       outcomeExplanation,
@@ -445,6 +553,18 @@ function buildCandidateScreeningDiagnostics(input: {
         : hasScreeningContext
           ? "No screened candidates met the bar to be advanced into the final analyzed set."
           : "The screening step did not persist enough scope detail to explain why no candidates passed.",
+      providerPromptCount: screening?.totalProviderPromptCount ?? null,
+      retryCount: screening?.retryCount ?? null,
+      totalBackoffSeconds: screening?.totalBackoffSeconds ?? null,
+      rateLimitedPromptCount: screening?.rateLimitedPromptCount ?? null,
+      laneCountQueried: screening?.laneCountQueried ?? null,
+      laneCountSkipped: screening?.laneCountSkipped ?? null,
+      stoppedEarly: screening?.stoppedEarly ?? null,
+      skippedLanesDueToEnoughSurvivors: screening?.skippedLanesDueToEnoughSurvivors ?? null,
+      rawCandidateCount: screening?.rawCandidateCount ?? null,
+      dedupedCandidateCount: screening?.dedupedCandidateCount ?? null,
+      candidatesSentToPriceValidation: screening?.candidatesSentToPriceValidation ?? null,
+      validatedSurvivors: screening?.validatedSurvivors ?? candidateRows.length,
     },
     warnings: !hasScreeningContext
       ? buildDiagnosticsWarnings([["candidate_screening_context_missing", "Candidate screening context was incomplete, so the empty result may reflect degraded telemetry.", "warning"]])
@@ -453,6 +573,12 @@ function buildCandidateScreeningDiagnostics(input: {
       ["candidate_count", "Candidate Count", candidateRows.length],
       ["held_ticker_count", "Held Tickers", holdingsCount],
       ["estimated_external_pool", "Estimated External Pool", candidatePoolCount],
+      ["screening_prompt_count", "Provider Screening Prompt Count", screening?.totalProviderPromptCount],
+      ["screening_retry_count", "Screening Retry Count", screening?.retryCount],
+      ["screening_backoff_seconds", "Screening Backoff Seconds", screening?.totalBackoffSeconds],
+      ["screening_lane_count_queried", "Macro Lanes Queried", screening?.laneCountQueried],
+      ["screening_lane_count_skipped", "Macro Lanes Skipped", screening?.laneCountSkipped],
+      ["screening_reuse_hit", "Reuse Hit", screening?.reuseHit],
     ]),
   };
 }
@@ -1077,6 +1203,7 @@ export function buildRunDiagnosticsArtifact(input: {
   environmentalGaps?: EnvironmentalGap[] | null;
   candidateSearchLanes?: CandidateSearchLane[] | null;
   candidates?: any[];
+  candidateScreening?: CandidateScreeningDiagnostics | null;
   newsResult?: any;
   sentimentSignals?: Map<string, any>;
   sentimentOverlay?: any[];
@@ -1163,6 +1290,7 @@ export function buildRunDiagnosticsArtifact(input: {
     existingHoldingsCount,
     allTickers,
     gapReport: input.gapReport,
+    screening: input.candidateScreening,
   });
   const newsSourceDiagnostics = buildNewsSourceDiagnostics({
     allTickers,
@@ -1529,16 +1657,83 @@ export async function runFullAnalysis(
     environmentalGaps,
     candidateSearchLanes: macroCandidateSearchLanes,
   });
-
-  const candidates = await screenCandidates(
-    openai,
-    existingTickers,
-    gapReport.searchBrief,
+  const screeningMode = resolveCandidateScreeningMode(triggerType);
+  const screeningFingerprint = buildCandidateScreeningFingerprint({
+    mode: screeningMode,
+    structuralSearchBrief: gapReport.searchBrief,
     macroCandidateSearchLanes,
-    user.profile,
-    today,
-    emit
-  );
+    existingTickers,
+    permittedAssetClasses: user.profile?.permittedAssetClasses ?? "Stocks, ETFs",
+    riskTolerance: user.profile?.trackedAccountRiskTolerance ?? "medium",
+  });
+  const reusableCandidateScreening = screeningMode === "lite"
+    ? await findReusableCandidateScreeningBundle({
+        userId: snapshot.userId,
+        bundleScope: "PRIMARY_PORTFOLIO",
+        fingerprint: screeningFingerprint,
+      })
+    : null;
+  let candidateScreeningArtifact: CandidateScreeningArtifact;
+
+  if (reusableCandidateScreening) {
+    emit({
+      type: "stage_start",
+      stage: "candidates",
+      label: "Candidate Stock Screening",
+      detail: `Reusing exact-match screening artifact from bundle ${reusableCandidateScreening.bundleId}`,
+    });
+
+    candidateScreeningArtifact = buildReusedCandidateScreeningArtifact({
+      mode: screeningMode,
+      fingerprint: screeningFingerprint,
+      candidates: reusableCandidateScreening.artifact.candidates,
+      sourceBundleId: reusableCandidateScreening.bundleId,
+      macroCandidateSearchLanes,
+    });
+
+    for (const candidate of candidateScreeningArtifact.candidates) {
+      emit({
+        type: "candidate_found",
+        ticker: candidate.ticker,
+        companyName: candidate.companyName,
+        source: candidate.source,
+        reason: candidate.reason,
+        catalyst: candidate.catalyst,
+      });
+    }
+
+    emit({
+      type: "log",
+      message: `Candidate screening reused ${candidateScreeningArtifact.candidates.length} validated candidate(s) from finalized bundle ${reusableCandidateScreening.bundleId}.`,
+      level: "info",
+    });
+    emit({ type: "stage_complete", stage: "candidates", durationMs: 0 });
+  } else {
+    const freshScreening = await screenCandidatesDetailed(
+      openai,
+      existingTickers,
+      gapReport.searchBrief,
+      macroCandidateSearchLanes,
+      user.profile,
+      today,
+      emit,
+      {
+        mode: screeningMode,
+        fingerprint: screeningFingerprint,
+      }
+    );
+    freshScreening.diagnostics.reuseMissReason = screeningMode === "lite"
+      ? "no_matching_bundle_fingerprint"
+      : "full_mode_forces_fresh_screening";
+    candidateScreeningArtifact = {
+      fingerprint: screeningFingerprint,
+      mode: screeningMode,
+      candidates: freshScreening.candidates,
+      diagnostics: freshScreening.diagnostics,
+    };
+  }
+
+  const candidates = candidateScreeningArtifact.candidates;
 
   const candidateTickers = candidates.map(c => c.ticker);
   const allTickers = [...new Set([...existingTickers, ...candidateTickers])];
@@ -1784,6 +1979,7 @@ export async function runFullAnalysis(
       macroBridge: frozenMacroBridge,
       environmentalGaps: frozenEnvironmentalGaps,
       candidateSearchLanes: frozenMacroCandidateSearchLanes,
+      candidateScreening: candidateScreeningArtifact.diagnostics,
       newsResult: frozenNewsResult,
       validationSummary: {
         hardErrorCount: 1,
@@ -1820,6 +2016,7 @@ export async function runFullAnalysis(
         promptHash: budgetPromptHash,
         stage: "stage3",
         macroEvidence: frozenMacroEvidence,
+        candidateScreening: candidateScreeningArtifact,
         contextBudget: stage3ContextBudget.budget,
         diagnosticsArtifact,
       },
@@ -1930,6 +2127,7 @@ export async function runFullAnalysis(
         promptHash,
         stage: "stage3",
         macroEvidence: frozenMacroEvidence,
+        candidateScreening: candidateScreeningArtifact,
         contextBudget: stage3ContextBudget.budget,
         diagnosticsArtifact: buildRunDiagnosticsArtifact({
           bundleId: "pending",
@@ -1955,6 +2153,7 @@ export async function runFullAnalysis(
           macroBridge: frozenMacroBridge,
           environmentalGaps: frozenEnvironmentalGaps,
           candidateSearchLanes: frozenMacroCandidateSearchLanes,
+          candidateScreening: candidateScreeningArtifact.diagnostics,
           validationSummary: {
             hardErrorCount: 1,
             warningCount: 0,
@@ -2084,6 +2283,7 @@ export async function runFullAnalysis(
         promptHash,
         stage: "stage3",
         macroEvidence: frozenMacroEvidence,
+        candidateScreening: candidateScreeningArtifact,
         contextBudget: stage3ContextBudget.budget,
         diagnosticsArtifact: buildRunDiagnosticsArtifact({
           bundleId: "pending",
@@ -2109,6 +2309,7 @@ export async function runFullAnalysis(
           macroBridge: frozenMacroBridge,
           environmentalGaps: frozenEnvironmentalGaps,
           candidateSearchLanes: frozenMacroCandidateSearchLanes,
+          candidateScreening: candidateScreeningArtifact.diagnostics,
           validationSummary: {
             hardErrorCount: 1,
             warningCount: 0,
@@ -2324,6 +2525,7 @@ export async function runFullAnalysis(
     macroBridge: frozenMacroBridge,
     environmentalGaps: frozenEnvironmentalGaps,
     candidateSearchLanes: frozenMacroCandidateSearchLanes,
+    candidateScreening: candidateScreeningArtifact.diagnostics,
     candidates,
     newsResult: frozenNewsResult,
     sentimentSignals: frozenSentimentSignals,
@@ -2395,6 +2597,7 @@ export async function runFullAnalysis(
       priceDataMissing,
       regime: frozenFinalRegime,
       macroEvidence: frozenMacroEvidence,
+      candidateScreening: candidateScreeningArtifact,
       diagnosticsArtifact,
     },
     evidenceHash: promptHash,

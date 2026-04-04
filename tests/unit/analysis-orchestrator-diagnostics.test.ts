@@ -177,6 +177,37 @@ describe("analysis orchestrator diagnostics", () => {
           rationaleSummary: "Defense macro theme opened a bounded discovery lane.",
         },
       ],
+      candidateScreening: {
+        mode: "lite",
+        fingerprint: "screen_fp_1",
+        maxMacroLanes: 2,
+        targetValidatedCandidateCount: 3,
+        totalProviderPromptCount: 2,
+        structuralPromptCount: 1,
+        macroLanePromptCount: 1,
+        retryCount: 1,
+        totalBackoffSeconds: 65,
+        rateLimitedPromptCount: 1,
+        macroLaneIdsAvailable: ["macro_lane:defense_fiscal_beneficiaries"],
+        macroLaneIdsConsidered: ["macro_lane:defense_fiscal_beneficiaries"],
+        queriedLaneIds: ["macro_lane:defense_fiscal_beneficiaries"],
+        skippedLaneIds: [],
+        laneCountQueried: 1,
+        laneCountSkipped: 0,
+        skippedLanesDueToEnoughSurvivors: 0,
+        rawCandidateCount: 2,
+        dedupedCandidateCount: 1,
+        candidatesSentToPriceValidation: 1,
+        validatedSurvivors: 1,
+        validatedSurvivorsByOrigin: {
+          structural: 1,
+          macroLane: 0,
+        },
+        reuseHit: false,
+        reuseSourceBundleId: null,
+        reuseMissReason: "no_matching_bundle_fingerprint",
+        stoppedEarly: false,
+      },
       candidates: [{ ticker: "AVGO", companyName: "Broadcom", reason: "AI infra gap", source: "gap_screener", candidateOrigin: "structural" }],
       newsResult: {
         availabilityStatus: "primary_success",
@@ -273,6 +304,11 @@ describe("analysis orchestrator diagnostics", () => {
         screeningGoal: "One gap found.",
         categoriesConsidered: "Existing holdings plus externally screened candidates were considered.",
         rankingBasis: "Gap fit and externally screened candidate reasoning.",
+        screeningMode: "lite",
+        screeningFingerprint: "screen_fp_1",
+        reuseState: "fresh_screening",
+        reuseMissReason: "no_matching_bundle_fingerprint",
+        queriedLaneIds: ["macro_lane:defense_fiscal_beneficiaries"],
       })
     );
     expect(artifact.steps.find((step) => step.stepKey === "candidate_screening")?.outputs).toEqual(
@@ -283,7 +319,20 @@ describe("analysis orchestrator diagnostics", () => {
           macroLane: 0,
         },
         outcomeExplanation: "1 candidate(s) passed screening and were advanced into the analyzed ticker set.",
+        providerPromptCount: 2,
+        retryCount: 1,
+        totalBackoffSeconds: 65,
+        laneCountQueried: 1,
       })
+    );
+    expect(artifact.steps.find((step) => step.stepKey === "candidate_screening")?.metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "screening_prompt_count", value: 2 }),
+        expect.objectContaining({ key: "screening_retry_count", value: 1 }),
+        expect.objectContaining({ key: "screening_backoff_seconds", value: 65 }),
+        expect.objectContaining({ key: "screening_lane_count_queried", value: 1 }),
+        expect.objectContaining({ key: "screening_reuse_hit", value: false }),
+      ])
     );
     expect(artifact.steps.find((step) => step.stepKey === "news_sources")?.inputs).toEqual(
       expect.objectContaining({
