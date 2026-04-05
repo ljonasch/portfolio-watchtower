@@ -20,17 +20,22 @@ describe("report verification grid", () => {
     expect(source).toContain("Key Outputs");
     expect(source).toContain("Warnings & Reasons");
     expect(source).toContain("Sources (");
+    expect(source).toContain("Raw JSON");
+    expect(source).toContain("leadIssue");
     expect(source).toContain("No diagnostics details were persisted for this section.");
     expect(source.indexOf('title="Key Inputs"')).toBeLessThan(source.indexOf('title="Hashes"'));
     expect(source).toContain("key={warning.warningId");
   });
 
-  test("bundle-backed report page shows the estimated analysis cost summary", () => {
+  test("bundle-backed report page shows elapsed runtime and multi-model usage instead of a primary-model-only cost summary", () => {
     const source = fs.readFileSync(REPORT_PAGE, "utf-8");
 
     expect(source).toContain('import { estimateAnalysisCost } from "@/lib/report-cost-estimator"');
-    expect(source).toContain("Estimated Analysis Cost (heuristic)");
-    expect(source).toContain("Primary model");
+    expect(source).toContain("Elapsed");
+    expect(source).toContain("Model Usage & Cost (heuristic)");
+    expect(source).toContain("exact tokens where persisted");
+    expect(source).not.toContain("Estimated Analysis Cost (heuristic)");
+    expect(source).not.toContain("Primary model");
   });
 
   test("bundle-backed report page restores normal holdings and changes sections", () => {

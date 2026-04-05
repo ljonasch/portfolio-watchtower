@@ -58,10 +58,17 @@ describe("run diagnostics read service", () => {
         },
       }),
     });
+    (prisma.analysisRun.findUnique as jest.Mock).mockResolvedValue({
+      startedAt: new Date("2026-04-01T23:55:00.000Z"),
+      completedAt: new Date("2026-04-02T00:00:00.000Z"),
+    });
 
     const result = await getRunDiagnostics("bundle_1");
 
     expect(result?.artifactMeta.bundleId).toBe("bundle_1");
+    expect(result?.artifactMeta.startedAt).toBe("2026-04-01T23:55:00.000Z");
+    expect(result?.artifactMeta.completedAt).toBe("2026-04-02T00:00:00.000Z");
+    expect(result?.artifactMeta.elapsedMs).toBe(300000);
     expect(result?.steps).toHaveLength(1);
     expect(result?.diagnosticsState).toEqual(
       expect.objectContaining({
@@ -87,7 +94,13 @@ describe("run diagnostics read service", () => {
         note: "This step did not persist a detailed market-regime conclusion beyond the stored status summary.",
       })
     );
-    expect(prisma.analysisRun.findUnique).not.toHaveBeenCalled();
+    expect(prisma.analysisRun.findUnique).toHaveBeenCalledWith({
+      where: { id: "run_1" },
+      select: {
+        startedAt: true,
+        completedAt: true,
+      },
+    });
   });
 
   test("synthesizes diagnostics from persisted backend fields when older bundles lack the artifact", async () => {
@@ -117,6 +130,8 @@ describe("run diagnostics read service", () => {
       ]),
     });
     (prisma.analysisRun.findUnique as jest.Mock).mockResolvedValue({
+      startedAt: new Date("2026-04-01T23:45:00.000Z"),
+      completedAt: new Date("2026-04-02T00:00:00.000Z"),
       qualityMeta: JSON.stringify({
         promptHash: "prompt_hash",
         evidencePacketId: "packet_1",
@@ -140,6 +155,9 @@ describe("run diagnostics read service", () => {
     const result = await getRunDiagnostics("bundle_legacy");
 
     expect(result?.artifactMeta.bundleId).toBe("bundle_legacy");
+    expect(result?.artifactMeta.startedAt).toBe("2026-04-01T23:45:00.000Z");
+    expect(result?.artifactMeta.completedAt).toBe("2026-04-02T00:00:00.000Z");
+    expect(result?.artifactMeta.elapsedMs).toBe(900000);
     expect(result?.steps).toHaveLength(7);
     expect(result?.diagnosticsState).toEqual(
       expect.objectContaining({
@@ -220,6 +238,8 @@ describe("run diagnostics read service", () => {
       sourceListJson: JSON.stringify([]),
     });
     (prisma.analysisRun.findUnique as jest.Mock).mockResolvedValue({
+      startedAt: new Date("2026-04-01T23:40:00.000Z"),
+      completedAt: new Date("2026-04-02T00:00:00.000Z"),
       qualityMeta: JSON.stringify({
         promptHash: "prompt_hash",
         systemVerification: {
@@ -231,6 +251,9 @@ describe("run diagnostics read service", () => {
 
     const result = await getRunDiagnostics("bundle_legacy_empty");
 
+    expect(result?.artifactMeta.startedAt).toBe("2026-04-01T23:40:00.000Z");
+    expect(result?.artifactMeta.completedAt).toBe("2026-04-02T00:00:00.000Z");
+    expect(result?.artifactMeta.elapsedMs).toBe(1200000);
     expect(result?.steps.find((step) => step.stepKey === "gap_scan")).toEqual(
       expect.objectContaining({
         outputs: expect.objectContaining({

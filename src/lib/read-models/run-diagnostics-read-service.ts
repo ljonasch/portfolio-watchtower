@@ -554,6 +554,7 @@ export async function getRunDiagnostics(bundleId: string) {
   let artifactSource: "persisted" | "fallback" | "invalid";
   let hasPersistedArtifact = false;
   let note: string | null = null;
+  let runTiming: { startedAt: Date; completedAt: Date | null } | null = null;
 
   try {
     const evidencePacket = parseJsonField<Record<string, unknown>>(bundle.evidencePacketJson, "evidencePacketJson");
@@ -567,14 +568,25 @@ export async function getRunDiagnostics(bundleId: string) {
       });
       artifactSource = "persisted";
     } else {
+      const runRecord = bundle.sourceRunId
+        ? await prisma.analysisRun.findUnique({
+            where: { id: bundle.sourceRunId },
+            select: {
+              qualityMeta: true,
+              startedAt: true,
+              completedAt: true,
+            },
+          })
+        : null;
+      runTiming = runRecord
+        ? {
+            startedAt: runRecord.startedAt,
+            completedAt: runRecord.completedAt,
+          }
+        : null;
       artifact = buildFallbackDiagnosticsArtifact(
         bundle,
-        bundle.sourceRunId
-          ? await prisma.analysisRun.findUnique({
-              where: { id: bundle.sourceRunId },
-              select: { qualityMeta: true },
-            })
-          : null
+        runRecord
       );
       artifactSource = hasPersistedArtifact ? "invalid" : "fallback";
       note = hasPersistedArtifact
@@ -594,6 +606,28 @@ export async function getRunDiagnostics(bundleId: string) {
     note = error instanceof Error ? error.message : "Diagnostics artifact could not be loaded.";
   }
 
+  if (!runTiming && bundle.sourceRunId) {
+    const timingRecord = await prisma.analysisRun.findUnique({
+      where: { id: bundle.sourceRunId },
+      select: {
+        startedAt: true,
+        completedAt: true,
+      },
+    });
+    runTiming = timingRecord
+      ? {
+          startedAt: timingRecord.startedAt,
+          completedAt: timingRecord.completedAt,
+        }
+      : null;
+  }
+
+  const startedAt = runTiming?.startedAt?.toISOString() ?? null;
+  const completedAt = runTiming?.completedAt?.toISOString() ?? null;
+  const elapsedMs = runTiming?.startedAt && runTiming?.completedAt
+    ? Math.max(0, runTiming.completedAt.getTime() - runTiming.startedAt.getTime())
+    : null;
+
   return {
     artifactMeta: {
       bundleId: artifact.bundleId,
@@ -601,6 +635,9 @@ export async function getRunDiagnostics(bundleId: string) {
       outcome: artifact.outcome,
       generatedAt: artifact.generatedAt,
       evidencePacketId: artifact.evidencePacketId,
+      startedAt,
+      completedAt,
+      elapsedMs,
     },
     steps: artifact.steps,
     downloadHref: null,

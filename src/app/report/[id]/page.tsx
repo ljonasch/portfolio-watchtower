@@ -101,6 +101,133 @@ function formatUsdEstimate(value: number): string {
   return `$${value.toFixed(value < 0.1 ? 3 : 2)}`;
 }
 
+function formatTokenCount(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "Not available";
+  }
+
+  return value.toLocaleString();
+}
+
+function formatElapsedDuration(elapsedMs: number | null | undefined): string {
+  if (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    return "Not available";
+  }
+
+  const totalSeconds = Math.floor(elapsedMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
+function humanizeDiagnosticKey(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function isPlainDiagnosticObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isScalarDiagnosticValue(value: unknown): value is string | number | boolean | null | undefined {
+  return value === null || value === undefined || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function hasNestedDiagnosticStructure(value: unknown): boolean {
+  return Array.isArray(value) || isPlainDiagnosticObject(value);
+}
+
+function DiagnosticScalarValue({ value }: { value: string | number | boolean | null | undefined }) {
+  const formatted = value === null || value === undefined
+    ? "Not available"
+    : typeof value === "boolean"
+      ? (value ? "Yes" : "No")
+      : String(value);
+
+  return (
+    <div className="whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-300">
+      {formatted}
+    </div>
+  );
+}
+
+function DiagnosticStructuredValue({ value }: { value: unknown }) {
+  if (isScalarDiagnosticValue(value)) {
+    return <DiagnosticScalarValue value={value} />;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <div className="text-xs text-slate-400">No items were persisted.</div>;
+    }
+
+    const scalarItems = value.every((item) => isScalarDiagnosticValue(item));
+    if (scalarItems) {
+      return (
+        <ul className="space-y-1 text-xs text-slate-300">
+          {value.map((item, index) => (
+            <li key={`${String(item)}-${index}`} className="rounded-md border border-slate-800/80 bg-slate-950/30 px-2.5 py-2">
+              <DiagnosticScalarValue value={item} />
+            </li>
+          ))}
+        </ul>
+      );
+    }
+
+    return (
+      <div className="space-y-2">
+        {value.map((item, index) => (
+          <div key={index} className="rounded-lg border border-slate-800/80 bg-slate-950/30 p-3">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">Item {index + 1}</div>
+            <div className="mt-2">
+              <DiagnosticStructuredValue value={item} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (isPlainDiagnosticObject(value)) {
+    const entries = Object.entries(value).filter(([, nestedValue]) => nestedValue !== undefined);
+
+    if (entries.length === 0) {
+      return <div className="text-xs text-slate-400">No fields were persisted.</div>;
+    }
+
+    return (
+      <div className="space-y-2">
+        {entries.map(([nestedKey, nestedValue]) => (
+          <div key={nestedKey} className="rounded-lg border border-slate-800/80 bg-slate-950/30 p-3">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">{humanizeDiagnosticKey(nestedKey)}</div>
+            <div className="mt-2">
+              <DiagnosticStructuredValue value={nestedValue} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <pre className="whitespace-pre-wrap break-words text-xs text-slate-300 font-mono">
+      {formatDiagnosticValue(value)}
+    </pre>
+  );
+}
+
 function StepStatusPill({ status }: { status: DiagnosticsStepContract["status"] }) {
   const style = status === "ok"
     ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-300"
@@ -127,10 +254,18 @@ function DiagnosticDataBlock({ title, data }: { title: string; data: Record<stri
         <div className="grid grid-cols-1 gap-2">
           {entries.map(([key, value]) => (
             <div key={key} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-              <div className="text-[10px] uppercase tracking-wider text-slate-500">{key}</div>
-              <pre className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-300 font-mono">
-                {formatDiagnosticValue(value)}
-              </pre>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500">{humanizeDiagnosticKey(key)}</div>
+              <div className="mt-2">
+                <DiagnosticStructuredValue value={value} />
+              </div>
+              {hasNestedDiagnosticStructure(value) && (
+                <details className="mt-3 rounded-md border border-slate-800/80 bg-slate-950/20 px-3 py-2">
+                  <summary className="cursor-pointer text-[11px] uppercase tracking-wider text-slate-500">Raw JSON</summary>
+                  <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] text-slate-400 font-mono">
+                    {formatDiagnosticValue(value)}
+                  </pre>
+                </details>
+              )}
             </div>
           ))}
         </div>
@@ -144,6 +279,13 @@ function DiagnosticDataBlock({ title, data }: { title: string; data: Record<stri
 }
 
 function DiagnosticStepCard({ step }: { step: DiagnosticsStepContract }) {
+  const errorCount = step.warnings.filter((warning) => warning.severity === "error").length;
+  const warningCount = step.warnings.filter((warning) => warning.severity !== "error").length;
+  const leadIssue = step.warnings[0] ?? null;
+  const issueStyle = errorCount > 0
+    ? "border-red-500/20 bg-red-500/10 text-red-200"
+    : "border-amber-500/20 bg-amber-500/10 text-amber-200";
+
   return (
     <details className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 group">
       <summary className="flex cursor-pointer list-none items-start justify-between gap-4 focus:outline-none">
@@ -151,8 +293,18 @@ function DiagnosticStepCard({ step }: { step: DiagnosticsStepContract }) {
           <div className="flex items-center gap-2 flex-wrap">
             <h4 className="text-sm font-semibold text-slate-100">{step.stepName}</h4>
             <StepStatusPill status={step.status} />
+            {step.warnings.length > 0 && (
+              <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wider font-semibold ${issueStyle}`}>
+                {errorCount > 0 ? `${errorCount} error${errorCount === 1 ? "" : "s"}` : `${warningCount} warning${warningCount === 1 ? "" : "s"}`}
+              </span>
+            )}
           </div>
           <p className="text-xs leading-relaxed text-slate-400">{step.summary}</p>
+          {leadIssue && (
+            <div className={`rounded-lg border px-3 py-2 text-xs leading-relaxed ${issueStyle}`}>
+              <span className="font-semibold">{humanizeDiagnosticKey(leadIssue.code)}:</span> {leadIssue.message}
+            </div>
+          )}
         </div>
         <span className="hidden text-[10px] uppercase tracking-wider text-slate-500 group-hover:text-slate-400 sm:block">Expand</span>
       </summary>
@@ -299,7 +451,7 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
           </h3>
           {diagnostics && diagnostics.steps.length > 0 ? (
             <>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
                   <div className="text-[10px] uppercase tracking-wider text-slate-500">Outcome</div>
                   <div className="mt-1 text-sm font-semibold text-slate-100">{diagnostics.artifactMeta.outcome}</div>
@@ -312,20 +464,78 @@ export default async function ReportPage(props: { params: Promise<{ id: string }
                   <div className="text-[10px] uppercase tracking-wider text-slate-500">Evidence Packet</div>
                   <div className="mt-1 break-all text-sm font-semibold text-slate-100">{diagnostics.artifactMeta.evidencePacketId ?? "Not available"}</div>
                 </div>
-              <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
                   <div className="text-[10px] uppercase tracking-wider text-slate-500">Generated</div>
                   <div className="mt-1 text-sm font-semibold text-slate-100">
                     {new Date(diagnostics.artifactMeta.generatedAt).toLocaleString()}
                   </div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Estimated Analysis Cost (heuristic)</div>
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Elapsed</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-100">
+                    {formatElapsedDuration(diagnostics.artifactMeta.elapsedMs)}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {diagnostics.artifactMeta.startedAt && diagnostics.artifactMeta.completedAt
+                      ? `${new Date(diagnostics.artifactMeta.startedAt).toLocaleTimeString()} to ${new Date(diagnostics.artifactMeta.completedAt).toLocaleTimeString()}`
+                      : "Run timing unavailable"}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 xl:col-span-2">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-500">Model Usage & Cost (heuristic)</div>
                   <div className="mt-1 text-sm font-semibold text-slate-100">
                     {formatUsdEstimate(costEstimate.estimatedTotalCostUsd)}
                   </div>
                   <div className="mt-1 text-xs text-slate-400">
-                    Primary model {formatUsdEstimate(costEstimate.primaryModelCostUsd)} · research heuristic {formatUsdEstimate(costEstimate.estimatedResearchCostUsd)}
+                    {costEstimate.modelBreakdown.length} model line{costEstimate.modelBreakdown.length === 1 ? "" : "s"} shown · exact tokens where persisted
                   </div>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 space-y-3">
+                <div className="space-y-1">
+                  <h4 className="text-sm font-semibold text-slate-100">Model Usage & Cost (heuristic)</h4>
+                  <p className="text-xs leading-relaxed text-slate-400">{costEstimate.basisNote}</p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                  {costEstimate.modelBreakdown.map((entry) => (
+                    <div key={`${entry.model}-${entry.basis}`} className="rounded-xl border border-slate-800 bg-slate-950/40 p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-100">{entry.label}</div>
+                          <div className="text-xs text-slate-400">{entry.note}</div>
+                        </div>
+                        <span className="inline-flex rounded-full border border-slate-700 bg-slate-800/80 px-2.5 py-1 text-[10px] uppercase tracking-wider text-slate-300">
+                          {entry.basis}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500">Input Tokens</div>
+                          <div className="mt-1 text-sm font-semibold text-slate-100">{formatTokenCount(entry.inputTokens)}</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500">Output Tokens</div>
+                          <div className="mt-1 text-sm font-semibold text-slate-100">{formatTokenCount(entry.outputTokens)}</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500">Total Tokens</div>
+                          <div className="mt-1 text-sm font-semibold text-slate-100">{formatTokenCount(entry.totalTokens)}</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500">Estimated Calls</div>
+                          <div className="mt-1 text-sm font-semibold text-slate-100">
+                            {entry.estimatedCalls !== null ? entry.estimatedCalls.toLocaleString() : "Not available"}
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3 sm:col-span-2">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500">Estimated Cost</div>
+                          <div className="mt-1 text-sm font-semibold text-slate-100">
+                            {entry.estimatedCostUsd !== null ? formatUsdEstimate(entry.estimatedCostUsd) : "Cost unavailable from persisted data"}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
